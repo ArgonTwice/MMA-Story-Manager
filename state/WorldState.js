@@ -23,6 +23,7 @@ export const WORLD_EVENTS = Object.freeze({
   RANKINGS_UPDATED: 'world:rankings_updated',
   LADDER_UPDATED: 'world:ladder_updated',
   RIVAL_GYM_ADDED: 'world:rival_gym_added',
+  RIVAL_GYM_UPDATED: 'world:rival_gym_updated',
   RIVAL_GYM_REMOVED: 'world:rival_gym_removed',
   GLOBAL_EVENT_ADDED: 'world:global_event_added',
 });
@@ -186,6 +187,24 @@ export class WorldState {
     this.rivalGyms.push(record);
     EventBus.publish(WORLD_EVENTS.RIVAL_GYM_ADDED, { gymId: record.id });
     return record;
+  }
+
+  /**
+   * Shallow-merges `changes` into an existing rival gym record (e.g. weekly
+   * reputation/activity drift, or a fight result). No-ops if the gym isn't
+   * found rather than throwing, since rival gyms may be pruned independently.
+   *
+   * @param {string} gymId
+   * @param {Object} changes
+   * @returns {Object|null} The updated gym record, or null if not found.
+   */
+  updateRivalGym(gymId, changes) {
+    const gym = this.rivalGyms.find((entry) => entry.id === gymId);
+    if (!gym) return null;
+
+    Object.assign(gym, changes);
+    EventBus.publish(WORLD_EVENTS.RIVAL_GYM_UPDATED, { gymId, changes: { ...changes } });
+    return { ...gym };
   }
 
   /**

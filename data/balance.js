@@ -30,10 +30,15 @@
  *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
  *   BALANCE.WEIGH_IN     - weight-cut profiles, miss chance, form impact
  *   BALANCE.PERKS        - unlockable trait definitions and unlock thresholds
+ *   BALANCE.EQUIPMENT    - gym equipment catalog (training/form/upkeep effects)
  *
  *   (COMBAT additionally carries GAMEPLAN and STYLE_BONUSES sub-sections
  *   consumed by engine/CombatEngine.js: per-target/distance/tempo
- *   coefficients and per-fighting-style bonuses.)
+ *   coefficients and per-fighting-style bonuses. TRAINING additionally
+ *   carries INTENSITY_MODIFIERS, OVERTRAINING and COUNTRY_BONUSES consumed
+ *   by engine/TrainingEngine.js. ECONOMY additionally carries PASSIVE_INCOME
+ *   and INSOLVENCY consumed by engine/EconomyEngine.js. WORLD additionally
+ *   carries the RIVAL_GYM_* coefficients consumed by engine/ProgressionEngine.js.)
  *
  * The object is deep-frozen before export: nothing downstream may mutate
  * balance data at runtime, which keeps it safe to treat as static config
@@ -59,7 +64,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.2.0',
+  VERSION: '1.3.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -303,6 +308,23 @@ const BALANCE = {
 
     /** Weekly recurring gym overhead, before facility upgrades add to it. */
     BASE_WEEKLY_UPKEEP: 800,
+    /** Extra weekly upkeep added per facility (equipLevel) point. */
+    UPKEEP_PER_FACILITY_LEVEL: 100,
+
+    /** Passive weekly income from gym memberships/local sponsors, scaling with standing. */
+    PASSIVE_INCOME: {
+      BASE_WEEKLY: 100,
+      PER_REPUTATION_POINT: 3,
+      PER_HYPE_POINT: 2,
+    },
+
+    /** Financial crisis handling when the gym's treasury collapses. */
+    INSOLVENCY: {
+      /** Money below this (negative) balance triggers a crisis response. */
+      DEBT_THRESHOLD: -5000,
+      REPUTATION_PENALTY: -10,
+      MAX_STAFF_LAYOFFS_PER_WEEK: 1,
+    },
 
     SALARIES: {
       FIGHTER_BASE_WEEKLY: {
@@ -374,6 +396,9 @@ const BALANCE = {
       SEVERE: 60,
       CAREER_THREATENING: 180,
     },
+
+    /** Shared flavor list for injury narration, used by both CombatEngine and TrainingEngine. */
+    BODY_PARTS: ['Genou', 'Coude', 'Arcade sourciliere', 'Cheville', 'Cotes', 'Epaule'],
 
     /** Attribute penalty applied while injured (fraction of attribute value removed). */
     ATTRIBUTE_PENALTY_WHILE_INJURED: {
@@ -456,21 +481,49 @@ const BALANCE = {
     DIMINISHING_RETURNS_START_AT_PERCENT_OF_CAP: 0.8,
     DIMINISHING_RETURNS_MULTIPLIER: 0.4,
 
-    CAMP_TYPES: {
-      STRIKING: { primaryAttributes: ['striking', 'accuracy'], intensityFatigueCost: 12 },
-      GRAPPLING: { primaryAttributes: ['grappling', 'takedownDefense'], intensityFatigueCost: 12 },
-      CARDIO: { primaryAttributes: ['stamina', 'recovery'], intensityFatigueCost: 8 },
-      STRENGTH: { primaryAttributes: ['power', 'durability'], intensityFatigueCost: 14 },
-      TECHNIQUE: { primaryAttributes: ['iq', 'accuracy'], intensityFatigueCost: 6 },
+    /**
+     * Object keys here (REST/NORMAL/HARD) are the only valid
+     * Fighter.training.intensity values — TrainingEngine validates against
+     * Object.keys(BALANCE.TRAINING.INTENSITY_MODIFIERS) rather than a
+     * separate list.
+     *
+     * gainMultiplier - applied to this week's skill gain (0 = no training).
+     * formDelta      - change to attributes.forme from this week's session
+     *                   (positive = recovery, negative = wear and tear).
+     */
+    INTENSITY_MODIFIERS: {
+      REST: { gainMultiplier: 0, formDelta: 8 },
+      NORMAL: { gainMultiplier: 1.0, formDelta: -2 },
+      HARD: { gainMultiplier: 1.4, formDelta: -6 },
     },
 
-    /** Fatigue accumulated per training session, recovered via REST. */
-    FATIGUE_PER_SESSION_BASE: 10,
-    FATIGUE_MAX: 100,
-    /** Above this fatigue, injury risk multiplier from INJURIES kicks in at max. */
-    OVERTRAINING_FATIGUE_THRESHOLD: 80,
+    /** Weekly training-focused injury risk when a fighter pushes through low form. */
+    OVERTRAINING: {
+      /** Below this fraction of FORM.MAX, training while not resting risks an injury. */
+      FORME_THRESHOLD_PERCENT: 0.4,
+      BASE_INJURY_CHANCE: 0.06,
+      /** Multiplies BASE_INJURY_CHANCE; REST is never checked (no active session). */
+      INTENSITY_RISK_MULTIPLIER: { NORMAL: 1, HARD: 2.2 },
+    },
 
-    REST_DAY_FATIGUE_RECOVERY: 25,
+    /** Bonus applied to a fighter's training gain based on Fighter.identity.origin. Unlisted origins get no bonus. */
+    COUNTRY_BONUSES: {
+      Bresil: { soumission: 0.15, sol: 0.1 },
+      Thailande: { jambes: 0.15 },
+      'Etats-Unis': { boxe: 0.1, cardio: 0.05 },
+      Russie: { sol: 0.1, cardio: 0.05 },
+      Japon: { intelligence: 0.1, soumission: 0.05 },
+      France: { boxe: 0.05, intelligence: 0.05 },
+      DEFAULT: {},
+    },
+
+    /**
+     * A coach with a matching specialty applies their full skill bonus
+     * (see COACH_SKILL_GAIN_MULTIPLIER_PER_POINT). Without a specialist,
+     * the best available generalist coach still helps, but at this
+     * fraction of their skill's usual effectiveness.
+     */
+    GENERALIST_COACH_EFFECTIVENESS: 0.4,
   },
 
   // ---------------------------------------------------------------------
@@ -702,6 +755,23 @@ const BALANCE = {
   WORLD: {
     /** Max number of entries kept in WorldState.globalEvents (oldest are trimmed). */
     GLOBAL_EVENT_HISTORY_LIMIT: 500,
+
+    /** Passive weekly reputation walk applied to every rival gym, fight or not. */
+    RIVAL_GYM_REPUTATION_DRIFT: { MIN: -3, MAX: 3 },
+
+    /** Rival gym "buzz" meter, independent of reputation. */
+    RIVAL_GYM_ACTIVITY: {
+      MIN: 0,
+      MAX: 100,
+      STARTING_VALUE: 50,
+      WEEKLY_DRIFT_MIN: -5,
+      WEEKLY_DRIFT_MAX: 5,
+    },
+
+    /** Chance a given pair of rival gyms books a headless bout against each other this week. */
+    RIVAL_GYM_FIGHT_CHANCE_PER_WEEK: 0.3,
+    /** Reputation swing for rival gyms that actually fought this week, on top of the passive drift. */
+    RIVAL_GYM_FIGHT_REPUTATION_DELTA: { WIN: 4, LOSS: -2 },
   },
 
   // ---------------------------------------------------------------------
@@ -747,6 +817,61 @@ const BALANCE = {
     /** Career milestones that automatically grant a perk in POST_MATCH_REWARDS. */
     UNLOCK_THRESHOLDS: {
       FINISHER_CAREER_FINISHES: 5,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // EQUIPMENT — gym equipment catalog consumed by TrainingEngine/EconomyEngine
+  // ---------------------------------------------------------------------
+  EQUIPMENT: {
+    /**
+     * PlayerState.equipment entries reference these by `id`. Unknown ids
+     * (e.g. from a save made against an older BALANCE) are silently
+     * ignored rather than erroring.
+     *
+     * trainingGainMultiplier - applied to weekly skill gain.
+     * appliesToSkills        - null = applies to every skill; otherwise an
+     *                           array of the skill keys it boosts.
+     * formRecoveryMultiplier - applied only to *positive* weekly form
+     *                          changes (i.e. rest), never to training wear.
+     * weeklyMaintenanceCost  - deducted every week by EconomyEngine.
+     */
+    DEFINITIONS: {
+      OCTAGON_PRO: {
+        label: 'Octogone Pro',
+        trainingGainMultiplier: 1.12,
+        appliesToSkills: null,
+        formRecoveryMultiplier: 1,
+        weeklyMaintenanceCost: 150,
+      },
+      VIDEO_LAB: {
+        label: 'Labo Video',
+        trainingGainMultiplier: 1.08,
+        appliesToSkills: ['intelligence'],
+        formRecoveryMultiplier: 1,
+        weeklyMaintenanceCost: 100,
+      },
+      CRYOTHERAPY_CHAMBER: {
+        label: 'Chambre de Cryotherapie',
+        trainingGainMultiplier: 1,
+        appliesToSkills: null,
+        formRecoveryMultiplier: 1.5,
+        weeklyMaintenanceCost: 200,
+      },
+      WEIGHT_ROOM: {
+        label: 'Salle de Musculation',
+        trainingGainMultiplier: 1.1,
+        appliesToSkills: ['boxe', 'jambes'],
+        formRecoveryMultiplier: 1,
+        weeklyMaintenanceCost: 90,
+      },
+      GRAPPLING_MATS_PRO: {
+        label: 'Tapis de Grappling Pro',
+        trainingGainMultiplier: 1.1,
+        appliesToSkills: ['sol', 'soumission'],
+        formRecoveryMultiplier: 1,
+        weeklyMaintenanceCost: 90,
+      },
     },
   },
 };

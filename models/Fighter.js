@@ -188,6 +188,17 @@ export class Fighter {
 
     /** Unlocked traits (e.g. "Iron Chin", "Killer Instinct"). Plain id strings. */
     this.perks = config.perks ? [...config.perks] : [];
+
+    /**
+     * This week's training plan, consumed by engine/TrainingEngine.js.
+     * focus is one of attributes.skills' keys (or null = not configured,
+     * treated as resting). intensity is one of
+     * Object.keys(BALANCE.TRAINING.INTENSITY_MODIFIERS).
+     */
+    this.training = {
+      focus: config.training?.focus ?? null,
+      intensity: config.training?.intensity ?? 'NORMAL',
+    };
   }
 
   // ---- derived stats ------------------------------------------------------
@@ -372,6 +383,46 @@ export class Fighter {
     this.attributes.forme = clampForm(this.attributes.forme + delta);
   }
 
+  /**
+   * Advances the fighter's age, e.g. on their in-world birthday
+   * (see engine/ProgressionEngine.js). Physical decline itself is handled
+   * weekly by engine/TrainingEngine.js based on the resulting age.
+   *
+   * @param {number} [years=1]
+   * @returns {number} The fighter's new age.
+   */
+  incrementAge(years = 1) {
+    this.identity.age += years;
+    return this.identity.age;
+  }
+
+  /**
+   * Sets (part of) this week's training plan, consumed by
+   * engine/TrainingEngine.js. Only provided fields are changed.
+   *
+   * @param {Object} plan
+   * @param {string|null} [plan.focus] - One of attributes.skills' keys, or
+   *   null to clear it (treated as resting).
+   * @param {string} [plan.intensity] - One of
+   *   Object.keys(BALANCE.TRAINING.INTENSITY_MODIFIERS).
+   * @returns {Object} The resulting training plan.
+   */
+  setTrainingPlan({ focus, intensity } = {}) {
+    if (focus !== undefined) {
+      if (focus !== null && !(focus in this.attributes.skills)) {
+        throw new TypeError(`Fighter.setTrainingPlan: invalid focus "${focus}".`);
+      }
+      this.training.focus = focus;
+    }
+    if (intensity !== undefined) {
+      if (!(intensity in BALANCE.TRAINING.INTENSITY_MODIFIERS)) {
+        throw new TypeError(`Fighter.setTrainingPlan: invalid intensity "${intensity}".`);
+      }
+      this.training.intensity = intensity;
+    }
+    return { ...this.training };
+  }
+
   // ---- serialization --------------------------------------------------------
 
   /**
@@ -398,6 +449,7 @@ export class Fighter {
         chronicIssues: [...this.medical.chronicIssues],
       },
       perks: [...this.perks],
+      training: { ...this.training },
     };
   }
 
