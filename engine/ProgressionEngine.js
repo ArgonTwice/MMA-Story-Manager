@@ -2,9 +2,10 @@
  * engine/ProgressionEngine.js
  * ---------------------------------------------------------------------------
  * The weekly "tick": advances the calendar, then drives every other weekly
- * business engine (Training, Economy), ages fighters on their in-world
- * birthday, lets rival gyms drift and occasionally fight each other
- * headlessly, and announces the whole week's results in one summary event.
+ * business engine (Training, Economy, Narrative Events), ages fighters on
+ * their in-world birthday, lets rival gyms drift and occasionally fight
+ * each other headlessly, and announces the whole week's results in one
+ * summary event.
  *
  * advanceWeek(gameState) is the single entry point a Render "Advance Week"
  * button (or an automated simulation loop) should call.
@@ -17,6 +18,7 @@ import Fighter from '../models/Fighter.js';
 import { CombatEngine } from './CombatEngine.js';
 import { processWeeklyTraining } from './TrainingEngine.js';
 import { processWeeklyExpenses } from './EconomyEngine.js';
+import { evaluateWeeklyEvents } from './EventEngine.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -204,6 +206,7 @@ export function advanceWeek(gameState, options = {}) {
 
   const trainingReport = processWeeklyTraining(playerState, worldState, { rng });
   const economyReport = processWeeklyExpenses(playerState);
+  const narrativeReport = evaluateWeeklyEvents(gameState, { rng });
   const birthdays = processBirthdays(playerState, worldState);
   const rivalGymReport = processRivalGyms(worldState, rng);
 
@@ -213,6 +216,7 @@ export function advanceWeek(gameState, options = {}) {
     year: worldState.year,
     trainingReport,
     economyReport,
+    narrativeReport,
     birthdays,
     rivalGymReport,
   };

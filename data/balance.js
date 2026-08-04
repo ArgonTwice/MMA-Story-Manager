@@ -30,7 +30,8 @@
  *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
  *   BALANCE.WEIGH_IN     - weight-cut profiles, miss chance, form impact
  *   BALANCE.PERKS        - unlockable trait definitions and unlock thresholds
- *   BALANCE.EQUIPMENT    - gym equipment catalog (training/form/upkeep effects)
+ *   BALANCE.EQUIPMENT    - gym equipment catalog (training/form/upkeep/purchase)
+ *   BALANCE.NARRATIVE_EVENTS - weekly random story events (sponsors, media, morale...)
  *
  *   (COMBAT additionally carries GAMEPLAN and STYLE_BONUSES sub-sections
  *   consumed by engine/CombatEngine.js: per-target/distance/tempo
@@ -64,7 +65,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.3.0',
+  VERSION: '1.4.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -592,6 +593,23 @@ const BALANCE = {
 
     /** Max number of entries kept in PlayerState.socialFeed (oldest entries are trimmed). */
     FEED_HISTORY_LIMIT: 200,
+
+    /** Like-count generation for auto-authored posts, consumed by engine/SocialEngine.js. */
+    POST_LIKES: {
+      BASE_MIN: 5,
+      BASE_MAX: 40,
+      /** Extra likes granted per point of PlayerState.hype. */
+      HYPE_MULTIPLIER: 8,
+      /** Multiplier applied when the post is about a fight that ended in a finish. */
+      FINISH_BONUS_MULTIPLIER: 1.5,
+      /** Multiplier applied per author type — trash talk and hot takes travel further than plain fan chatter. */
+      POST_TYPE_LIKE_MULTIPLIER: {
+        FAN: 1,
+        JOURNALIST: 1.3,
+        RIVAL: 1.6,
+        FIGHTER_STATEMENT: 1.4,
+      },
+    },
   },
 
   // ---------------------------------------------------------------------
@@ -835,6 +853,7 @@ const BALANCE = {
      * formRecoveryMultiplier - applied only to *positive* weekly form
      *                          changes (i.e. rest), never to training wear.
      * weeklyMaintenanceCost  - deducted every week by EconomyEngine.
+     * purchaseCost           - one-time cost charged by GymRenderer.buyEquipment().
      */
     DEFINITIONS: {
       OCTAGON_PRO: {
@@ -843,6 +862,7 @@ const BALANCE = {
         appliesToSkills: null,
         formRecoveryMultiplier: 1,
         weeklyMaintenanceCost: 150,
+        purchaseCost: 8000,
       },
       VIDEO_LAB: {
         label: 'Labo Video',
@@ -850,6 +870,7 @@ const BALANCE = {
         appliesToSkills: ['intelligence'],
         formRecoveryMultiplier: 1,
         weeklyMaintenanceCost: 100,
+        purchaseCost: 4000,
       },
       CRYOTHERAPY_CHAMBER: {
         label: 'Chambre de Cryotherapie',
@@ -857,6 +878,7 @@ const BALANCE = {
         appliesToSkills: null,
         formRecoveryMultiplier: 1.5,
         weeklyMaintenanceCost: 200,
+        purchaseCost: 12000,
       },
       WEIGHT_ROOM: {
         label: 'Salle de Musculation',
@@ -864,6 +886,7 @@ const BALANCE = {
         appliesToSkills: ['boxe', 'jambes'],
         formRecoveryMultiplier: 1,
         weeklyMaintenanceCost: 90,
+        purchaseCost: 3000,
       },
       GRAPPLING_MATS_PRO: {
         label: 'Tapis de Grappling Pro',
@@ -871,8 +894,46 @@ const BALANCE = {
         appliesToSkills: ['sol', 'soumission'],
         formRecoveryMultiplier: 1,
         weeklyMaintenanceCost: 90,
+        purchaseCost: 3500,
       },
     },
+  },
+
+  // ---------------------------------------------------------------------
+  // NARRATIVE_EVENTS — weekly random story beats, consumed by engine/EventEngine.js
+  // ---------------------------------------------------------------------
+  NARRATIVE_EVENTS: {
+    /** Chance ANY narrative event fires in a given week. */
+    WEEKLY_TRIGGER_CHANCE: 0.35,
+
+    /** Which category fires when a week rolls an event. Must sum to 1. */
+    CATEGORY_WEIGHTS: {
+      SPONSOR_OFFER: 0.2,
+      SPARRING_INJURY: 0.15,
+      MEDIA_CLASH: 0.15,
+      DOPING_CONTROL: 0.05,
+      MORALE_SWING: 0.3,
+      ALUMNI_DONATION: 0.15,
+    },
+
+    SPONSOR_OFFER: { MIN_AMOUNT: 500, MAX_AMOUNT: 3000, HYPE_BONUS: 3 },
+
+    MEDIA_CLASH: {
+      MORALE_DELTA_MIN: -8,
+      MORALE_DELTA_MAX: 4,
+      REPUTATION_DELTA_MIN: -5,
+      REPUTATION_DELTA_MAX: 3,
+    },
+
+    DOPING_CONTROL: {
+      FAIL_CHANCE: 0.04,
+      REPUTATION_PENALTY: -15,
+      MORALE_PENALTY: -25,
+    },
+
+    MORALE_SWING: { MIN_DELTA: -6, MAX_DELTA: 8 },
+
+    ALUMNI_DONATION: { MIN_AMOUNT: 200, MAX_AMOUNT: 1500, REPUTATION_BONUS: 1 },
   },
 };
 

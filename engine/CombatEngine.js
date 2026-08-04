@@ -642,6 +642,7 @@ export class CombatEngine {
       round: finish.round,
       timeLabel: finish.timeLabel,
       fighters: { A: c.fighters.A.identity.id, B: c.fighters.B.identity.id },
+      names: { A: c.fighters.A.identity.name, B: c.fighters.B.identity.name },
       purses,
       reputationDeltas,
       hypeDeltas,
