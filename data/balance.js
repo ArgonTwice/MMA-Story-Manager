@@ -24,6 +24,10 @@
  *   BALANCE.SPONSORS     - sponsorship offers, payouts, requirements
  *   BALANCE.AGE          - aging curve, peak years, decline
  *   BALANCE.GYM          - facilities, capacity, upgrades
+ *   BALANCE.FORM         - fighter physical condition ("forme") bounds/decay
+ *   BALANCE.PSYCHOLOGY   - personality-driven stat bounds/starting values
+ *   BALANCE.CALENDAR     - day/week/season/year length definitions
+ *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
  *
  * The object is deep-frozen before export: nothing downstream may mutate
  * balance data at runtime, which keeps it safe to treat as static config
@@ -49,7 +53,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.0.0',
+  VERSION: '1.1.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -87,6 +91,25 @@ const BALANCE = {
     ATTRIBUTE_SOFT_CAP: 85,
     ATTRIBUTE_HARD_CAP: 99,
     SOFT_CAP_COST_MULTIPLIER: 2,
+
+    /** Bounds for Fighter.attributes.skills.* (boxe, jambes, sol, soumission, cardio, intelligence). */
+    SKILL_MIN: 0,
+    SKILL_MAX: 100,
+    /** Value newly created fighters start with for any skill not explicitly provided. */
+    DEFAULT_STARTING_SKILL_VALUE: 30,
+
+    /**
+     * Weights used by Fighter#getOverallRating() to combine the six skills
+     * into a single 0-100 rating. Must sum to 1.
+     */
+    OVERALL_RATING_WEIGHTS: {
+      boxe: 0.22,
+      jambes: 0.18,
+      sol: 0.2,
+      soumission: 0.15,
+      cardio: 0.15,
+      intelligence: 0.1,
+    },
   },
 
   // ---------------------------------------------------------------------
@@ -414,6 +437,9 @@ const BALANCE = {
     /** Engagement rate drives sponsor interest score; see SPONSORS.MIN_ENGAGEMENT_RATE. */
     BASE_ENGAGEMENT_RATE: 0.03,
     ENGAGEMENT_RATE_PER_CHARISMA_POINT: 0.0006,
+
+    /** Max number of entries kept in PlayerState.socialFeed (oldest entries are trimmed). */
+    FEED_HISTORY_LIMIT: 200,
   },
 
   // ---------------------------------------------------------------------
@@ -501,6 +527,13 @@ const BALANCE = {
     STARTING_REPUTATION: 20,
     MAX_REPUTATION: 100,
 
+    /** Player-facing "buzz" meter, separate from long-term REPUTATION. */
+    HYPE: {
+      MIN: 0,
+      MAX: 100,
+      STARTING_VALUE: 10,
+    },
+
     REPUTATION_EVENTS: {
       FIGHTER_TITLE_WIN: 15,
       FIGHTER_WIN: 2,
@@ -517,6 +550,51 @@ const BALANCE = {
       MAJOR_PROMOTION: 70,
       TITLE_FIGHT: 90,
     },
+  },
+
+  // ---------------------------------------------------------------------
+  // FORM — fighter physical condition ("forme"), distinct from TRAINING.FATIGUE
+  // ---------------------------------------------------------------------
+  FORM: {
+    MIN: 0,
+    MAX: 100,
+    STARTING_VALUE: 75,
+    /** Passive weekly loss while a fighter has no training/fight activity. */
+    DECAY_PER_WEEK_INACTIVE: 3,
+    /** Gain from a completed training session, before coach/facility modifiers. */
+    GAIN_PER_TRAINING_SESSION: 2,
+  },
+
+  // ---------------------------------------------------------------------
+  // PSYCHOLOGY — personality-driven mental stats (ego, discipline, motivation)
+  // ---------------------------------------------------------------------
+  PSYCHOLOGY: {
+    MIN: 0,
+    MAX: 100,
+    STARTING_VALUES: {
+      ego: 50,
+      discipline: 50,
+      motivation: 60,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // CALENDAR — day/week/season/year length definitions for WorldState
+  // ---------------------------------------------------------------------
+  CALENDAR: {
+    START_DAY: 1,
+    DAYS_PER_WEEK: 7,
+    WEEKS_PER_SEASON: 13,
+    SEASONS_PER_YEAR: 4,
+    SEASON_NAMES: ['Hiver', 'Printemps', 'Ete', 'Automne'],
+  },
+
+  // ---------------------------------------------------------------------
+  // WORLD — world-state bookkeeping limits
+  // ---------------------------------------------------------------------
+  WORLD: {
+    /** Max number of entries kept in WorldState.globalEvents (oldest are trimmed). */
+    GLOBAL_EVENT_HISTORY_LIMIT: 500,
   },
 };
 
