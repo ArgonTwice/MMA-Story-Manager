@@ -28,6 +28,12 @@
  *   BALANCE.PSYCHOLOGY   - personality-driven stat bounds/starting values
  *   BALANCE.CALENDAR     - day/week/season/year length definitions
  *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
+ *   BALANCE.WEIGH_IN     - weight-cut profiles, miss chance, form impact
+ *   BALANCE.PERKS        - unlockable trait definitions and unlock thresholds
+ *
+ *   (COMBAT additionally carries GAMEPLAN and STYLE_BONUSES sub-sections
+ *   consumed by engine/CombatEngine.js: per-target/distance/tempo
+ *   coefficients and per-fighting-style bonuses.)
  *
  * The object is deep-frozen before export: nothing downstream may mutate
  * balance data at runtime, which keeps it safe to treat as static config
@@ -53,7 +59,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.1.0',
+  VERSION: '1.2.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -151,10 +157,17 @@ const BALANCE = {
     HEALTH: {
       MAX: 100,
       KO_THRESHOLD: 0,
+      /**
+       * A round counts as "dominant" for TKO-streak purposes when the
+       * attacker's damage that round is at least this many times the
+       * defender's damage that round (e.g. 3 = attacker did 3x the damage).
+       */
       TKO_DAMAGE_STREAK_THRESHOLD: 3,
-      /** Consecutive unanswered power strikes needed to trigger a TKO check. */
+      /** Consecutive dominant rounds needed before a TKO stoppage is even checked for. */
       TKO_CHECK_STREAK_LENGTH: 3,
       TKO_CHANCE_PER_CHECK: 0.35,
+      /** Cumulative face damage (see CombatEngine damageTally.face) that triggers a cut/doctor stoppage. */
+      DOCTOR_STOPPAGE_FACE_DAMAGE_THRESHOLD: 55,
     },
 
     /** Submission attempt resolution. */
@@ -184,6 +197,15 @@ const BALANCE = {
       ROUND_WIN_POINTS: 10,
       ROUND_LOSE_POINTS: 9,
       EVEN_ROUND_POINTS: 10,
+
+      /** Number of judges scoring the fight (also the size of the scorecards array). */
+      NUM_JUDGES: 3,
+      /** Composite score gap (fraction) below which a judge scores the round even (10-10). */
+      EVEN_ROUND_MARGIN: 0.05,
+      /** Per-judge perception noise applied to each judge's read of a round, enabling split/majority cards. */
+      JUDGE_VARIANCE: 0.08,
+      /** Damage-equivalent points a binary metric (takedown/control/submission attempt) is worth in the composite round score. */
+      NON_STRIKE_METRIC_SCALE: 10,
     },
 
     /** Randomness envelope applied to every roll to avoid deterministic outcomes. */
@@ -193,6 +215,83 @@ const BALANCE = {
       /** Chance of a rare "upset" swing event per round. */
       UPSET_EVENT_CHANCE: 0.05,
       UPSET_EVENT_MULTIPLIER: 1.8,
+    },
+
+    /**
+     * GAMEPLAN — coefficients for the player-chosen target/distance/tempo
+     * combination resolved each round by CombatEngine. Object keys here
+     * (HEAD/BODY/LEGS, STRIKING/CLINCH/GROUND, CONSERVATIVE/BALANCED/
+     * AGGRESSIVE) are the canonical, only valid gameplan values — engine
+     * code derives its validation lists from these keys rather than
+     * duplicating them.
+     */
+    GAMEPLAN: {
+      /** Per-target damage multiplier, KO-chance influence, and where damage lands. */
+      TARGET_EFFECTS: {
+        HEAD: { damageMultiplier: 1.1, koChanceMultiplier: 1.3 },
+        BODY: { damageMultiplier: 1.0, koChanceMultiplier: 0.9 },
+        LEGS: { damageMultiplier: 0.85, koChanceMultiplier: 0.7 },
+      },
+
+      /** Share of a round's total damage that lands on the chosen target vs the other two body parts. */
+      TARGET_DAMAGE_SPLIT: {
+        PRIMARY: 0.7,
+        SECONDARY_EACH: 0.15,
+      },
+
+      /**
+       * Weight of each of the six Fighter skills toward this round's offense
+       * rating, per chosen distance. Each row must sum to 1.
+       */
+      DISTANCE_SKILL_WEIGHTS: {
+        STRIKING: { boxe: 0.5, jambes: 0.3, sol: 0, soumission: 0, cardio: 0.1, intelligence: 0.1 },
+        CLINCH: { boxe: 0.2, jambes: 0.1, sol: 0.35, soumission: 0.15, cardio: 0.1, intelligence: 0.1 },
+        GROUND: { boxe: 0.05, jambes: 0, sol: 0.45, soumission: 0.35, cardio: 0.05, intelligence: 0.1 },
+      },
+
+      /** Stamina cost per round for the chosen distance, before tempo/perk modifiers (see COMBAT.STAMINA). */
+      DISTANCE_STAMINA_COST_KEY: {
+        STRIKING: 'COST_PER_STRIKE_EXCHANGE',
+        CLINCH: 'COST_PER_GRAPPLE_EXCHANGE',
+        GROUND: 'COST_PER_TAKEDOWN_ATTEMPT',
+      },
+
+      /** How aggressively a fighter presses the action, trading output for stamina and durability. */
+      TEMPO_MODIFIERS: {
+        CONSERVATIVE: {
+          outputMultiplier: 0.75,
+          staminaCostMultiplier: 0.7,
+          damageTakenMultiplier: 0.85,
+        },
+        BALANCED: {
+          outputMultiplier: 1.0,
+          staminaCostMultiplier: 1.0,
+          damageTakenMultiplier: 1.0,
+        },
+        AGGRESSIVE: {
+          outputMultiplier: 1.3,
+          staminaCostMultiplier: 1.35,
+          damageTakenMultiplier: 1.15,
+        },
+      },
+
+      /** Converts a fighter's composite round-offense rating into raw round damage. */
+      ROUND_DAMAGE_SCALING: 0.35,
+    },
+
+    /**
+     * STYLE_BONUSES — bonus applied to a fighter's round output based on
+     * Fighter.identity.style. Unrecognized/custom style strings fall back
+     * to DEFAULT (no bonus, no penalty).
+     */
+    STYLE_BONUSES: {
+      Boxe: { distance: 'STRIKING', outputMultiplier: 1.15 },
+      Kickboxing: { distance: 'STRIKING', outputMultiplier: 1.1, targetMultipliers: { LEGS: 1.15 } },
+      'Muay Thai': { distance: 'STRIKING', outputMultiplier: 1.05, targetMultipliers: { LEGS: 1.25, BODY: 1.1 } },
+      Lutte: { distance: 'GROUND', outputMultiplier: 1.15 },
+      'Jiu-Jitsu Bresilien': { distance: 'GROUND', outputMultiplier: 1.05, submissionChanceMultiplier: 1.3 },
+      Freestyle: { outputMultiplier: 1.0 },
+      DEFAULT: { outputMultiplier: 1.0 },
     },
   },
 
@@ -532,6 +631,14 @@ const BALANCE = {
       MIN: 0,
       MAX: 100,
       STARTING_VALUE: 10,
+
+      /** Hype delta applied after a fight resolves, based on the player's fighter's outcome. */
+      EVENTS: {
+        WIN: 5,
+        LOSS: -2,
+        TITLE_WIN: 15,
+        FINISH_BONUS: 5,
+      },
     },
 
     REPUTATION_EVENTS: {
@@ -595,6 +702,52 @@ const BALANCE = {
   WORLD: {
     /** Max number of entries kept in WorldState.globalEvents (oldest are trimmed). */
     GLOBAL_EVENT_HISTORY_LIMIT: 500,
+  },
+
+  // ---------------------------------------------------------------------
+  // WEIGH_IN — weight-cut profiles resolved by CombatEngine's WEIGH_IN phase
+  // ---------------------------------------------------------------------
+  WEIGH_IN: {
+    /**
+     * Object keys here (NATUREL/MODERE/INTENSIF/EXTREME) are the only
+     * valid weight-cut profile keys — CombatEngine validates against
+     * Object.keys(BALANCE.WEIGH_IN.PROFILES) rather than a separate list.
+     *
+     * missChance          - probability the fighter fails to make weight.
+     * formModifier        - fractional change applied to the fighter's
+     *                        fight-local "forme" for this bout only
+     *                        (does not mutate the persistent Fighter).
+     * staminaModifier     - fractional change applied to the fighter's
+     *                        starting stamina pool for this bout only.
+     */
+    PROFILES: {
+      NATUREL: { missChance: 0.005, formModifier: 0.02, staminaModifier: 0.01 },
+      MODERE: { missChance: 0.02, formModifier: -0.03, staminaModifier: 0 },
+      INTENSIF: { missChance: 0.08, formModifier: -0.08, staminaModifier: -0.03 },
+      EXTREME: { missChance: 0.2, formModifier: -0.15, staminaModifier: -0.08 },
+    },
+
+    /** Fraction of the missed-weight fighter's purse transferred to their opponent. */
+    MISSED_WEIGHT_PURSE_PENALTY_PERCENT: 0.2,
+  },
+
+  // ---------------------------------------------------------------------
+  // PERKS — unlockable fighter traits and the combat bonuses they grant
+  // ---------------------------------------------------------------------
+  PERKS: {
+    DEFINITIONS: {
+      IRON_CHIN: { label: 'Iron Chin', damageTakenMultiplier: 0.85 },
+      HEAVY_HANDS: { label: 'Heavy Hands', damageMultiplier: 1.15 },
+      CARDIO_MACHINE: { label: 'Cardio Machine', staminaCostMultiplier: 0.85 },
+      SUBMISSION_HUNTER: { label: 'Submission Hunter', submissionChanceMultiplier: 1.3 },
+      FINISHER: { label: 'Finisher', koChanceMultiplier: 1.15 },
+      TITLE_HOLDER: { label: 'Title Holder', hypeMultiplier: 1.1 },
+    },
+
+    /** Career milestones that automatically grant a perk in POST_MATCH_REWARDS. */
+    UNLOCK_THRESHOLDS: {
+      FINISHER_CAREER_FINISHES: 5,
+    },
   },
 };
 

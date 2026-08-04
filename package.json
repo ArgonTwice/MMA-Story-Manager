@@ -1,0 +1,10 @@
+{
+  "name": "mma-gym-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MMA Gym Manager v2 - modular game engine (State / Engine / Render / Models / Data).",
+  "scripts": {
+    "test": "node --test engine/*.test.js"
+  }
+}
