@@ -85,7 +85,7 @@ test('formatReport renders every required section as plain text without throwing
   }
 });
 
-test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.33/v0.34a entries are internally consistent', () => {
+test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.34a/v0.34b entries are internally consistent', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 
@@ -95,26 +95,28 @@ test('Version History Tracker: the current run\'s row reflects live results, and
   assert.ok(report.includes('v0.33'));
   assert.ok(report.includes('v0.34a'));
   assert.ok(report.includes('v0.34b'));
+  assert.ok(report.includes('v0.34c'));
   assert.ok(report.includes('Baseline'));
   assert.ok(report.includes('Test A1'));
   assert.ok(report.includes('Test A2'));
   assert.ok(report.includes('Test A3'));
   assert.ok(report.includes('Test A3.4a'));
   assert.ok(report.includes('Test A3.4b'));
-  assert.ok(report.includes('TEST A3.4b — COMPARATIF DES PREDICTIONS'));
+  assert.ok(report.includes('Test A3.4c'));
+  assert.ok(report.includes('TEST A3.4c — COMPARATIF DES PREDICTIONS'));
 
   // Fun Detector's delta is reported against the immediately preceding
-  // entry (v0.34a, funScore=69); Meta Health Index's delta is reported
+  // entry (v0.34b, funScore=69); Meta Health Index's delta is reported
   // against the fixed baseline (v0.30, metaHealthIndex=86) — see
   // renderVersionHistorySection.
   const funDelta = result.metaHealth.funScore - 69;
   const metaDelta = result.metaHealth.overallIndex - 86;
   const formatSigned = (n) => (n > 0 ? `+${n}` : `${n}`);
-  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.34a`));
+  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.34b`));
   assert.ok(report.includes(`${formatSigned(metaDelta)} vs baseline v0.30`));
 });
 
-test('Test A3.4b prediction comparison reports exactly 4 predictions, all scored DANS LA CIBLE/HORS CIBLE, with a matching "Bilan : n / 4" summary', () => {
+test('Test A3.4c prediction comparison reports exactly 4 predictions, all scored DANS LA CIBLE/HORS CIBLE, with a matching "Bilan : n / 4" summary', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 

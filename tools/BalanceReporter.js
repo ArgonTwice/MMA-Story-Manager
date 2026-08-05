@@ -567,17 +567,32 @@ const VERSION_HISTORY = Object.freeze([
     metaHealthIndex: 91,
     submissionAttemptRatio: 8.97,
   }),
+  Object.freeze({
+    version: 'v0.34b',
+    label: 'Test A3.4b',
+    change:
+      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.5 -> 0.55 (seule variable modifiee vs Test A3.4a — A3.1/A3.2/A3.3' +
+      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique). Validee par Mistral.',
+    grapplingWinRate: 0.479,
+    freestyleWinRate: 0.477,
+    groundDominantDecisionWinRate: 0.455,
+    evRatio: 0.96,
+    balanceScore: 96,
+    funScore: 69,
+    metaHealthIndex: 91,
+    submissionAttemptRatio: 9.22,
+  }),
 ]);
 
 /** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
 function buildCurrentVersionEntry(result) {
   const { ratio } = computeRoundEVRatio(result);
   return {
-    version: 'v0.34b',
-    label: 'Test A3.4b',
+    version: 'v0.34c',
+    label: 'Test A3.4c',
     change:
-      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.5 -> 0.55 (seule variable modifiee vs Test A3.4a — A3.1/A3.2/A3.3' +
-      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique). Validee par Mistral.',
+      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.55 -> 0.59 (seule variable modifiee vs Test A3.4b — A3.1/A3.2/A3.3' +
+      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique). Reglage final valide par Mistral.',
     grapplingWinRate: result.grappling.winRate,
     freestyleWinRate: result.styles.Freestyle?.winRate ?? null,
     groundDominantDecisionWinRate: result.combat.groundDominantWinRate,
@@ -647,33 +662,32 @@ function renderVersionHistorySection(result) {
       `(vs x${previous.submissionAttemptRatio?.toFixed(2) ?? 'N/A'} en ${previous.version})`
   );
   lines.push('');
-  lines.push(renderTestA34bPredictionSubsection(result));
+  lines.push(renderTestA34cPredictionSubsection(result));
   return lines.join('\n');
 }
 
 /**
- * Test A3.4b's 4 predictions (Mistral) — unlike A3.4a's Submission Attempt
- * Ratio row (no numeric target given, only "monitor it"), every row here
- * carries a real, if sometimes one-sided, threshold: Grappling is a range,
- * Freestyle/Meta Health are lower bounds only, the ratio is an upper bound
- * only ("< x10"). All 4 are therefore scored DANS LA CIBLE/HORS CIBLE.
+ * Test A3.4c's 4 predictions (Mistral, "reglage final") — same shape as
+ * A3.4b's: Grappling is a closed range, Freestyle/Meta Health are lower
+ * bounds, the ratio is an upper bound ("< x10"). All 4 scored DANS LA
+ * CIBLE/HORS CIBLE.
  */
-const TEST_A3_4B_PREDICTIONS = Object.freeze({
-  GRAPPLING_WINRATE_MIN: 0.48,
-  GRAPPLING_WINRATE_MAX: 0.5,
-  FREESTYLE_WINRATE_MIN: 0.49,
+const TEST_A3_4C_PREDICTIONS = Object.freeze({
+  GRAPPLING_WINRATE_MIN: 0.5,
+  GRAPPLING_WINRATE_MAX: 0.52,
+  FREESTYLE_WINRATE_MIN: 0.47,
   SUBMISSION_RATIO_MAX: 10,
   META_HEALTH_MIN: 90,
 });
 
-function evaluateTestA34bPredictions(result) {
-  const p = TEST_A3_4B_PREDICTIONS;
+function evaluateTestA34cPredictions(result) {
+  const p = TEST_A3_4C_PREDICTIONS;
 
   const grapplingWinRate = result.grappling.winRate;
   const grapplingPass = grapplingWinRate !== null && grapplingWinRate >= p.GRAPPLING_WINRATE_MIN && grapplingWinRate <= p.GRAPPLING_WINRATE_MAX;
 
   const freestyleWinRate = result.styles.Freestyle?.winRate ?? null;
-  const freestylePass = freestyleWinRate !== null && freestyleWinRate > p.FREESTYLE_WINRATE_MIN;
+  const freestylePass = freestyleWinRate !== null && freestyleWinRate >= p.FREESTYLE_WINRATE_MIN;
 
   const submissionRatio = computeRiskRewardIndex(result).find((r) => r.key === 'SUBMISSION_ATTEMPT')?.ratio ?? null;
   const submissionRatioPass = submissionRatio !== null && submissionRatio < p.SUBMISSION_RATIO_MAX;
@@ -685,13 +699,13 @@ function evaluateTestA34bPredictions(result) {
     {
       label: '1. Winrate Grappling',
       actual: grapplingWinRate === null ? 'N/A' : formatPercent(grapplingWinRate, 1),
-      target: `~${formatPercent(p.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(p.GRAPPLING_WINRATE_MAX, 0)} (Mistral)`,
+      target: `${formatPercent(p.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(p.GRAPPLING_WINRATE_MAX, 0)}`,
       pass: grapplingPass,
     },
     {
       label: '2. Winrate Freestyle',
       actual: freestyleWinRate === null ? 'N/A' : formatPercent(freestyleWinRate, 1),
-      target: `> ${formatPercent(p.FREESTYLE_WINRATE_MIN, 0)}`,
+      target: `>= ${formatPercent(p.FREESTYLE_WINRATE_MIN, 0)}`,
       pass: freestylePass,
     },
     {
@@ -709,9 +723,9 @@ function evaluateTestA34bPredictions(result) {
   ];
 }
 
-function renderTestA34bPredictionSubsection(result) {
-  const conditions = evaluateTestA34bPredictions(result);
-  const lines = [renderSectionTitle('🎯 TEST A3.4b — COMPARATIF DES PREDICTIONS (Mistral)')];
+function renderTestA34cPredictionSubsection(result) {
+  const conditions = evaluateTestA34cPredictions(result);
+  const lines = [renderSectionTitle('🎯 TEST A3.4c — COMPARATIF DES PREDICTIONS (Mistral, reglage final)')];
   const headers = ['Prediction', 'Mesure', 'Cible', 'Statut'];
   const rows = conditions.map((c) => [c.label, c.actual, c.target, c.pass ? 'DANS LA CIBLE' : 'HORS CIBLE']);
   lines.push(renderTable(headers, rows));
@@ -802,6 +816,13 @@ function renderNotesSection(result) {
       ' Submission Attempt Ratio recoit ici une vraie cible ("< x10") et est donc evalue PASS/FAIL comme les 3' +
       ' autres predictions ; Freestyle (> 49%) et Meta Health (>= 90/100) sont des bornes inferieures seules' +
       ' (pas de plafond fourni), Grappling reste le seul intervalle ferme.'
+  );
+  lines.push(
+    '* Test A3.4c : une seule variable modifiee vs Test A3.4b (methodologie A/B atomique) —' +
+      ' ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE 0.55 -> 0.59, A3.1/A3.2/A3.3 intacts. Presente par la tache comme le' +
+      ' "reglage final" de cette serie de tunings sur le taux de base du takedown (Test A3 : 0.4, A3.4a : 0.5,' +
+      ' A3.4b : 0.55, A3.4c : 0.59) — voir le tableau recapitulatif complet (v0.30 a v0.34c) ci-dessus pour la' +
+      ' trajectoire entiere.'
   );
   return lines.join('\n');
 }
