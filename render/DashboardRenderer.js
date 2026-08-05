@@ -75,6 +75,16 @@ export class DashboardRenderer extends BaseRenderer {
       this._pushLog(event.headline, 'NARRATIVE');
     });
 
+    this._subscribe(WORLD_EVENTS.GLOBAL_EVENT_ADDED, ({ event }) => {
+      // EventEngine's own narrative beats already logged above (with their
+      // full headline) via EVENT_ENGINE_EVENTS.TRIGGERED — skip the bare
+      // world-journal copy of that same event to avoid a duplicate line.
+      if (event.type === 'NARRATIVE_EVENT') return;
+      const text = event.headline ?? this._describeGlobalEvent(event);
+      if (!text) return;
+      this._pushLog(text, event.type === 'NARRATIVE_INCIDENT' ? 'NARRATIVE' : 'WORLD');
+    });
+
     this.render();
     return this;
   }
@@ -101,6 +111,22 @@ export class DashboardRenderer extends BaseRenderer {
   _updateStats() {
     this.viewModel = { ...this.viewModel, ...this._buildStats() };
     this._flush();
+  }
+
+  /**
+   * Best-effort human-readable fallback for global-event types that don't
+   * carry their own `headline` (unlike NarrativeEngine's beats). Unknown
+   * types are silently skipped rather than logging a meaningless line.
+   */
+  _describeGlobalEvent(event) {
+    switch (event.type) {
+      case 'FORCED_RETIREMENT':
+        return `Un combattant part a la retraite forcee (age ${event.age}).`;
+      case 'RIVAL_FIGHT_RESULT':
+        return `Combat chez un gym rival (${event.method ?? 'resultat inconnu'}).`;
+      default:
+        return null;
+    }
   }
 
   _extractCharges(economyReport) {

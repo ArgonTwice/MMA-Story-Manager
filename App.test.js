@@ -126,3 +126,64 @@ test('startFight() drives the App-owned CombatEngine, and the mounted CombatRend
   assert.equal(app.renderers.combat.getViewModel().screen, 'RESULT');
   assert.equal(app.renderers.combat.getViewModel().resultBanner.method, result.method);
 });
+
+test('the Pyramide Emergente engines are live for the whole GAME session, with no leaked subscriptions across sessions', () => {
+  const app = makeIsolatedApp();
+
+  const before = EventBus.listenerCount('combat:finished');
+  app.startNewGame({ gymName: 'Pyramid Session Gym' });
+  const duringGame = EventBus.listenerCount('combat:finished');
+  // CombatRenderer + PersonalityEngine + RelationshipEngine + StoryEngine + WorldMemory all listen to combat:finished.
+  assert.ok(duringGame >= before + 5, `expected at least 5 new combat:finished subscribers, went from ${before} to ${duringGame}`);
+
+  app.showStartScreen();
+  assert.equal(EventBus.listenerCount('combat:finished'), before, 'every Pyramide Emergente subscription should be released on showStartScreen()');
+
+  app.startNewGame({ gymName: 'Second Pyramid Session' });
+  assert.equal(
+    EventBus.listenerCount('combat:finished'),
+    duringGame,
+    'starting a second game should not accumulate duplicate Pyramide Emergente subscriptions'
+  );
+});
+
+test('repeated real fights during a session build the relationship graph and produce narrative content in the social feed / world journal', () => {
+  const app = makeIsolatedApp();
+  app.startNewGame({ gymName: 'Emergent Session Gym' });
+
+  const proud = new Fighter({
+    identity: { name: 'Le Fier', age: 27 },
+    attributes: { skills: { boxe: 45, jambes: 45, sol: 45, soumission: 45, cardio: 45, intelligence: 45 } },
+    psychology: { ego: 85 },
+  });
+  const nemesis = new Fighter({
+    identity: { name: 'Nemesis', age: 27 },
+    attributes: { skills: { boxe: 60, jambes: 60, sol: 60, soumission: 60, cardio: 60, intelligence: 60 } },
+  });
+  app.gameState.playerState.addFighter(proud);
+  app.gameState.playerState.addFighter(nemesis);
+
+  for (let i = 0; i < 4; i += 1) {
+    app.startFight(proud, nemesis, 'WFC', false);
+    app.renderers.combat.setGameplan('A', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+    app.renderers.combat.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+    app.combatEngine.simulateFullMatch();
+  }
+
+  const relationship = app.gameState.worldState.getRelationship(proud.identity.id, nemesis.identity.id);
+  assert.ok(relationship, 'RelationshipEngine should have built a relationship record from 4 real fights');
+  // At least one COMBAT history entry per fight; the emergent feedback loop
+  // (a PROVOCATION-toned narrative beat feeding back into the relationship)
+  // can add more on top, so this is a floor, not an exact count.
+  assert.ok(relationship.history.length >= 4, `expected at least 4 history entries, got ${relationship.history.length}`);
+  assert.ok(relationship.gauges.tension > 0);
+
+  const socialPostCount = app.gameState.playerState.socialFeed.length;
+  const journalIncidentCount = app.gameState.worldState.globalEvents.filter((e) => e.type === 'NARRATIVE_INCIDENT').length;
+  assert.ok(
+    socialPostCount > 0 || journalIncidentCount > 0,
+    'StoryEngine + NarrativeEngine should have produced at least one narrative beat somewhere'
+  );
+
+  assert.ok(app.gameState.worldState.getRecord('biggestFight').value > 0, 'WorldMemory should have recorded a biggest-fight value');
+});

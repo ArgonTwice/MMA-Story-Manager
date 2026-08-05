@@ -2,15 +2,19 @@
  * App.js
  * ---------------------------------------------------------------------------
  * The composition root: wires State, the reactive engines (CombatEngine,
- * SocialEngine), the weekly progression loop, and every Render component
- * together, and owns the top-level screen flow
- * (StartScreen -> SlotPicker -> Game).
+ * SocialEngine, and the Pyramide Emergente's PersonalityEngine/
+ * RelationshipEngine/StoryEngine/NarrativeEngine/WorldMemory), the weekly
+ * progression loop, and every Render component together, and owns the
+ * top-level screen flow (StartScreen -> SlotPicker -> Game).
  *
- * This module does not itself decide *how* things are drawn — it only
- * decides *when* renderers exist and what State/Engine instances they're
- * bound to. Each renderer still updates itself independently in reaction
- * to EventBus events, exactly as it does in isolation; App never calls a
- * global "render everything" function.
+ * This module does not itself decide *how* things are drawn, nor how the
+ * narrative engines decide what's interesting — it only decides *when*
+ * each reactive engine/renderer exists and what State/Engine instances
+ * they're bound to. Every one of them still updates itself independently
+ * in reaction to EventBus events, exactly as it does in isolation; App
+ * never calls a global "render everything" (or "simulate everything")
+ * function, and never imports another engine on a reactive engine's
+ * behalf — each engine subscribes to EventBus on its own.
  * ---------------------------------------------------------------------------
  */
 
@@ -19,6 +23,11 @@ import SaveManager from './core/SaveManager.js';
 import GameStateSingleton from './state/GameState.js';
 import { CombatEngine } from './engine/CombatEngine.js';
 import { SocialEngine } from './engine/SocialEngine.js';
+import { PersonalityEngine } from './engine/PersonalityEngine.js';
+import { RelationshipEngine } from './engine/RelationshipEngine.js';
+import { StoryEngine } from './engine/StoryEngine.js';
+import { NarrativeEngine } from './engine/NarrativeEngine.js';
+import { WorldMemory } from './engine/WorldMemory.js';
 import { advanceWeek } from './engine/ProgressionEngine.js';
 import DashboardRenderer from './render/DashboardRenderer.js';
 import RosterRenderer from './render/RosterRenderer.js';
@@ -48,6 +57,11 @@ export class App {
    *   instance owned by this App (kept separate from CombatEngine.js's own
    *   default singleton, which other code may use independently).
    * @param {Object} [options.socialEngine] - Defaults to a fresh SocialEngine instance.
+   * @param {Object} [options.personalityEngine] - Defaults to a fresh PersonalityEngine instance.
+   * @param {Object} [options.relationshipEngine] - Defaults to a fresh RelationshipEngine instance.
+   * @param {Object} [options.storyEngine] - Defaults to a fresh StoryEngine instance.
+   * @param {Object} [options.narrativeEngine] - Defaults to a fresh NarrativeEngine instance.
+   * @param {Object} [options.worldMemory] - Defaults to a fresh WorldMemory instance.
    * @param {Object} [options.mounts] - Optional DOM-like mount elements per
    *   renderer: { dashboard, roster, combat, gym, social }.
    */
@@ -55,6 +69,11 @@ export class App {
     this.gameState = options.gameState ?? GameStateSingleton;
     this.combatEngine = options.combatEngine ?? new CombatEngine();
     this.socialEngine = options.socialEngine ?? new SocialEngine();
+    this.personalityEngine = options.personalityEngine ?? new PersonalityEngine();
+    this.relationshipEngine = options.relationshipEngine ?? new RelationshipEngine();
+    this.storyEngine = options.storyEngine ?? new StoryEngine();
+    this.narrativeEngine = options.narrativeEngine ?? new NarrativeEngine();
+    this.worldMemory = options.worldMemory ?? new WorldMemory();
     this.mounts = options.mounts ?? {};
 
     this.screen = APP_SCREENS.START_SCREEN;
@@ -156,7 +175,7 @@ export class App {
   /** Leaves the game (if any) and returns to the start screen. */
   showStartScreen() {
     this._teardownRenderers();
-    this.socialEngine.detach();
+    this._detachReactiveEngines();
     this._setScreen(APP_SCREENS.START_SCREEN);
     return this.screen;
   }
@@ -233,12 +252,40 @@ export class App {
       runtimeState: this.gameState.runtimeState,
     });
 
-    this.socialEngine.detach();
-    this.socialEngine.attach(this.gameState.playerState);
-
+    this._attachReactiveEngines();
     this._mountRenderers();
     this._setScreen(APP_SCREENS.GAME);
     EventBus.publish(APP_EVENTS.READY, { screen: this.screen });
+  }
+
+  /**
+   * (Re)binds every always-on reactive engine — SocialEngine and the full
+   * Pyramide Emergente (PersonalityEngine, RelationshipEngine, StoryEngine,
+   * NarrativeEngine, WorldMemory) — to this session's PlayerState/WorldState.
+   * Always detaches first so switching games never accumulates duplicate
+   * EventBus subscriptions from a previous session.
+   */
+  _attachReactiveEngines() {
+    const { playerState, worldState } = this.gameState;
+
+    this._detachReactiveEngines();
+
+    this.socialEngine.attach(playerState);
+    this.personalityEngine.attach(playerState);
+    this.relationshipEngine.attach(worldState);
+    this.storyEngine.attach(playerState, worldState);
+    this.narrativeEngine.attach(playerState, worldState);
+    this.worldMemory.attach(worldState);
+  }
+
+  /** Unsubscribes every always-on reactive engine from EventBus. */
+  _detachReactiveEngines() {
+    this.socialEngine.detach();
+    this.personalityEngine.detach();
+    this.relationshipEngine.detach();
+    this.storyEngine.detach();
+    this.narrativeEngine.detach();
+    this.worldMemory.detach();
   }
 
   _mountRenderers() {

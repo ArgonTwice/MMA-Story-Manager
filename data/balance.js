@@ -70,7 +70,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.5.0',
+  VERSION: '1.5.1',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -996,6 +996,12 @@ const BALANCE = {
     TRAINING_FATIGUE_REFERENCE: 2,
     MORALE_SWING_REFERENCE: 4,
     INSOLVENCY_MORALE_REFERENCE: 3,
+
+    /** How many traits engine/FighterGenerator.js assigns to an automatically generated fighter. */
+    GENERATION: {
+      MIN_TRAITS: 1,
+      MAX_TRAITS: 3,
+    },
   },
 
   // ---------------------------------------------------------------------

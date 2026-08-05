@@ -84,6 +84,35 @@ test('DashboardRenderer: initial render reflects PlayerState/WorldState and upda
   assert.equal(renderer.getViewModel().money, 1500, 'view model should be frozen after detach()');
 });
 
+test('DashboardRenderer: journal picks up NarrativeEngine incidents from the world journal, without duplicating EventEngine beats', () => {
+  const playerState = new PlayerState({ gymName: 'Journal Gym' });
+  const worldState = new WorldState();
+  const renderer = new DashboardRenderer({ playerState, worldState }).attach();
+
+  // A NarrativeEngine-style INCIDENT/CONTRACT_BREACH beat carries its own headline.
+  worldState.addGlobalEvent({ type: 'NARRATIVE_INCIDENT', form: 'INCIDENT', headline: 'Clash en coulisses.' });
+  assert.equal(renderer.getViewModel().logEntries[0].text, 'Clash en coulisses.');
+  assert.equal(renderer.getViewModel().logEntries[0].kind, 'NARRATIVE');
+
+  // A bare EventEngine NARRATIVE_EVENT record (no headline of its own) must
+  // NOT produce a second, uninformative journal line — EVENT_ENGINE_EVENTS.TRIGGERED
+  // already logs the real headline for that beat.
+  const countBefore = renderer.getViewModel().logEntries.length;
+  worldState.addGlobalEvent({ type: 'NARRATIVE_EVENT', category: 'SPONSOR_OFFER', narrativeEventId: 'x' });
+  assert.equal(renderer.getViewModel().logEntries.length, countBefore, 'a bare NARRATIVE_EVENT global event should not add its own journal line');
+
+  // A recognized-but-headline-less type falls back to a generated description.
+  worldState.addGlobalEvent({ type: 'FORCED_RETIREMENT', fighterId: 'f1', age: 45 });
+  assert.ok(renderer.getViewModel().logEntries[0].text.includes('retraite'));
+
+  // A totally unknown type is silently skipped, not a garbage log line.
+  const countBeforeUnknown = renderer.getViewModel().logEntries.length;
+  worldState.addGlobalEvent({ type: 'SOME_FUTURE_EVENT_TYPE' });
+  assert.equal(renderer.getViewModel().logEntries.length, countBeforeUnknown);
+
+  renderer.detach();
+});
+
 test('DashboardRenderer: a full advanceWeek() populates weeklyCharges and a week-summary log line', () => {
   const gameState = new GameState();
   gameState.newGame({ gymName: 'Weekly Gym' });

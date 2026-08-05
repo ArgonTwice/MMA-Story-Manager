@@ -19,6 +19,7 @@ import { CombatEngine } from './CombatEngine.js';
 import { processWeeklyTraining } from './TrainingEngine.js';
 import { processWeeklyExpenses } from './EconomyEngine.js';
 import { evaluateWeeklyEvents } from './EventEngine.js';
+import { generatePersonality } from './FighterGenerator.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -141,10 +142,12 @@ function processRivalGyms(worldState, rng) {
     const fighterA = new Fighter({
       identity: { name: `${gymA.name ?? gymA.id} Prospect` },
       attributes: { skills: uniformSkills(skillA) },
+      psychology: { personality: generatePersonality(rng) },
     });
     const fighterB = new Fighter({
       identity: { name: `${gymB.name ?? gymB.id} Prospect` },
       attributes: { skills: uniformSkills(skillB) },
+      psychology: { personality: generatePersonality(rng) },
     });
 
     const headlessEngine = new CombatEngine({ rng });
