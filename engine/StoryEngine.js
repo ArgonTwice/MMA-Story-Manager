@@ -99,7 +99,12 @@ class StoryEngine {
     const loserKey = winnerKey === 'A' ? 'B' : 'A';
     const winnerId = payload.fighters[winnerKey];
     const loserId = payload.fighters[loserKey];
-    const names = payload.names ?? {};
+    // payload.names is keyed by corner ('A'/'B'), not by fighter id — remap it
+    // so downstream context.names[entityId] lookups (see NarrativeEngine.resolveName) resolve.
+    const names = {
+      [winnerId]: payload.names?.[winnerKey],
+      [loserId]: payload.names?.[loserKey],
+    };
 
     const winner = this._findFighter(winnerId);
     const loser = this._findFighter(loserId);

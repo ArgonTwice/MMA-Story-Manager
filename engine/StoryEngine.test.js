@@ -53,6 +53,12 @@ test('UPSET_VICTORY fires when the winner\'s rating is far below the loser\'s, b
   assert.ok(upset, 'expected an UPSET_VICTORY opportunity');
   assert.deepEqual(upset.entities, [underdog.identity.id, favourite.identity.id]);
   assert.ok(upset.context.ratingGap >= BALANCE.STORY.UPSET_VICTORY.MIN_RATING_GAP);
+
+  // combat:finished carries names keyed by corner ('A'/'B'); the published opportunity's
+  // context.names must be re-keyed by fighter id so NarrativeEngine.resolveName(context, id)
+  // finds the real name instead of falling back to a generic placeholder.
+  assert.equal(upset.context.names[underdog.identity.id], 'Underdog');
+  assert.equal(upset.context.names[favourite.identity.id], 'Favourite');
 });
 
 test('an evenly matched fight does not trigger UPSET_VICTORY', () => {
