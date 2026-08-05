@@ -70,7 +70,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.5.2',
+  VERSION: '1.5.3',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -203,7 +203,26 @@ const BALANCE = {
     SCORING: {
       WEIGHT_EFFECTIVE_STRIKES: 0.45,
       WEIGHT_TAKEDOWNS: 0.25,
-      WEIGHT_CONTROL_TIME: 0.2,
+      /**
+       * Test A2 (v0.32, see tools/BalanceReporter.js's Version History
+       * Tracker): 0.2 -> 0.14, the single new variable for this test — the
+       * literal "valeur des gains de position/controle au sol" from the
+       * test brief (WEIGHT_TAKEDOWNS and WEIGHT_SUBMISSION_ATTEMPTS are
+       * untouched, and so is A1's NON_STRIKE_METRIC_SCALE). Two effects
+       * from this one change: it pulls Grappling's overall round EV back
+       * toward the ~8.8 target (passive control was over-rewarded relative
+       * to actually landing a finish attempt), and — since
+       * WEIGHT_SUBMISSION_ATTEMPTS stays fixed while this shrinks — it
+       * raises submission attempts' *relative* share of ground/control
+       * scoring versus passive position-holding, without separately
+       * touching WEIGHT_SUBMISSION_ATTEMPTS itself. Value chosen
+       * empirically (multi-seed simulation, not hand-derived from the
+       * formula alone — see the Version History Tracker's own notes: this
+       * single lever lands the EV target but does not, by itself, bring
+       * Grappling Winrate or the weakest style's winrate into their target
+       * windows). Previous value: 0.2.
+       */
+      WEIGHT_CONTROL_TIME: 0.14,
       WEIGHT_SUBMISSION_ATTEMPTS: 0.1,
       ROUND_WIN_POINTS: 10,
       ROUND_LOSE_POINTS: 9,

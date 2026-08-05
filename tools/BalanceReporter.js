@@ -291,6 +291,29 @@ function renderWinConditionSubsection(result) {
   return lines.join('\n');
 }
 
+/**
+ * "Average Round EV Ratio": weighted-average judge-score EV for standing
+ * (HEAD/BODY/LEG strikes, weighted by each bucket's own attempt count) vs
+ * ground (TAKEDOWN) rounds, and their ratio. Computed here from
+ * already-finalized result.combat.actionMetrics rather than a new SimRunner
+ * field — every input (attempts + avgScorePoints per bucket) is already
+ * reported per-bucket, so this stays pure formatting/derivation, no new
+ * aggregation logic added to SimRunner.
+ * @returns {{ evStanding: number|null, evGround: number|null, ratio: number|null }}
+ */
+function computeRoundEVRatio(result) {
+  const a = result.combat.actionMetrics;
+  const standingBuckets = [a.HEAD_STRIKE, a.BODY_STRIKE, a.LEG_STRIKE];
+  const standingAttempts = standingBuckets.reduce((sum, bucket) => sum + bucket.attempts, 0);
+  const evStanding =
+    standingAttempts > 0
+      ? standingBuckets.reduce((sum, bucket) => sum + bucket.attempts * (bucket.avgScorePoints ?? 0), 0) / standingAttempts
+      : null;
+  const evGround = a.TAKEDOWN.avgScorePoints;
+  const ratio = evStanding !== null && evStanding > 0 && evGround !== null ? evGround / evStanding : null;
+  return { evStanding, evGround, ratio };
+}
+
 function renderActionEVSubsection(result) {
   const lines = [renderSectionTitle('⚖️ EXPECTED VALUE (EV) DES ACTIONS')];
   const headers = ['Action', 'Tentatives', 'Taux reussite', 'Degats moy.', 'EV (pts juge/round)', 'Controle gagne'];
@@ -303,6 +326,13 @@ function renderActionEVSubsection(result) {
     formatPercent(m.controlRate, 0),
   ]);
   lines.push(renderTable(headers, rows));
+  lines.push('');
+
+  const { evStanding, evGround, ratio } = computeRoundEVRatio(result);
+  lines.push('Average Round EV Ratio (Debout vs Sol) :');
+  lines.push(`  EV Debout (Tete/Corps/Jambes, pondere par tentatives) : ${formatDecimal(evStanding)}`);
+  lines.push(`  EV Sol (Takedown/Controle)                            : ${formatDecimal(evGround)}`);
+  lines.push(`  Ratio Sol / Debout                                    : ${ratio === null ? 'N/A' : `x${ratio.toFixed(2)}`}`);
   lines.push('');
   lines.push("Agressivite (paiement reel par choix de tempo, meme action sinon) :");
   const tempoHeaders = ['Tempo', 'Rounds', 'Degats moy./round', 'Score juge moy./round'];
@@ -422,20 +452,34 @@ const VERSION_HISTORY = Object.freeze([
     change: 'Reference (fin de la Phase 3.0.3, avant tout Test A/B)',
     grapplingWinRate: null,
     groundDominantDecisionWinRate: null,
+    evRatio: null,
     balanceScore: 74,
     funScore: 68,
     metaHealthIndex: 86,
+  }),
+  Object.freeze({
+    version: 'v0.31',
+    label: 'Test A1',
+    change: 'COMBAT.SCORING.NON_STRIKE_METRIC_SCALE : 10 -> 7.5 (poids du controle sol/soumission/takedown dans le score des juges)',
+    grapplingWinRate: 0.655,
+    groundDominantDecisionWinRate: 0.712,
+    evRatio: null,
+    balanceScore: 74,
+    funScore: 69,
+    metaHealthIndex: 87,
   }),
 ]);
 
 /** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
 function buildCurrentVersionEntry(result) {
+  const { ratio } = computeRoundEVRatio(result);
   return {
-    version: 'v0.31',
-    label: 'Test A1',
-    change: 'COMBAT.SCORING.NON_STRIKE_METRIC_SCALE : 10 -> 7.5 (poids du controle sol/soumission/takedown dans le score des juges)',
+    version: 'v0.32',
+    label: 'Test A2',
+    change: 'COMBAT.SCORING.WEIGHT_CONTROL_TIME : 0.2 -> 0.14 (valeur des gains de position/controle au sol, a poids des juges v0.31 inchange)',
     grapplingWinRate: result.grappling.winRate,
     groundDominantDecisionWinRate: result.combat.groundDominantWinRate,
+    evRatio: ratio,
     balanceScore: result.metaHealth.balanceScore,
     funScore: result.metaHealth.funScore,
     metaHealthIndex: result.metaHealth.overallIndex,
@@ -445,15 +489,26 @@ function buildCurrentVersionEntry(result) {
 function renderVersionHistorySection(result) {
   const current = buildCurrentVersionEntry(result);
   const baseline = VERSION_HISTORY[0];
+  const previous = VERSION_HISTORY[VERSION_HISTORY.length - 1];
   const rows = [...VERSION_HISTORY, current];
 
   const lines = ['\n=== VERSION HISTORY TRACKER ==='];
-  const headers = ['Version', 'Label', 'Winrate Grappling', 'Biais Juges (sol dominant)', 'Equilibre', 'Fun', 'Meta Health'];
+  const headers = [
+    'Version',
+    'Label',
+    'Winrate Grappling',
+    'Biais Juges (sol dominant)',
+    'Ratio EV Sol/Debout',
+    'Equilibre',
+    'Fun',
+    'Meta Health',
+  ];
   const tableRows = rows.map((entry) => [
     entry.version,
     entry.label,
     entry.grapplingWinRate === null ? 'N/A' : formatPercent(entry.grapplingWinRate, 1),
     entry.groundDominantDecisionWinRate === null ? 'N/A' : formatPercent(entry.groundDominantDecisionWinRate, 1),
+    entry.evRatio === null ? 'N/A' : `x${entry.evRatio.toFixed(2)}`,
     entry.balanceScore === null ? 'N/A' : `${formatNumber(entry.balanceScore)}/100`,
     entry.funScore === null ? 'N/A' : `${formatNumber(entry.funScore)}/100`,
     entry.metaHealthIndex === null ? 'N/A' : `${formatNumber(entry.metaHealthIndex)}/100`,
@@ -462,24 +517,106 @@ function renderVersionHistorySection(result) {
   lines.push('');
   lines.push(`Changement teste (${current.version} ${current.label}) : ${current.change}`);
   lines.push('');
-  lines.push(`Comparatif ${current.version} vs ${baseline.version} (${baseline.label}) :`);
+  lines.push(`Comparatif ${current.version} vs ${previous.version} (${previous.label}) :`);
   lines.push(
     `  Winrate Grappling (${result.grappling.styles.join(' + ')}) : ${formatPercent(current.grapplingWinRate, 1)} ` +
-      (baseline.grapplingWinRate === null
-        ? '(pas de reference chiffree en v0.30 — premiere mesure de ce KPI)'
-        : `(${formatSignedPercentPoints(current.grapplingWinRate, baseline.grapplingWinRate)} vs baseline)`)
+      `(${formatSignedPercentPoints(current.grapplingWinRate, previous.grapplingWinRate)} vs ${previous.version})`
   );
   lines.push(
     `  Biais des juges (winrate a la decision quand le controle sol est dominant) : ${formatPercent(current.groundDominantDecisionWinRate, 1)} ` +
-      (baseline.groundDominantDecisionWinRate === null
-        ? '(pas de reference chiffree en v0.30 — premiere mesure de ce KPI)'
-        : `(${formatSignedPercentPoints(current.groundDominantDecisionWinRate, baseline.groundDominantDecisionWinRate)} vs baseline)`)
+      `(${formatSignedPercentPoints(current.groundDominantDecisionWinRate, previous.groundDominantDecisionWinRate)} vs ${previous.version})`
   );
   lines.push(
-    `  Fun Detector      : ${formatNumber(current.funScore)}/100 (${formatSignedInt(current.funScore - baseline.funScore)} vs baseline)`
+    `  Fun Detector      : ${formatNumber(current.funScore)}/100 (${formatSignedInt(current.funScore - previous.funScore)} vs ${previous.version})`
   );
   lines.push(
-    `  Meta Health Index : ${formatNumber(current.metaHealthIndex)}/100 (${formatSignedInt(current.metaHealthIndex - baseline.metaHealthIndex)} vs baseline)`
+    `  Meta Health Index : ${formatNumber(current.metaHealthIndex)}/100 (${formatSignedInt(current.metaHealthIndex - baseline.metaHealthIndex)} vs baseline ${baseline.version})`
+  );
+  lines.push('');
+  lines.push(renderTestA2ValidationSubsection(result));
+  return lines.join('\n');
+}
+
+/**
+ * Test A2's 4 explicit acceptance conditions. Thresholds are named
+ * constants so a future test can cite/adjust them rather than re-deriving
+ * magic numbers — condition 4's "significatif" is inherently a judgment
+ * call, defined here as >= 30% of Grappling's wins coming by submission
+ * (documented in the section's own footer, not silently assumed).
+ */
+const TEST_A2_TARGETS = Object.freeze({
+  GRAPPLING_WINRATE_MIN: 0.58,
+  GRAPPLING_WINRATE_MAX: 0.6,
+  META_HEALTH_MIN: 88,
+  MIN_STYLE_WINRATE_FLOOR: 0.45,
+  SUBMISSION_WIN_SHARE_MIN: 0.3,
+});
+
+function evaluateTestA2Conditions(result) {
+  const t = TEST_A2_TARGETS;
+
+  const grapplingWinRate = result.grappling.winRate;
+  const grapplingPass = grapplingWinRate !== null && grapplingWinRate >= t.GRAPPLING_WINRATE_MIN && grapplingWinRate <= t.GRAPPLING_WINRATE_MAX;
+
+  const metaHealthIndex = result.metaHealth.overallIndex;
+  const metaHealthPass = metaHealthIndex !== null && metaHealthIndex >= t.META_HEALTH_MIN;
+
+  const styleWinRates = Object.entries(result.styles)
+    .filter(([, s]) => s.winRate !== null)
+    .map(([style, s]) => [style, s.winRate]);
+  const worstStyle = styleWinRates.reduce(
+    (min, [style, winRate]) => (winRate < min[1] ? [style, winRate] : min),
+    styleWinRates[0] ?? [null, null]
+  );
+  const minStylePass = worstStyle[1] !== null && worstStyle[1] >= t.MIN_STYLE_WINRATE_FLOOR;
+
+  const grapplingSubmissionWins = result.grappling.styles.reduce(
+    (sum, style) => sum + (result.styleWinMethods[style]?.byMethod.SUBMISSION.count ?? 0),
+    0
+  );
+  const submissionWinShare = result.grappling.wins > 0 ? grapplingSubmissionWins / result.grappling.wins : null;
+  const submissionPass = submissionWinShare !== null && submissionWinShare >= t.SUBMISSION_WIN_SHARE_MIN;
+
+  return [
+    {
+      label: '1. Winrate Grappling',
+      actual: grapplingWinRate === null ? 'N/A' : formatPercent(grapplingWinRate, 1),
+      target: `${formatPercent(t.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(t.GRAPPLING_WINRATE_MAX, 0)}`,
+      pass: grapplingPass,
+    },
+    {
+      label: '2. Meta Health Index',
+      actual: metaHealthIndex === null ? 'N/A' : `${formatNumber(metaHealthIndex)}/100`,
+      target: `>= ${t.META_HEALTH_MIN}/100`,
+      pass: metaHealthPass,
+    },
+    {
+      label: '3. Winrate min par style',
+      actual: worstStyle[0] === null ? 'N/A' : `${worstStyle[0]} a ${formatPercent(worstStyle[1], 1)}`,
+      target: `aucun style < ${formatPercent(t.MIN_STYLE_WINRATE_FLOOR, 0)}`,
+      pass: minStylePass,
+    },
+    {
+      label: '4. Victoires Grappling par soumission',
+      actual: submissionWinShare === null ? 'N/A' : formatPercent(submissionWinShare, 1),
+      target: `>= ${formatPercent(t.SUBMISSION_WIN_SHARE_MIN, 0)} des victoires Grappling`,
+      pass: submissionPass,
+    },
+  ];
+}
+
+function renderTestA2ValidationSubsection(result) {
+  const conditions = evaluateTestA2Conditions(result);
+  const lines = [renderSectionTitle('🎯 TEST A2 — CONDITIONS DE VALIDATION')];
+  const headers = ['Condition', 'Mesure', 'Cible', 'Statut'];
+  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.pass ? 'PASS' : 'FAIL']);
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  const passed = conditions.filter((c) => c.pass).length;
+  lines.push(`Bilan : ${passed} / ${conditions.length} conditions validees.`);
+  lines.push(
+    '(Condition 4 : "significatif" est defini ici comme >= 30% des victoires Grappling obtenues par soumission —' +
+      ' seuil documente, pas une regle du jeu.)'
   );
   return lines.join('\n');
 }
@@ -532,7 +669,17 @@ function renderNotesSection(result) {
     '* Le Version History Tracker suit la methodologie A/B "atomique" de la Phase 3.0 : une seule variable de' +
       ' data/balance.js changee par test. La ligne v0.30 (Baseline) est un enregistrement fige rapporte a la fin' +
       ' de la Phase 3.0.3 — Winrate Grappling et Biais des Juges n\'y etaient pas encore suivis individuellement,' +
-      ' d\'ou leur "N/A" plutot qu\'un delta invente.'
+      ' d\'ou leur "N/A" plutot qu\'un delta invente. La ligne v0.31 (Test A1) est de meme figee aux chiffres' +
+      ' rapportes a la fin de ce test-la.'
+  );
+  lines.push(
+    '* Test A2 : WEIGHT_CONTROL_TIME a ete choisi empiriquement (simulations multi-graines a l\'echelle reelle),' +
+      ' pas derive de la seule formule — la relation entre ce coefficient et l\'EV/winrate mesures n\'est pas' +
+      ' parfaitement lineaire (les combattants qui gagnent enchainent plus de combats, ce qui retroagit sur la' +
+      ' distribution de competences observee). Ce seul levier ramene l\'EV Sol pres de la cible mais ne suffit' +
+      ' pas, a lui seul, a satisfaire les 4 conditions de validation (voir la section dediee ci-dessus) — un' +
+      ' Test A3 cible sur un autre levier (probablement les degats bruts ou les competences des styles debout)' +
+      ' est le candidat naturel pour la suite.'
   );
   return lines.join('\n');
 }

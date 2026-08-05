@@ -85,20 +85,75 @@ test('formatReport renders every required section as plain text without throwing
   }
 });
 
-test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.30 baseline are internally consistent', () => {
+test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.30/v0.31 entries are internally consistent', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 
   assert.ok(report.includes('v0.30'));
   assert.ok(report.includes('v0.31'));
+  assert.ok(report.includes('v0.32'));
   assert.ok(report.includes('Baseline'));
   assert.ok(report.includes('Test A1'));
+  assert.ok(report.includes('Test A2'));
+  assert.ok(report.includes('TEST A2 — CONDITIONS DE VALIDATION'));
 
-  const funDelta = result.metaHealth.funScore - 68;
+  // Fun Detector's delta is reported against the immediately preceding
+  // entry (v0.31, funScore=69); Meta Health Index's delta is reported
+  // against the fixed baseline (v0.30, metaHealthIndex=86) — see
+  // renderVersionHistorySection.
+  const funDelta = result.metaHealth.funScore - 69;
   const metaDelta = result.metaHealth.overallIndex - 86;
   const formatSigned = (n) => (n > 0 ? `+${n}` : `${n}`);
-  assert.ok(report.includes(`${formatSigned(funDelta)} vs baseline`));
-  assert.ok(report.includes(`${formatSigned(metaDelta)} vs baseline`));
+  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.31`));
+  assert.ok(report.includes(`${formatSigned(metaDelta)} vs baseline v0.30`));
+});
+
+test('Test A2 validation checklist reports exactly 4 conditions, each with a PASS or FAIL verdict and a "Bilan : n / 4" summary', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const report = formatReport(result);
+
+  for (const label of [
+    '1. Winrate Grappling',
+    '2. Meta Health Index',
+    '3. Winrate min par style',
+    '4. Victoires Grappling par soumission',
+  ]) {
+    assert.ok(report.includes(label), `expected the validation checklist to include "${label}"`);
+  }
+
+  const verdictCount = (report.match(/\bPASS\b/g) ?? []).length + (report.match(/\bFAIL\b/g) ?? []).length;
+  assert.equal(verdictCount, 4, 'expected exactly 4 PASS/FAIL verdicts (one per condition)');
+
+  assert.ok(!report.includes('NaN'), 'the validation checklist should never render NaN (regression: worst-style reduce had a mismatched accumulator shape)');
+  const worstStyleLine = report.split('\n').find((line) => line.includes('Winrate min par style'));
+  const actualWorst = Object.entries(result.styles).reduce(
+    (min, [style, s]) => (s.winRate !== null && s.winRate < min[1] ? [style, s.winRate] : min),
+    [null, Infinity]
+  );
+  assert.ok(worstStyleLine.includes(actualWorst[0]), `expected the worst-style line to name ${actualWorst[0]}, got: ${worstStyleLine}`);
+
+  const bilanMatch = report.match(/Bilan : (\d) \/ 4 conditions validees\./);
+  assert.ok(bilanMatch, 'expected a "Bilan : n / 4 conditions validees." summary line');
+  const passCount = (report.match(/\bPASS\b/g) ?? []).length;
+  assert.equal(Number(bilanMatch[1]), passCount);
+});
+
+test('Average Round EV Ratio is reported and, when both EVs are known, the printed ratio matches EV Sol / EV Debout', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const report = formatReport(result);
+
+  assert.ok(report.includes('Average Round EV Ratio'));
+  assert.ok(report.includes('EV Debout'));
+  assert.ok(report.includes('EV Sol'));
+
+  const a = result.combat.actionMetrics;
+  const standingBuckets = [a.HEAD_STRIKE, a.BODY_STRIKE, a.LEG_STRIKE];
+  const standingAttempts = standingBuckets.reduce((sum, b) => sum + b.attempts, 0);
+  if (standingAttempts > 0 && a.TAKEDOWN.avgScorePoints !== null) {
+    const evStanding = standingBuckets.reduce((sum, b) => sum + b.attempts * (b.avgScorePoints ?? 0), 0) / standingAttempts;
+    const expectedRatio = a.TAKEDOWN.avgScorePoints / evStanding;
+    assert.ok(report.includes(`x${expectedRatio.toFixed(2)}`), `expected the report to include the computed ratio x${expectedRatio.toFixed(2)}`);
+  }
 });
 
 test('combat telemetry is faithfully aggregated from every fight\'s CombatEngine result', () => {
