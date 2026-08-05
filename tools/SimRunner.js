@@ -65,6 +65,8 @@ const STYLE_KEYS = Object.keys(BALANCE.COMBAT.STYLE_BONUSES).filter((key) => key
 const ORIGIN_KEYS = Object.keys(BALANCE.TRAINING.COUNTRY_BONUSES).filter((key) => key !== 'DEFAULT');
 /** Valid gameplan tempo choices (see BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS) — CONSERVATIVE/BALANCED/AGGRESSIVE. */
 const TEMPO_KEYS = Object.freeze(Object.keys(BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS));
+/** Styles whose native distance is GROUND (see BALANCE.COMBAT.STYLE_BONUSES) — the "grappling" aggregate reported alongside the Version History Tracker. */
+const GRAPPLING_STYLE_KEYS = Object.freeze(STYLE_KEYS.filter((key) => BALANCE.COMBAT.STYLE_BONUSES[key]?.distance === 'GROUND'));
 /**
  * No canonical weight-class list exists in data/balance.js yet (Fighter
  * doesn't validate identity.weightClass) — this is local flavor for the
@@ -985,6 +987,25 @@ function finalizeStats(stats, config, durationMs) {
     ])
   );
 
+  /** Combined record across every GROUND-affinity style (see GRAPPLING_STYLE_KEYS) — used by BalanceReporter's Version History Tracker to isolate the effect of judge-scoring changes on grappling as a whole. */
+  const grapplingBucket = GRAPPLING_STYLE_KEYS.reduce(
+    (acc, style) => {
+      const bucket = stats.styles[style];
+      acc.wins += bucket.wins;
+      acc.losses += bucket.losses;
+      acc.draws += bucket.draws;
+      return acc;
+    },
+    { wins: 0, losses: 0, draws: 0 }
+  );
+  const grappling = {
+    styles: GRAPPLING_STYLE_KEYS,
+    wins: grapplingBucket.wins,
+    losses: grapplingBucket.losses,
+    draws: grapplingBucket.draws,
+    winRate: winRate(grapplingBucket),
+  };
+
   const bySeverity = Object.fromEntries(
     Object.entries(stats.health.bySeverity).map(([severity, bucket]) => [
       severity,
@@ -1038,6 +1059,7 @@ function finalizeStats(stats, config, durationMs) {
     },
     archetypes,
     styles,
+    grappling,
     styleMatchups: finalizeStyleMatchups(stats.styleMatchups),
     styleWinMethods: finalizeStyleWinMethods(stats.styleWinMethods, styles),
     styleIdentity: finalizeStyleIdentity(stats.styleIdentity),

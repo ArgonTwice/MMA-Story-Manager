@@ -70,7 +70,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.5.1',
+  VERSION: '1.5.2',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -215,8 +215,18 @@ const BALANCE = {
       EVEN_ROUND_MARGIN: 0.05,
       /** Per-judge perception noise applied to each judge's read of a round, enabling split/majority cards. */
       JUDGE_VARIANCE: 0.08,
-      /** Damage-equivalent points a binary metric (takedown/control/submission attempt) is worth in the composite round score. */
-      NON_STRIKE_METRIC_SCALE: 10,
+      /**
+       * Damage-equivalent points a binary metric (takedown/control/submission
+       * attempt) is worth in the composite round score. This is the single
+       * lever that scales every non-strike (ground/control) contribution to
+       * judges' scoring at once — WEIGHT_EFFECTIVE_STRIKES is untouched.
+       *
+       * Test A1 (v0.31, see tools/BalanceReporter.js's Version History
+       * Tracker): 10 -> 7.5 (x0.75), matching the Phase 3.0.3 telemetry
+       * finding that judges' scoring leaned ~76% Degats / ~24% Controle Sol
+       * — intent is to rebalance toward ~82% / ~18%. Previous value: 10.
+       */
+      NON_STRIKE_METRIC_SCALE: 7.5,
     },
 
     /** Randomness envelope applied to every roll to avoid deterministic outcomes. */

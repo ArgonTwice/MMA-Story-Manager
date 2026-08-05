@@ -78,9 +78,27 @@ test('formatReport renders every required section as plain text without throwing
     'SOUMISSIONS & CONTRES',
     "BIAIS D'EVALUATION DES JUGES",
     'MATRICE DE MATCHUP PAR STYLE',
+    'META HEALTH DASHBOARD',
+    'VERSION HISTORY TRACKER',
   ]) {
     assert.ok(report.includes(heading), `report should include a "${heading}" section`);
   }
+});
+
+test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.30 baseline are internally consistent', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const report = formatReport(result);
+
+  assert.ok(report.includes('v0.30'));
+  assert.ok(report.includes('v0.31'));
+  assert.ok(report.includes('Baseline'));
+  assert.ok(report.includes('Test A1'));
+
+  const funDelta = result.metaHealth.funScore - 68;
+  const metaDelta = result.metaHealth.overallIndex - 86;
+  const formatSigned = (n) => (n > 0 ? `+${n}` : `${n}`);
+  assert.ok(report.includes(`${formatSigned(funDelta)} vs baseline`));
+  assert.ok(report.includes(`${formatSigned(metaDelta)} vs baseline`));
 });
 
 test('combat telemetry is faithfully aggregated from every fight\'s CombatEngine result', () => {
@@ -195,6 +213,20 @@ test('Meta Health Index is the rounded average of its four component scores, all
   const components = [m.diversityScore, m.balanceScore, m.financialHealthScore, m.funScore].filter((v) => v !== null);
   const expected = components.length > 0 ? Math.round(components.reduce((a, b) => a + b, 0) / components.length) : null;
   assert.equal(m.overallIndex, expected);
+});
+
+test('grappling aggregate combines exactly the GROUND-affinity styles and matches their combined per-style totals', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const g = result.grappling;
+
+  assert.deepEqual(new Set(g.styles), new Set(['Lutte', 'Jiu-Jitsu Bresilien']));
+  const expectedWins = g.styles.reduce((sum, style) => sum + result.styles[style].wins, 0);
+  const expectedLosses = g.styles.reduce((sum, style) => sum + result.styles[style].losses, 0);
+  const expectedDraws = g.styles.reduce((sum, style) => sum + result.styles[style].draws, 0);
+  assert.equal(g.wins, expectedWins);
+  assert.equal(g.losses, expectedLosses);
+  assert.equal(g.draws, expectedDraws);
+  assert.ok(g.winRate === null || (g.winRate >= 0 && g.winRate <= 1));
 });
 
 test('runSimulation rejects an invalid seasons argument instead of silently misbehaving', () => {

@@ -34,6 +34,21 @@ function formatDecimal(value, digits = 1) {
   return value === null || value === undefined || Number.isNaN(value) ? 'N/A' : value.toFixed(digits);
 }
 
+/** Signed integer delta, e.g. for score-out-of-100 comparisons ("+3", "-5", "0"). */
+function formatSignedInt(delta) {
+  if (delta === null || delta === undefined || Number.isNaN(delta)) return 'N/A';
+  const rounded = Math.round(delta);
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
+}
+
+/** Signed percentage-point delta between two [0, 1] rates, e.g. for winrate/bias comparisons ("+4.2 pts", "-8.5 pts"). */
+function formatSignedPercentPoints(current, previous, digits = 1) {
+  if (current === null || current === undefined || previous === null || previous === undefined) return 'N/A';
+  const deltaPoints = (current - previous) * 100;
+  const sign = deltaPoints >= 0 ? '+' : '';
+  return `${sign}${deltaPoints.toFixed(digits)} pts`;
+}
+
 /**
  * Renders an aligned text table: the first column left-aligned (labels),
  * every other column right-aligned (numbers/percentages).
@@ -391,6 +406,84 @@ function renderFightsSection(result) {
   return lines.join('\n');
 }
 
+/**
+ * Manually-recorded history of past A/B test runs (Phase 3.0's
+ * "atomique" methodology: one balance.js variable changed per test).
+ * Each entry is a point-in-time snapshot as it was reported to the user
+ * when that test concluded — metrics that weren't tracked yet at the
+ * time are left null rather than back-filled/guessed. Append a new entry
+ * once a future test's results are confirmed, exactly like a changelog;
+ * never edit a past entry's recorded numbers.
+ */
+const VERSION_HISTORY = Object.freeze([
+  Object.freeze({
+    version: 'v0.30',
+    label: 'Baseline',
+    change: 'Reference (fin de la Phase 3.0.3, avant tout Test A/B)',
+    grapplingWinRate: null,
+    groundDominantDecisionWinRate: null,
+    balanceScore: 74,
+    funScore: 68,
+    metaHealthIndex: 86,
+  }),
+]);
+
+/** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
+function buildCurrentVersionEntry(result) {
+  return {
+    version: 'v0.31',
+    label: 'Test A1',
+    change: 'COMBAT.SCORING.NON_STRIKE_METRIC_SCALE : 10 -> 7.5 (poids du controle sol/soumission/takedown dans le score des juges)',
+    grapplingWinRate: result.grappling.winRate,
+    groundDominantDecisionWinRate: result.combat.groundDominantWinRate,
+    balanceScore: result.metaHealth.balanceScore,
+    funScore: result.metaHealth.funScore,
+    metaHealthIndex: result.metaHealth.overallIndex,
+  };
+}
+
+function renderVersionHistorySection(result) {
+  const current = buildCurrentVersionEntry(result);
+  const baseline = VERSION_HISTORY[0];
+  const rows = [...VERSION_HISTORY, current];
+
+  const lines = ['\n=== VERSION HISTORY TRACKER ==='];
+  const headers = ['Version', 'Label', 'Winrate Grappling', 'Biais Juges (sol dominant)', 'Equilibre', 'Fun', 'Meta Health'];
+  const tableRows = rows.map((entry) => [
+    entry.version,
+    entry.label,
+    entry.grapplingWinRate === null ? 'N/A' : formatPercent(entry.grapplingWinRate, 1),
+    entry.groundDominantDecisionWinRate === null ? 'N/A' : formatPercent(entry.groundDominantDecisionWinRate, 1),
+    entry.balanceScore === null ? 'N/A' : `${formatNumber(entry.balanceScore)}/100`,
+    entry.funScore === null ? 'N/A' : `${formatNumber(entry.funScore)}/100`,
+    entry.metaHealthIndex === null ? 'N/A' : `${formatNumber(entry.metaHealthIndex)}/100`,
+  ]);
+  lines.push(renderTable(headers, tableRows));
+  lines.push('');
+  lines.push(`Changement teste (${current.version} ${current.label}) : ${current.change}`);
+  lines.push('');
+  lines.push(`Comparatif ${current.version} vs ${baseline.version} (${baseline.label}) :`);
+  lines.push(
+    `  Winrate Grappling (${result.grappling.styles.join(' + ')}) : ${formatPercent(current.grapplingWinRate, 1)} ` +
+      (baseline.grapplingWinRate === null
+        ? '(pas de reference chiffree en v0.30 — premiere mesure de ce KPI)'
+        : `(${formatSignedPercentPoints(current.grapplingWinRate, baseline.grapplingWinRate)} vs baseline)`)
+  );
+  lines.push(
+    `  Biais des juges (winrate a la decision quand le controle sol est dominant) : ${formatPercent(current.groundDominantDecisionWinRate, 1)} ` +
+      (baseline.groundDominantDecisionWinRate === null
+        ? '(pas de reference chiffree en v0.30 — premiere mesure de ce KPI)'
+        : `(${formatSignedPercentPoints(current.groundDominantDecisionWinRate, baseline.groundDominantDecisionWinRate)} vs baseline)`)
+  );
+  lines.push(
+    `  Fun Detector      : ${formatNumber(current.funScore)}/100 (${formatSignedInt(current.funScore - baseline.funScore)} vs baseline)`
+  );
+  lines.push(
+    `  Meta Health Index : ${formatNumber(current.metaHealthIndex)}/100 (${formatSignedInt(current.metaHealthIndex - baseline.metaHealthIndex)} vs baseline)`
+  );
+  return lines.join('\n');
+}
+
 function renderNotesSection(result) {
   const forcedAge = result.archetypes && Object.values(result.archetypes).find((a) => a.avgRetirementAge !== null)?.avgRetirementAge;
   const lines = [renderSectionTitle('NOTES METHODOLOGIQUES')];
@@ -435,6 +528,12 @@ function renderNotesSection(result) {
       ' normalisee ; moyenne non ponderee de 4 sous-scores affiches individuellement), pas des scores calibres' +
       ' sur un playtest reel — a interpreter comme un tableau de bord de diagnostic, pas une note certifiee.'
   );
+  lines.push(
+    '* Le Version History Tracker suit la methodologie A/B "atomique" de la Phase 3.0 : une seule variable de' +
+      ' data/balance.js changee par test. La ligne v0.30 (Baseline) est un enregistrement fige rapporte a la fin' +
+      ' de la Phase 3.0.3 — Winrate Grappling et Biais des Juges n\'y etaient pas encore suivis individuellement,' +
+      ' d\'ou leur "N/A" plutot qu\'un delta invente.'
+  );
   return lines.join('\n');
 }
 
@@ -453,6 +552,7 @@ export function formatReport(result) {
     renderFightsSection(result),
     renderCombatTelemetrySection(result),
     renderMetaHealthDashboard(result),
+    renderVersionHistorySection(result),
     renderNotesSection(result),
     '',
   ].join('\n');
