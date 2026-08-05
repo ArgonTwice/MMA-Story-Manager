@@ -219,3 +219,73 @@ test('a career-finish milestone unlocks the FINISHER perk and reports it in the 
     assert.ok(result.perksUnlocked.A.includes('FINISHER'));
   }
 });
+
+test('combatMetrics telemetry: a fighter kept entirely on STRIKING never accumulates ground/submission signals', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(3) });
+  const a = makeFighter('Striker A', 40);
+  const b = makeFighter('Striker B', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  for (const key of ['A', 'B']) {
+    const m = result.combatMetrics[key];
+    assert.equal(m.standingRounds, result.round);
+    assert.equal(m.groundRounds, 0);
+    assert.equal(m.clinchRounds, 0);
+    assert.equal(m.takedownAttempts, 0);
+    assert.equal(m.takedownSuccess, 0);
+    assert.equal(m.takedownDefended, 0, 'no takedown-defense mechanic exists yet, so this must stay at 0');
+    assert.equal(m.submissionAttempts, 0);
+    assert.equal(m.countersTriggered, 0);
+    assert.equal(m.groundDamageDealt, 0);
+    assert.ok(m.standingDamageDealt > 0);
+    assert.ok(m.judgePointsFromGroundControl === 0);
+  }
+});
+
+test('combatMetrics telemetry: a fighter kept entirely on GROUND logs one takedown/submission attempt per round it survives, faithfully at a 100% success/0% defense rate', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(11) });
+  const a = makeFighter('Grappler A', 40);
+  const b = makeFighter('Grappler B', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  for (const key of ['A', 'B']) {
+    const m = result.combatMetrics[key];
+    assert.equal(m.groundRounds, result.round);
+    assert.equal(m.standingRounds, 0);
+    assert.equal(m.takedownAttempts, result.round);
+    assert.equal(m.takedownSuccess, m.takedownAttempts, 'no takedown contest exists yet, so success always matches attempts');
+    assert.equal(m.takedownDefended, 0);
+    assert.equal(m.submissionAttempts, result.round);
+    assert.ok(m.submissionSuccess <= m.submissionAttempts);
+    assert.ok(m.groundDamageDealt > 0 || result.round === 0);
+    assert.ok(m.judgePointsFromGroundControl > 0);
+  }
+
+  // Every failed submission attempt by one corner is a counted counter
+  // opportunity for the other corner — the two must add up exactly, since
+  // that's the only source of countersTriggered on either side.
+  const failedSubsA = result.combatMetrics.A.submissionAttempts - result.combatMetrics.A.submissionSuccess;
+  const failedSubsB = result.combatMetrics.B.submissionAttempts - result.combatMetrics.B.submissionSuccess;
+  assert.equal(result.combatMetrics.B.countersTriggered, failedSubsA);
+  assert.equal(result.combatMetrics.A.countersTriggered, failedSubsB);
+});
+
+test('combatMetrics telemetry is also mirrored onto runtimeState.lastCombatMetrics when a runtimeState is provided', () => {
+  const runtimeState = {};
+  const engine = new CombatEngine({ rng: createSeededRng(1), runtimeState });
+  const a = makeFighter('Runtime A', 40);
+  const b = makeFighter('Runtime B', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  const result = engine.simulateFullMatch();
+
+  assert.deepEqual(runtimeState.lastCombatMetrics, result.combatMetrics);
+});

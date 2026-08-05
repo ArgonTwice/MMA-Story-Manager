@@ -39,7 +39,7 @@ import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
 import { GameState } from '../state/GameState.js';
-import { CombatEngine, createSeededRng } from '../engine/CombatEngine.js';
+import { CombatEngine, createSeededRng, FINISH_METHODS } from '../engine/CombatEngine.js';
 import { advanceWeek } from '../engine/ProgressionEngine.js';
 import { generatePersonality } from '../engine/FighterGenerator.js';
 import { PersonalityEngine } from '../engine/PersonalityEngine.js';
@@ -48,6 +48,13 @@ import { StoryEngine } from '../engine/StoryEngine.js';
 import { NarrativeEngine, NARRATIVE_ENGINE_EVENTS } from '../engine/NarrativeEngine.js';
 import { WorldMemory } from '../engine/WorldMemory.js';
 import { SocialEngine } from '../engine/SocialEngine.js';
+
+/** Not exported by CombatEngine.js (its own copy is module-private) — same set, mirrored the way engine/SocialEngine.js already does from FINISH_METHODS. */
+const DECISION_METHODS = Object.freeze([
+  FINISH_METHODS.UNANIMOUS_DECISION,
+  FINISH_METHODS.SPLIT_DECISION,
+  FINISH_METHODS.MAJORITY_DECISION,
+]);
 
 const WEEKS_PER_SEASON = BALANCE.CALENDAR.WEEKS_PER_SEASON;
 const SKILL_KEYS = Object.freeze(['boxe', 'jambes', 'sol', 'soumission', 'cardio', 'intelligence']);
@@ -224,6 +231,42 @@ function emptyStyleBucket() {
   return { wins: 0, losses: 0, draws: 0 };
 }
 
+function emptyMatchupCell() {
+  return { wins: 0, losses: 0, draws: 0 };
+}
+
+/** NxN matrix: matrix[rowStyle][columnStyle] is the row style's record against the column style. */
+function createStyleMatchupMatrix() {
+  const matrix = {};
+  for (const rowStyle of STYLE_KEYS) {
+    matrix[rowStyle] = {};
+    for (const colStyle of STYLE_KEYS) matrix[rowStyle][colStyle] = emptyMatchupCell();
+  }
+  return matrix;
+}
+
+function emptyCombatMetricsAccumulator() {
+  return {
+    fightsWithMetrics: 0,
+    takedownAttempts: 0,
+    takedownSuccess: 0,
+    takedownDefended: 0,
+    standingRounds: 0,
+    clinchRounds: 0,
+    groundRounds: 0,
+    standingDamageDealt: 0,
+    groundDamageDealt: 0,
+    submissionAttempts: 0,
+    submissionSuccess: 0,
+    countersTriggered: 0,
+    judgePointsFromDamage: 0,
+    judgePointsFromGroundControl: 0,
+    decisionFights: 0,
+    groundDominantDecisionFights: 0,
+    groundDominantWins: 0,
+  };
+}
+
 function createStatsAccumulator() {
   const archetypes = {};
   for (const key of Object.keys(BALANCE.PERSONALITY.ARCHETYPES)) archetypes[key] = emptyArchetypeBucket();
@@ -243,6 +286,8 @@ function createStatsAccumulator() {
     },
     archetypes,
     styles,
+    styleMatchups: createStyleMatchupMatrix(),
+    combat: emptyCombatMetricsAccumulator(),
     health: {
       totalInjuries: 0,
       bySource: { COMBAT: 0, TRAINING: 0, SPARRING: 0 },
@@ -276,6 +321,65 @@ function recordInjury(stats, injury, source) {
   bucket.totalRecoveryDays += BALANCE.INJURIES.RECOVERY_DAYS[injury.severity] ?? 0;
 }
 
+/** Records both directions of one fight's style-vs-style outcome into the NxN matrix (see createStyleMatchupMatrix). */
+function recordStyleMatchup(stats, styleA, styleB, result) {
+  const cellAvsB = stats.styleMatchups[styleA][styleB];
+  const cellBvsA = stats.styleMatchups[styleB][styleA];
+
+  if (result.winner === null) {
+    cellAvsB.draws += 1;
+    cellBvsA.draws += 1;
+  } else if (result.winner === 'A') {
+    cellAvsB.wins += 1;
+    cellBvsA.losses += 1;
+  } else {
+    cellBvsA.wins += 1;
+    cellAvsB.losses += 1;
+  }
+}
+
+/**
+ * Folds one fight's result.combatMetrics (see CombatEngine's
+ * _createEmptyCombatMetrics) into the run-wide combat telemetry totals, plus
+ * the judges' ground-control bias signal: for fights actually decided by
+ * judges (draws excluded — there's no single winner to check dominance
+ * against), was the fighter with more ground-control-derived points the one
+ * who won?
+ */
+function recordCombatMetrics(stats, result) {
+  const combat = stats.combat;
+  combat.fightsWithMetrics += 1;
+
+  for (const key of ['A', 'B']) {
+    const m = result.combatMetrics[key];
+    combat.takedownAttempts += m.takedownAttempts;
+    combat.takedownSuccess += m.takedownSuccess;
+    combat.takedownDefended += m.takedownDefended;
+    combat.standingRounds += m.standingRounds;
+    combat.clinchRounds += m.clinchRounds;
+    combat.groundRounds += m.groundRounds;
+    combat.standingDamageDealt += m.standingDamageDealt;
+    combat.groundDamageDealt += m.groundDamageDealt;
+    combat.submissionAttempts += m.submissionAttempts;
+    combat.submissionSuccess += m.submissionSuccess;
+    combat.countersTriggered += m.countersTriggered;
+    combat.judgePointsFromDamage += m.judgePointsFromDamage;
+    combat.judgePointsFromGroundControl += m.judgePointsFromGroundControl;
+  }
+
+  const groundControlA = result.combatMetrics.A.judgePointsFromGroundControl;
+  const groundControlB = result.combatMetrics.B.judgePointsFromGroundControl;
+
+  if (DECISION_METHODS.includes(result.method) && result.winner !== null) {
+    combat.decisionFights += 1;
+    if (groundControlA !== groundControlB) {
+      combat.groundDominantDecisionFights += 1;
+      const groundDominantKey = groundControlA > groundControlB ? 'A' : 'B';
+      if (result.winner === groundDominantKey) combat.groundDominantWins += 1;
+    }
+  }
+}
+
 /** Books this week's fights over the non-injured roster (shuffle + adjacent pairing), and folds every result into `stats`. */
 function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, fightChancePerPair, orgId }) {
   const available = shuffleInPlace(
@@ -297,6 +401,8 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
 
     stats.fights.total += 1;
     stats.fights.byMethod[result.method] = (stats.fights.byMethod[result.method] ?? 0) + 1;
+    recordStyleMatchup(stats, fighterA.identity.style, fighterB.identity.style, result);
+    recordCombatMetrics(stats, result);
 
     const isDraw = result.winner === null;
     for (const [key, fighter] of [['A', fighterA], ['B', fighterB]]) {
@@ -584,6 +690,63 @@ function average(values) {
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
+/**
+ * Turns the raw combat-metrics sums (see emptyCombatMetricsAccumulator) into
+ * report-ready rates. Two are deliberately named as "opportunity"/"defense"
+ * rather than "success" — CombatEngine doesn't model a takedown *contest*
+ * (no defense roll) or a counter-attack *resolution* (no counter-damage
+ * roll) yet, only the raw signals (see CombatEngine's
+ * _recordFighterCombatMetrics) — so reporting a fabricated success rate for
+ * either would overstate what's actually simulated today.
+ */
+function finalizeCombatMetrics(combat) {
+  const totalRounds = combat.standingRounds + combat.clinchRounds + combat.groundRounds;
+  return {
+    fightsWithMetrics: combat.fightsWithMetrics,
+    takedownAttempts: combat.takedownAttempts,
+    takedownSuccess: combat.takedownSuccess,
+    takedownDefended: combat.takedownDefended,
+    takedownSuccessRate: combat.takedownAttempts > 0 ? combat.takedownSuccess / combat.takedownAttempts : null,
+    takedownDefenseRate: combat.takedownAttempts > 0 ? combat.takedownDefended / combat.takedownAttempts : null,
+    standingRounds: combat.standingRounds,
+    clinchRounds: combat.clinchRounds,
+    groundRounds: combat.groundRounds,
+    totalRounds,
+    standingTimeShare: totalRounds > 0 ? combat.standingRounds / totalRounds : null,
+    clinchTimeShare: totalRounds > 0 ? combat.clinchRounds / totalRounds : null,
+    groundTimeShare: totalRounds > 0 ? combat.groundRounds / totalRounds : null,
+    avgStandingDamagePerRound: combat.standingRounds > 0 ? combat.standingDamageDealt / combat.standingRounds : null,
+    avgGroundDamagePerRound: combat.groundRounds > 0 ? combat.groundDamageDealt / combat.groundRounds : null,
+    submissionAttempts: combat.submissionAttempts,
+    submissionSuccess: combat.submissionSuccess,
+    submissionSuccessRate: combat.submissionAttempts > 0 ? combat.submissionSuccess / combat.submissionAttempts : null,
+    countersTriggered: combat.countersTriggered,
+    counterOpportunityRate: combat.submissionAttempts > 0 ? combat.countersTriggered / combat.submissionAttempts : null,
+    judgePointsFromDamage: combat.judgePointsFromDamage,
+    judgePointsFromGroundControl: combat.judgePointsFromGroundControl,
+    avgJudgePointsGapPerFight:
+      combat.fightsWithMetrics > 0
+        ? (combat.judgePointsFromGroundControl - combat.judgePointsFromDamage) / combat.fightsWithMetrics
+        : null,
+    decisionFights: combat.decisionFights,
+    groundDominantDecisionFights: combat.groundDominantDecisionFights,
+    groundDominantWinRate:
+      combat.groundDominantDecisionFights > 0 ? combat.groundDominantWins / combat.groundDominantDecisionFights : null,
+  };
+}
+
+function finalizeStyleMatchups(matrix) {
+  const result = {};
+  for (const rowStyle of Object.keys(matrix)) {
+    result[rowStyle] = {};
+    for (const colStyle of Object.keys(matrix[rowStyle])) {
+      const cell = matrix[rowStyle][colStyle];
+      result[rowStyle][colStyle] = { wins: cell.wins, losses: cell.losses, draws: cell.draws, winRate: winRate(cell) };
+    }
+  }
+  return result;
+}
+
 function finalizeStats(stats, config, durationMs) {
   const archetypes = Object.fromEntries(
     Object.entries(stats.archetypes).map(([key, bucket]) => [
@@ -632,6 +795,8 @@ function finalizeStats(stats, config, durationMs) {
     },
     archetypes,
     styles,
+    styleMatchups: finalizeStyleMatchups(stats.styleMatchups),
+    combat: finalizeCombatMetrics(stats.combat),
     health: {
       totalInjuries: stats.health.totalInjuries,
       bySource: stats.health.bySource,

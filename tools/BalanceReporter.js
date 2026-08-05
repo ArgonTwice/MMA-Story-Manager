@@ -163,6 +163,85 @@ function renderFunDetectorSection(result) {
   return lines.join('\n');
 }
 
+function renderCombatTelemetryHeader() {
+  return '\n=== COMBAT METRICS (TELEMETRY) ===';
+}
+
+function renderTakedownsSubsection(result) {
+  const c = result.combat;
+  const lines = [renderSectionTitle('TAKEDOWNS & CONTROLE')];
+  lines.push(`Tentatives de takedown (distance GROUND choisie) : ${formatNumber(c.takedownAttempts)}`);
+  lines.push(`Taux de reussite des takedowns                    : ${formatPercent(c.takedownSuccessRate)}`);
+  lines.push(`Taux de defense des takedowns                     : ${formatPercent(c.takedownDefenseRate)}`);
+  return lines.join('\n');
+}
+
+function renderTimeSplitSubsection(result) {
+  const c = result.combat;
+  const lines = [renderSectionTitle('REPARTITION DU TEMPS DE COMBAT')];
+  lines.push(`Temps Debout (STRIKING) : ${formatPercent(c.standingTimeShare)} (${formatNumber(c.standingRounds)} rounds)`);
+  lines.push(`Temps Clinch            : ${formatPercent(c.clinchTimeShare)} (${formatNumber(c.clinchRounds)} rounds)`);
+  lines.push(`Temps au Sol (GROUND)   : ${formatPercent(c.groundTimeShare)} (${formatNumber(c.groundRounds)} rounds)`);
+  lines.push('');
+  lines.push(`Degats moyens par round Debout : ${formatDecimal(c.avgStandingDamagePerRound)}`);
+  lines.push(`Degats moyens par round Sol    : ${formatDecimal(c.avgGroundDamagePerRound)}`);
+  return lines.join('\n');
+}
+
+function renderSubmissionsSubsection(result) {
+  const c = result.combat;
+  const lines = [renderSectionTitle('SOUMISSIONS & CONTRES')];
+  lines.push(`Tentatives de soumission          : ${formatNumber(c.submissionAttempts)}`);
+  lines.push(`Taux de reussite des soumissions   : ${formatPercent(c.submissionSuccessRate)}`);
+  lines.push(`Contres declenches (opportunites)  : ${formatNumber(c.countersTriggered)}`);
+  lines.push(`Taux d'opportunite de contre       : ${formatPercent(c.counterOpportunityRate)}`);
+  return lines.join('\n');
+}
+
+function renderJudgeBiasSubsection(result) {
+  const c = result.combat;
+  const lines = [renderSectionTitle('BIAIS D\'EVALUATION DES JUGES')];
+  lines.push(`Points de score cumules issus des degats        : ${formatDecimal(c.judgePointsFromDamage, 0)}`);
+  lines.push(`Points de score cumules issus du controle au sol : ${formatDecimal(c.judgePointsFromGroundControl, 0)}`);
+  lines.push(`Ecart moyen (controle sol - degats) par combat   : ${formatDecimal(c.avgJudgePointsGapPerFight)}`);
+  lines.push(
+    `Combats a la decision avec controle sol dominant : ${formatNumber(c.groundDominantDecisionFights)} / ${formatNumber(c.decisionFights)}`
+  );
+  lines.push(
+    `Winrate a la decision quand le controle sol est dominant : ${formatPercent(c.groundDominantWinRate)}`
+  );
+  return lines.join('\n');
+}
+
+function renderStyleMatchupSubsection(result) {
+  const lines = [renderSectionTitle('MATRICE DE MATCHUP PAR STYLE (ligne vs colonne)')];
+  const matrix = result.styleMatchups;
+  const styleKeys = Object.keys(matrix);
+
+  const headers = ['Style \\ Adversaire', ...styleKeys];
+  const rows = styleKeys.map((rowStyle) => [
+    rowStyle,
+    ...styleKeys.map((colStyle) => {
+      const cell = matrix[rowStyle][colStyle];
+      const total = cell.wins + cell.losses + cell.draws;
+      return total === 0 ? '—' : `${formatPercent(cell.winRate, 0)} (${cell.wins}-${cell.losses}-${cell.draws})`;
+    }),
+  ]);
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderCombatTelemetrySection(result) {
+  return [
+    renderCombatTelemetryHeader(),
+    renderTakedownsSubsection(result),
+    renderTimeSplitSubsection(result),
+    renderSubmissionsSubsection(result),
+    renderJudgeBiasSubsection(result),
+    renderStyleMatchupSubsection(result),
+  ].join('\n');
+}
+
 function renderFightsSection(result) {
   const lines = [renderSectionTitle('COMBATS')];
   lines.push(`Total de combats simules : ${formatNumber(result.fights.total)}`);
@@ -189,6 +268,16 @@ function renderNotesSection(result) {
     '* Le matchmaking et les plans d\'entrainement de cet outil sont une "IA de coach" propre au simulateur' +
       ' (tools/SimRunner.js), pas un systeme du jeu reel.'
   );
+  lines.push(
+    "* CombatEngine ne modelise pas (encore) de veritable contestation de takedown : choisir la distance GROUND" +
+      ' reussit toujours instantanement, sans jet de defense pour l\'adversaire — d\'ou un taux de reussite a 100%' +
+      ' et un taux de defense a 0% ci-dessus. C\'est une donnee telemetrique fidele au jeu actuel, pas un bug de ce rapport.'
+  );
+  lines.push(
+    "* De meme, \"contres declenches\" compte uniquement l'opportunite (une tentative de soumission ratee par" +
+      " l'adversaire) : CombatEngine ne resout aucun effet de contre-attaque (pas de degats/bonus) sur cette" +
+      ' opportunite a ce jour.'
+  );
   return lines.join('\n');
 }
 
@@ -205,6 +294,7 @@ export function formatReport(result) {
     renderHealthSection(result),
     renderFunDetectorSection(result),
     renderFightsSection(result),
+    renderCombatTelemetrySection(result),
     renderNotesSection(result),
     '',
   ].join('\n');

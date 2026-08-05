@@ -26,6 +26,15 @@
  * publishes 'combat:round_completed'. The final summary is published once
  * on 'combat:finished'. See COMBAT_EVENTS for exact names.
  *
+ * Telemetry: every match also accumulates a per-fighter combatMetrics
+ * breakdown (takedowns, standing/ground time and damage, submissions,
+ * counter opportunities, and how much of each judge's score came from
+ * damage versus ground/control) — see _createEmptyCombatMetrics and
+ * _recordFighterCombatMetrics. It rides along on 'combat:finished' (result
+ * .combatMetrics) and is mirrored onto runtimeState.lastCombatMetrics if a
+ * runtimeState was provided, purely for inspection: it never feeds back
+ * into the fight itself.
+ *
  * Determinism: all randomness goes through this.rng (defaults to
  * Math.random). Inject a seeded function (see createSeededRng) to get
  * fully reproducible fights — used heavily by this file's own tests.
@@ -212,6 +221,7 @@ export class CombatEngine {
         B: this._createLiveState(fighterB),
       },
       damageTally: { A: { face: 0, body: 0, legs: 0 }, B: { face: 0, body: 0, legs: 0 } },
+      combatMetrics: { A: this._createEmptyCombatMetrics(), B: this._createEmptyCombatMetrics() },
       roundLogs: [],
       scorecards: [],
       finish: null,
@@ -465,6 +475,7 @@ export class CombatEngine {
     c.roundLogs = [];
     c.scorecards = [];
     c.damageTally = { A: { face: 0, body: 0, legs: 0 }, B: { face: 0, body: 0, legs: 0 } };
+    c.combatMetrics = { A: this._createEmptyCombatMetrics(), B: this._createEmptyCombatMetrics() };
 
     this._transition(COMBAT_STATES.ROUND_START);
     return { state: this.state };
@@ -484,6 +495,8 @@ export class CombatEngine {
 
     const offenseA = this._computeRoundOffense('A', 'B');
     const offenseB = this._computeRoundOffense('B', 'A');
+
+    this._recordCombatMetrics(offenseA, offenseB);
 
     // Both fighters' damage is computed from pre-round stats above, then
     // applied together, so neither fighter gets an order-of-evaluation edge.
@@ -652,12 +665,14 @@ export class CombatEngine {
       perksUnlocked,
       injuries,
       damageTally: { A: { ...c.damageTally.A }, B: { ...c.damageTally.B } },
+      combatMetrics: { A: { ...c.combatMetrics.A }, B: { ...c.combatMetrics.B } },
       scorecards: c.scorecards.map((s) => ({ round: s.round, judgeCards: s.judgeCards })),
     };
 
     this._transition(COMBAT_STATES.FINISHED);
     if (this.runtimeState) {
       this.runtimeState.isSimulationRunning = false;
+      this.runtimeState.lastCombatMetrics = { A: { ...c.combatMetrics.A }, B: { ...c.combatMetrics.B } };
     }
 
     EventBus.publish(COMBAT_EVENTS.FINISHED, { ...c.result });
@@ -920,6 +935,35 @@ export class CombatEngine {
   }
 
   /**
+   * Splits one fighter's round offense into the two families of points a
+   * judge's composite score is actually made of: damage (effective strikes
+   * proxy) versus everything ground/control-derived (takedowns, control
+   * time, submission attempts — all of which key off `distance` alone, not
+   * off any contested roll). Kept as its own step — rather than folding
+   * straight into a single total — so combat-metrics telemetry (see
+   * _recordFighterCombatMetrics) can report exactly how much of a fighter's
+   * scoring came from ground/control versus damage, without recomputing or
+   * duplicating this formula.
+   * @param {Object} offenseSelf
+   * @returns {{ damagePoints: number, groundControlPoints: number }}
+   */
+  _computeScoreBreakdown(offenseSelf) {
+    const scoring = BALANCE.COMBAT.SCORING;
+    const scale = scoring.NON_STRIKE_METRIC_SCALE;
+    const takedowns = offenseSelf.distance === 'GROUND' ? 1 : 0;
+    const controlTime = offenseSelf.distance !== 'STRIKING' ? 1 : 0;
+    const submissionAttempts = offenseSelf.submissionAttempted ? 1 : 0;
+
+    return {
+      damagePoints: offenseSelf.rawDamage * scoring.WEIGHT_EFFECTIVE_STRIKES,
+      groundControlPoints:
+        takedowns * scoring.WEIGHT_TAKEDOWNS * scale +
+        controlTime * scoring.WEIGHT_CONTROL_TIME * scale +
+        submissionAttempts * scoring.WEIGHT_SUBMISSION_ATTEMPTS * scale,
+    };
+  }
+
+  /**
    * Converts one fighter's round offense into a composite score usable by
    * judges, blending damage (effective strikes proxy), takedowns/control
    * time (derived from the chosen distance) and submission attempts.
@@ -927,18 +971,87 @@ export class CombatEngine {
    * @returns {number}
    */
   _computeCompositeRoundScore(offenseSelf) {
-    const scoring = BALANCE.COMBAT.SCORING;
-    const scale = scoring.NON_STRIKE_METRIC_SCALE;
-    const takedowns = offenseSelf.distance === 'GROUND' ? 1 : 0;
-    const controlTime = offenseSelf.distance !== 'STRIKING' ? 1 : 0;
-    const submissionAttempts = offenseSelf.submissionAttempted ? 1 : 0;
+    const breakdown = this._computeScoreBreakdown(offenseSelf);
+    return breakdown.damagePoints + breakdown.groundControlPoints;
+  }
 
-    return (
-      offenseSelf.rawDamage * scoring.WEIGHT_EFFECTIVE_STRIKES +
-      takedowns * scoring.WEIGHT_TAKEDOWNS * scale +
-      controlTime * scoring.WEIGHT_CONTROL_TIME * scale +
-      submissionAttempts * scoring.WEIGHT_SUBMISSION_ATTEMPTS * scale
-    );
+  /**
+   * @returns {Object} A fresh, all-zero combat-metrics accumulator for one
+   *   fighter (see _recordFighterCombatMetrics), reset at the start of
+   *   every match (INTRO phase).
+   */
+  _createEmptyCombatMetrics() {
+    return {
+      takedownAttempts: 0,
+      takedownSuccess: 0,
+      // Always 0 today: CombatEngine has no takedown *contest* yet — a
+      // fighter choosing GROUND distance always gets there unopposed (see
+      // _recordFighterCombatMetrics below). Kept in the shape so reports
+      // can surface that gap explicitly instead of silently omitting it.
+      takedownDefended: 0,
+      standingRounds: 0,
+      clinchRounds: 0,
+      groundRounds: 0,
+      standingDamageDealt: 0,
+      groundDamageDealt: 0,
+      submissionAttempts: 0,
+      submissionSuccess: 0,
+      countersTriggered: 0,
+      judgePointsFromDamage: 0,
+      judgePointsFromGroundControl: 0,
+    };
+  }
+
+  /**
+   * Folds one round's offense from both corners into this match's running
+   * combatMetrics (see _createEmptyCombatMetrics), for the telemetry
+   * surfaced on the 'combat:finished' payload / runtimeState.lastCombatMetrics.
+   * Read-only over `offenseA`/`offenseB` — never mutates them.
+   * @param {Object} offenseA
+   * @param {Object} offenseB
+   */
+  _recordCombatMetrics(offenseA, offenseB) {
+    const c = this.context;
+    this._recordFighterCombatMetrics('A', offenseA);
+    this._recordFighterCombatMetrics('B', offenseB);
+
+    // A failed submission attempt is the only discrete pass/fail roll this
+    // engine currently models on offense (strikes resolve through a
+    // continuous hit-chance multiplier, never a binary hit/miss) — so it's
+    // the only faithful "counter opportunity" signal available today. This
+    // only *counts* the opportunity; CombatEngine does not yet apply any
+    // actual counter-damage/counter-punish effect for it.
+    if (offenseA.submissionAttempted && !offenseA.submissionSuccess) c.combatMetrics.B.countersTriggered += 1;
+    if (offenseB.submissionAttempted && !offenseB.submissionSuccess) c.combatMetrics.A.countersTriggered += 1;
+  }
+
+  /**
+   * @param {('A'|'B')} key
+   * @param {Object} offense - This fighter's own _computeRoundOffense() output for the round.
+   */
+  _recordFighterCombatMetrics(key, offense) {
+    const metrics = this.context.combatMetrics[key];
+
+    if (offense.distance === 'STRIKING') {
+      metrics.standingRounds += 1;
+      metrics.standingDamageDealt += offense.rawDamage;
+    } else if (offense.distance === 'CLINCH') {
+      metrics.clinchRounds += 1;
+    } else if (offense.distance === 'GROUND') {
+      metrics.groundRounds += 1;
+      metrics.groundDamageDealt += offense.rawDamage;
+      metrics.takedownAttempts += 1;
+      metrics.takedownSuccess += 1;
+    }
+
+    if (offense.submissionAttempted) {
+      metrics.submissionAttempts += 1;
+      if (offense.submissionSuccess) metrics.submissionSuccess += 1;
+    }
+
+    const breakdown = this._computeScoreBreakdown(offense);
+    metrics.judgePointsFromDamage += breakdown.damagePoints;
+    metrics.judgePointsFromGroundControl += breakdown.groundControlPoints;
   }
 
   /**
