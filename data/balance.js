@@ -32,6 +32,11 @@
  *   BALANCE.PERKS        - unlockable trait definitions and unlock thresholds
  *   BALANCE.EQUIPMENT    - gym equipment catalog (training/form/upkeep/purchase)
  *   BALANCE.NARRATIVE_EVENTS - weekly random story events (sponsors, media, morale...)
+ *   BALANCE.PERSONALITY  - archetype/trait definitions and their silent modifiers
+ *   BALANCE.LEGACY        - Fighter#getLegacyStage() classification thresholds
+ *   BALANCE.RELATIONSHIP  - relationship-graph gauge bounds and event deltas
+ *   BALANCE.STORY         - narrative-opportunity detection thresholds
+ *   BALANCE.NARRATIVE      - narrative-form selection weights per opportunity
  *
  *   (COMBAT additionally carries GAMEPLAN and STYLE_BONUSES sub-sections
  *   consumed by engine/CombatEngine.js: per-target/distance/tempo
@@ -65,7 +70,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.4.0',
+  VERSION: '1.5.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -934,6 +939,159 @@ const BALANCE = {
     MORALE_SWING: { MIN_DELTA: -6, MAX_DELTA: 8 },
 
     ALUMNI_DONATION: { MIN_AMOUNT: 200, MAX_AMOUNT: 1500, REPUTATION_BONUS: 1 },
+  },
+
+  // ---------------------------------------------------------------------
+  // PERSONALITY — archetype/trait catalog consumed by models/Fighter.js
+  // and engine/PersonalityEngine.js
+  // ---------------------------------------------------------------------
+  PERSONALITY: {
+    /**
+     * Object keys are the only valid values for
+     * Fighter.psychology.personality.archetype — set once at creation and
+     * immutable thereafter (see models/Fighter.js). Every archetype/trait
+     * below shares the same four silent-modifier dimensions so
+     * PersonalityEngine can combine them multiplicatively:
+     *   fatigueMultiplier      - scales the wear a training/fight session leaves.
+     *   salaryDemandMultiplier - scales how "high-maintenance" the fighter is.
+     *   moraleVolatility       - scales the size of morale swings (< 1 = steadier).
+     *   progressionMultiplier  - scales skill-gain speed.
+     */
+    ARCHETYPES: {
+      Guerrier: { label: 'Guerrier', fatigueMultiplier: 0.9, salaryDemandMultiplier: 1.0, moraleVolatility: 0.9, progressionMultiplier: 1.0 },
+      Genie: { label: 'Genie', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.05, moraleVolatility: 0.85, progressionMultiplier: 1.2 },
+      Icone: { label: 'Icone', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.3, moraleVolatility: 1.1, progressionMultiplier: 0.95 },
+      Mercenaire: { label: 'Mercenaire', fatigueMultiplier: 0.95, salaryDemandMultiplier: 1.4, moraleVolatility: 0.8, progressionMultiplier: 0.95 },
+      Leader: { label: 'Leader', fatigueMultiplier: 0.95, salaryDemandMultiplier: 1.1, moraleVolatility: 0.85, progressionMultiplier: 1.0 },
+      Showman: { label: 'Showman', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.2, moraleVolatility: 1.15, progressionMultiplier: 0.95 },
+      Predateur: { label: 'Predateur', fatigueMultiplier: 0.9, salaryDemandMultiplier: 1.0, moraleVolatility: 1.05, progressionMultiplier: 1.05 },
+      Veteran: { label: 'Veteran', fatigueMultiplier: 1.1, salaryDemandMultiplier: 1.1, moraleVolatility: 0.7, progressionMultiplier: 0.8 },
+      Phenomene: { label: 'Phenomene', fatigueMultiplier: 0.95, salaryDemandMultiplier: 1.15, moraleVolatility: 1.0, progressionMultiplier: 1.3 },
+      Cameleon: { label: 'Cameleon', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.0, moraleVolatility: 1.0, progressionMultiplier: 1.0 },
+    },
+    /** Used when a Fighter is created without an explicit archetype. */
+    DEFAULT_ARCHETYPE: 'Cameleon',
+
+    /**
+     * Object keys are the only valid entries inside
+     * Fighter.psychology.personality.traits[]. Unlike the archetype, traits
+     * may be gained/lost over a career (see Fighter#addTrait/removeTrait).
+     */
+    TRAITS: {
+      Professionnel: { label: 'Professionnel', fatigueMultiplier: 0.92, salaryDemandMultiplier: 1.0, moraleVolatility: 0.85, progressionMultiplier: 1.08 },
+      Fetard: { label: 'Fetard', fatigueMultiplier: 1.15, salaryDemandMultiplier: 0.95, moraleVolatility: 1.2, progressionMultiplier: 0.9 },
+      Impulsif: { label: 'Impulsif', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.0, moraleVolatility: 1.3, progressionMultiplier: 1.0 },
+      Provocateur: { label: 'Provocateur', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.05, moraleVolatility: 1.15, progressionMultiplier: 1.0 },
+      Discipline: { label: 'Discipline', fatigueMultiplier: 0.88, salaryDemandMultiplier: 1.0, moraleVolatility: 0.8, progressionMultiplier: 1.1 },
+      Loyal: { label: 'Loyal', fatigueMultiplier: 1.0, salaryDemandMultiplier: 0.85, moraleVolatility: 0.85, progressionMultiplier: 1.0 },
+      Arrogant: { label: 'Arrogant', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.25, moraleVolatility: 1.2, progressionMultiplier: 1.0 },
+      Humble: { label: 'Humble', fatigueMultiplier: 1.0, salaryDemandMultiplier: 0.8, moraleVolatility: 0.85, progressionMultiplier: 1.0 },
+      Genereux: { label: 'Genereux', fatigueMultiplier: 1.0, salaryDemandMultiplier: 0.9, moraleVolatility: 0.9, progressionMultiplier: 1.0 },
+      Intense: { label: 'Intense', fatigueMultiplier: 1.2, salaryDemandMultiplier: 1.0, moraleVolatility: 1.05, progressionMultiplier: 1.15 },
+      Calme: { label: 'Calme', fatigueMultiplier: 0.9, salaryDemandMultiplier: 1.0, moraleVolatility: 0.7, progressionMultiplier: 1.0 },
+      Ambitieux: { label: 'Ambitieux', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.15, moraleVolatility: 1.1, progressionMultiplier: 1.1 },
+    },
+
+    /** Reference magnitudes engine/PersonalityEngine.js scales its silent, post-hoc nudges by. */
+    TRAINING_FATIGUE_REFERENCE: 2,
+    MORALE_SWING_REFERENCE: 4,
+    INSOLVENCY_MORALE_REFERENCE: 3,
+  },
+
+  // ---------------------------------------------------------------------
+  // LEGACY — Fighter#getLegacyStage() classification thresholds
+  // ---------------------------------------------------------------------
+  LEGACY: {
+    /** Ordered narrative maturity stages, weakest to strongest. Purely descriptive. */
+    STAGES: ['ESPOIR', 'PROSPECT', 'VETERAN', 'CHAMPION', 'LEGENDE', 'HALL_OF_FAME'],
+
+    /** Total career fights (wins+losses+draws) needed to leave ESPOIR. */
+    PROSPECT_MIN_FIGHTS: 5,
+    /** Total career fights, OR identity.age, that qualify a non-champion as a VETERAN. */
+    VETERAN_MIN_FIGHTS: 20,
+    VETERAN_MIN_AGE: 32,
+    /** Career titles ever won + total wins needed to reach LEGENDE (once CHAMPION). */
+    LEGEND_MIN_TITLES: 2,
+    LEGEND_MIN_WINS: 30,
+  },
+
+  // ---------------------------------------------------------------------
+  // RELATIONSHIP — relationship-graph gauges consumed by engine/RelationshipEngine.js
+  // ---------------------------------------------------------------------
+  RELATIONSHIP: {
+    MIN_RELATION: -100,
+    MAX_RELATION: 100,
+    MIN_GAUGE: 0,
+    MAX_GAUGE: 100,
+
+    STARTING_RELATION: 0,
+    STARTING_POPULARITY: 0,
+    STARTING_TENSION: 0,
+    /** Two professional athletes start with a small baseline of mutual respect. */
+    STARTING_RESPECT: 15,
+    STARTING_LEGACY: 0,
+
+    /** Applied to both entities whenever they share a resolved combat:finished. */
+    COMBAT_EFFECTS: {
+      RELATION_DELTA: -8,
+      TENSION_DELTA: 12,
+      RESPECT_DELTA: 10,
+      POPULARITY_DELTA: 6,
+      LEGACY_DELTA_BASE: 4,
+      LEGACY_DELTA_FINISH_BONUS: 4,
+      LEGACY_DELTA_TITLE_BONUS: 8,
+    },
+
+    /** Applied when a PROVOCATION-toned narrative beat lands between two entities. */
+    PROVOCATION_EFFECTS: {
+      RELATION_DELTA: -10,
+      TENSION_DELTA: 15,
+      POPULARITY_DELTA: 4,
+    },
+
+    /** Max entries kept in a relationship's history[] (oldest trimmed). */
+    HISTORY_LIMIT: 25,
+  },
+
+  // ---------------------------------------------------------------------
+  // STORY — narrative-opportunity detection thresholds, engine/StoryEngine.js
+  // ---------------------------------------------------------------------
+  STORY: {
+    /** "Defeat + Ego + Tension -> potential conflict." */
+    CONFLICT_POTENTIAL: {
+      MIN_LOSER_EGO: 65,
+      MIN_TENSION: 40,
+    },
+    /** A fight ending with relation already this low signals a real rivalry. */
+    RIVALRY_IGNITED: {
+      MAX_RELATION: -30,
+    },
+    /** The winner's overall rating was at least this many points below the loser's. */
+    UPSET_VICTORY: {
+      MIN_RATING_GAP: 15,
+    },
+    /** A roster fighter this "high-maintenance" resents a financial crisis more. */
+    FINANCIAL_DISCONTENT: {
+      MIN_SALARY_DEMAND_MULTIPLIER: 1.15,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // NARRATIVE — narrative-form selection, engine/NarrativeEngine.js
+  // ---------------------------------------------------------------------
+  NARRATIVE: {
+    /**
+     * Weighted choice of narrative form per story:opportunity_detected type.
+     * Object keys of each row are the only valid narrative forms.
+     */
+    FORM_WEIGHTS_BY_OPPORTUNITY: {
+      CONFLICT_POTENTIAL: { DECLARATION: 0.5, INTERVIEW: 0.3, INCIDENT: 0.2 },
+      RIVALRY_IGNITED: { DECLARATION: 0.4, INTERVIEW: 0.4, VIRAL_POST: 0.2 },
+      UPSET_VICTORY: { VIRAL_POST: 0.5, INTERVIEW: 0.5 },
+      FINANCIAL_DISCONTENT: { INCIDENT: 0.4, CONTRACT_BREACH: 0.3, DECLARATION: 0.3 },
+    },
+    /** Extra like multiplier applied when a VIRAL_POST narrative form lands on the social feed. */
+    VIRAL_POST_LIKES_MULTIPLIER: 3,
   },
 };
 

@@ -2,7 +2,16 @@
  * state/WorldState.js
  * ---------------------------------------------------------------------------
  * The simulated world surrounding the player: the calendar, organization
- * rankings/ladders, rival gyms, and a rolling log of global events.
+ * rankings/ladders, rival gyms, a rolling log of global events, the
+ * relationship graph between entities (fighters, gyms...), and the
+ * all-time records registry.
+ *
+ * relationships/records exist here — not inside RelationshipEngine or
+ * WorldMemory — specifically so those Level 1/2 engines never need to know
+ * about each other: every engine that cares about relationship gauges or
+ * historical records reads/writes them as plain State data, exactly like
+ * any other WorldState field. That is what "Découplage absolu" (engines
+ * only know EventBus + BALANCE + State/Models) requires in practice.
  *
  * Same rules as PlayerState.js:
  *   - Depends only on Data (balance.js) and EventBus, never on Engine/Render.
@@ -26,7 +35,39 @@ export const WORLD_EVENTS = Object.freeze({
   RIVAL_GYM_UPDATED: 'world:rival_gym_updated',
   RIVAL_GYM_REMOVED: 'world:rival_gym_removed',
   GLOBAL_EVENT_ADDED: 'world:global_event_added',
+  RELATIONSHIP_UPDATED: 'world:relationship_updated',
+  RECORD_BROKEN: 'world:record_broken',
 });
+
+/** The five relationship gauges tracked per entity pair. */
+const RELATIONSHIP_GAUGES = Object.freeze(['relation', 'popularity', 'tension', 'respect', 'legacy']);
+
+function clampGauge(key, value) {
+  const r = BALANCE.RELATIONSHIP;
+  const [min, max] = key === 'relation' ? [r.MIN_RELATION, r.MAX_RELATION] : [r.MIN_GAUGE, r.MAX_GAUGE];
+  return Math.min(max, Math.max(min, value));
+}
+
+function defaultRelationshipGauges() {
+  const r = BALANCE.RELATIONSHIP;
+  return {
+    relation: r.STARTING_RELATION,
+    popularity: r.STARTING_POPULARITY,
+    tension: r.STARTING_TENSION,
+    respect: r.STARTING_RESPECT,
+    legacy: r.STARTING_LEGACY,
+  };
+}
+
+function defaultRecords() {
+  const blank = () => ({ value: null, day: null, detail: null, meta: null });
+  return {
+    fastestKO: blank(),
+    longestTitleReign: blank(),
+    mostTitles: { value: 0, day: null, detail: null, meta: null },
+    biggestFight: blank(),
+  };
+}
 
 let idCounter = 0;
 function generateId(prefix) {
@@ -59,6 +100,9 @@ export class WorldState {
    * @param {Object} [config.orgLadders] - { [orgId]: { [weightClass]: fighterId[] } }
    * @param {Object[]} [config.rivalGyms]
    * @param {Object[]} [config.globalEvents]
+   * @param {Object} [config.relationships] - { [pairKey]: RelationshipRecord }
+   * @param {Object} [config.records] - Historical bests (see defaultRecords()).
+   * @param {Object} [config.titleHolders] - { [titleKey]: { fighterId, fighterName, sinceDay } }
    */
   constructor(config = {}) {
     this.currentDay = config.currentDay ?? BALANCE.CALENDAR.START_DAY;
@@ -73,6 +117,10 @@ export class WorldState {
     this.globalEvents = config.globalEvents
       ? config.globalEvents.map((event) => ({ ...event }))
       : [];
+
+    this.relationships = config.relationships ? structuredCloneOrCopy(config.relationships) : {};
+    this.records = config.records ? structuredCloneOrCopy(config.records) : defaultRecords();
+    this.titleHolders = config.titleHolders ? structuredCloneOrCopy(config.titleHolders) : {};
   }
 
   // ---- calendar -----------------------------------------------------------
@@ -248,6 +296,138 @@ export class WorldState {
     return record;
   }
 
+  // ---- relationship graph -----------------------------------------------------
+
+  /**
+   * Canonical, order-independent key for a pair of entity ids.
+   * @param {string} entityAId
+   * @param {string} entityBId
+   * @returns {string}
+   */
+  _pairKey(entityAId, entityBId) {
+    return [entityAId, entityBId].sort().join('|');
+  }
+
+  /**
+   * @param {string} entityAId
+   * @param {string} entityBId
+   * @returns {Object|null} A copy of the relationship record, or null if none exists yet.
+   */
+  getRelationship(entityAId, entityBId) {
+    const record = this.relationships[this._pairKey(entityAId, entityBId)];
+    return record ? { ...record, gauges: { ...record.gauges }, history: [...record.history] } : null;
+  }
+
+  /**
+   * Creates (with BALANCE-defined starting gauges) or updates the
+   * relationship between two entities, clamping every gauge to its bounds,
+   * and optionally appending a chronological history entry.
+   *
+   * @param {string} entityAId
+   * @param {string} entityBId
+   * @param {Object} [deltas] - Any of RELATIONSHIP_GAUGES' keys -> numeric delta.
+   * @param {Object} [historyEntry] - { type, description, ...extra }. `day` is
+   *   stamped automatically from this.currentDay if not provided.
+   * @returns {Object} A copy of the resulting relationship record.
+   */
+  upsertRelationship(entityAId, entityBId, deltas = {}, historyEntry = null) {
+    const key = this._pairKey(entityAId, entityBId);
+    if (!this.relationships[key]) {
+      this.relationships[key] = {
+        entityA: entityAId,
+        entityB: entityBId,
+        gauges: defaultRelationshipGauges(),
+        history: [],
+      };
+    }
+    const record = this.relationships[key];
+
+    for (const gaugeKey of RELATIONSHIP_GAUGES) {
+      if (typeof deltas[gaugeKey] === 'number') {
+        record.gauges[gaugeKey] = clampGauge(gaugeKey, record.gauges[gaugeKey] + deltas[gaugeKey]);
+      }
+    }
+
+    if (historyEntry) {
+      record.history.push({ day: this.currentDay, ...historyEntry });
+      if (record.history.length > BALANCE.RELATIONSHIP.HISTORY_LIMIT) {
+        record.history.splice(0, record.history.length - BALANCE.RELATIONSHIP.HISTORY_LIMIT);
+      }
+    }
+
+    EventBus.publish(WORLD_EVENTS.RELATIONSHIP_UPDATED, {
+      entityA: entityAId,
+      entityB: entityBId,
+      gauges: { ...record.gauges },
+      deltas: { ...deltas },
+    });
+
+    return { ...record, gauges: { ...record.gauges }, history: [...record.history] };
+  }
+
+  // ---- world records ------------------------------------------------------------
+
+  /**
+   * @param {string} key - One of Object.keys(this.records).
+   * @returns {Object} A copy of that record.
+   */
+  getRecord(key) {
+    if (!(key in this.records)) {
+      throw new TypeError(`WorldState.getRecord: unknown record "${key}".`);
+    }
+    return { ...this.records[key] };
+  }
+
+  /**
+   * Sets a world record only if the candidate value actually beats the
+   * current one (or none is set yet), publishing RECORD_BROKEN when it does.
+   *
+   * @param {string} key - One of Object.keys(this.records).
+   * @param {number} value
+   * @param {Object} [options]
+   * @param {('HIGHER'|'LOWER')} [options.betterIf='HIGHER']
+   * @param {string} [options.detail] - Human-readable description.
+   * @param {Object} [options.meta] - Free-form context (fighter ids/names...).
+   * @returns {boolean} True if the record was broken/set.
+   */
+  trySetRecord(key, value, { betterIf = 'HIGHER', detail = null, meta = null } = {}) {
+    if (!(key in this.records)) {
+      throw new TypeError(`WorldState.trySetRecord: unknown record "${key}".`);
+    }
+    const current = this.records[key];
+    const isBetter =
+      current.value === null ||
+      (betterIf === 'HIGHER' ? value > current.value : value < current.value);
+
+    if (!isBetter) return false;
+
+    const previous = { ...current };
+    this.records[key] = { value, day: this.currentDay, detail, meta };
+
+    EventBus.publish(WORLD_EVENTS.RECORD_BROKEN, {
+      key,
+      record: { ...this.records[key] },
+      previous,
+    });
+    return true;
+  }
+
+  /**
+   * @param {string} titleKey - e.g. `${orgId}:${weightClass}`.
+   * @returns {Object|null}
+   */
+  getTitleHolder(titleKey) {
+    return this.titleHolders[titleKey] ? { ...this.titleHolders[titleKey] } : null;
+  }
+
+  /**
+   * @param {string} titleKey
+   * @param {Object} holder - { fighterId, fighterName, sinceDay }
+   */
+  setTitleHolder(titleKey, holder) {
+    this.titleHolders[titleKey] = { ...holder };
+  }
+
   // ---- serialization ------------------------------------------------------------
 
   /**
@@ -262,6 +442,9 @@ export class WorldState {
       orgLadders: structuredCloneOrCopy(this.orgLadders),
       rivalGyms: this.rivalGyms.map((gym) => ({ ...gym })),
       globalEvents: this.globalEvents.map((event) => ({ ...event })),
+      relationships: structuredCloneOrCopy(this.relationships),
+      records: structuredCloneOrCopy(this.records),
+      titleHolders: structuredCloneOrCopy(this.titleHolders),
     };
   }
 

@@ -39,8 +39,16 @@ import BALANCE from '../data/balance.js';
  */
 
 /**
+ * @typedef {Object} FighterPersonality
+ * @property {string} archetype - One of Object.keys(BALANCE.PERSONALITY.ARCHETYPES).
+ *   Set once at creation and immutable thereafter — there is no setter.
+ * @property {string[]} traits - Zero or more of Object.keys(BALANCE.PERSONALITY.TRAITS).
+ *   Unlike archetype, may change over a career (see addTrait/removeTrait).
+ */
+
+/**
  * @typedef {Object} FighterPsychology
- * @property {string} personality - Free-form archetype label (e.g. "Showman", "Silent Killer").
+ * @property {FighterPersonality} personality
  * @property {number} ego
  * @property {number} discipline
  * @property {number} motivation
@@ -150,9 +158,24 @@ export class Fighter {
       moral: clampMorale(config.attributes?.moral ?? BALANCE.MORALE.STARTING_VALUE),
     };
 
+    const archetype = config.psychology?.personality?.archetype ?? BALANCE.PERSONALITY.DEFAULT_ARCHETYPE;
+    if (!(archetype in BALANCE.PERSONALITY.ARCHETYPES)) {
+      throw new TypeError(`Fighter: invalid personality archetype "${archetype}".`);
+    }
+    const traits = config.psychology?.personality?.traits ?? [];
+    for (const trait of traits) {
+      if (!(trait in BALANCE.PERSONALITY.TRAITS)) {
+        throw new TypeError(`Fighter: invalid personality trait "${trait}".`);
+      }
+    }
+
     /** Mental profile driving training gains and narrative events. */
     this.psychology = {
-      personality: config.psychology?.personality ?? 'Balanced',
+      personality: {
+        // Immutable by convention: no method on this class ever reassigns it.
+        archetype,
+        traits: [...new Set(traits)],
+      },
       ego: clampPsychology(config.psychology?.ego ?? BALANCE.PSYCHOLOGY.STARTING_VALUES.ego),
       discipline: clampPsychology(
         config.psychology?.discipline ?? BALANCE.PSYCHOLOGY.STARTING_VALUES.discipline
@@ -290,6 +313,46 @@ export class Fighter {
     return this.perks.includes(perkId);
   }
 
+  /**
+   * @param {string} trait - One of Object.keys(BALANCE.PERSONALITY.TRAITS).
+   * @returns {boolean}
+   */
+  hasTrait(trait) {
+    return this.psychology.personality.traits.includes(trait);
+  }
+
+  /**
+   * Narrative maturity classification, computed fresh from current career
+   * data every call (never stored) — see BALANCE.LEGACY for thresholds.
+   * Monotonic in spirit: once a fighter has won a title their legacy never
+   * reads back below CHAMPION, even if they later lose the belt.
+   *
+   * @returns {('ESPOIR'|'PROSPECT'|'VETERAN'|'CHAMPION'|'LEGENDE'|'HALL_OF_FAME')}
+   */
+  getLegacyStage() {
+    const legacy = BALANCE.LEGACY;
+    const totalFights = this.career.wins + this.career.losses + this.career.draws;
+
+    if (this.career.hallOfFameStatus === 'inducted') return 'HALL_OF_FAME';
+
+    if (
+      this.career.titles.length >= legacy.LEGEND_MIN_TITLES &&
+      this.career.wins >= legacy.LEGEND_MIN_WINS
+    ) {
+      return 'LEGENDE';
+    }
+
+    if (this.career.titles.length > 0) return 'CHAMPION';
+
+    if (totalFights >= legacy.VETERAN_MIN_FIGHTS || this.identity.age >= legacy.VETERAN_MIN_AGE) {
+      return 'VETERAN';
+    }
+
+    if (totalFights >= legacy.PROSPECT_MIN_FIGHTS) return 'PROSPECT';
+
+    return 'ESPOIR';
+  }
+
   // ---- mutations (deterministic, no RNG) -----------------------------------
 
   /**
@@ -351,6 +414,34 @@ export class Fighter {
   addPerk(perkId) {
     if (this.hasPerk(perkId)) return false;
     this.perks.push(perkId);
+    return true;
+  }
+
+  /**
+   * Adds a personality trait gained over the course of a career (e.g. a
+   * narrative beat turning a fighter into a Provocateur). The archetype
+   * itself is never touched — only traits[] is mutable.
+   *
+   * @param {string} trait - One of Object.keys(BALANCE.PERSONALITY.TRAITS).
+   * @returns {boolean} True if newly added, false if already present.
+   */
+  addTrait(trait) {
+    if (!(trait in BALANCE.PERSONALITY.TRAITS)) {
+      throw new TypeError(`Fighter.addTrait: invalid trait "${trait}".`);
+    }
+    if (this.hasTrait(trait)) return false;
+    this.psychology.personality.traits.push(trait);
+    return true;
+  }
+
+  /**
+   * @param {string} trait
+   * @returns {boolean} True if the trait was present and removed.
+   */
+  removeTrait(trait) {
+    const index = this.psychology.personality.traits.indexOf(trait);
+    if (index === -1) return false;
+    this.psychology.personality.traits.splice(index, 1);
     return true;
   }
 
@@ -436,7 +527,13 @@ export class Fighter {
         forme: this.attributes.forme,
         moral: this.attributes.moral,
       },
-      psychology: { ...this.psychology },
+      psychology: {
+        ...this.psychology,
+        personality: {
+          archetype: this.psychology.personality.archetype,
+          traits: [...this.psychology.personality.traits],
+        },
+      },
       career: { ...this.career, titles: [...this.career.titles] },
       contracts: {
         currentContract: this.contracts.currentContract,
