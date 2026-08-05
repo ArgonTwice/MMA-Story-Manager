@@ -115,8 +115,12 @@ function clampForm(value) {
   return Math.min(BALANCE.FORM.MAX, Math.max(BALANCE.FORM.MIN, value));
 }
 
-function clampFatigue(value) {
-  return Math.min(BALANCE.FATIGUE.MAX, Math.max(BALANCE.FATIGUE.MIN, value));
+function clampPhysicalFatigue(value) {
+  return Math.min(BALANCE.PHYSICAL_FATIGUE.MAX, Math.max(BALANCE.PHYSICAL_FATIGUE.MIN, value));
+}
+
+function clampMentalFatigue(value) {
+  return Math.min(BALANCE.MENTAL_FATIGUE.MAX, Math.max(BALANCE.MENTAL_FATIGUE.MIN, value));
 }
 
 function clampReadiness(value) {
@@ -164,8 +168,10 @@ export class Fighter {
       },
       forme: clampForm(config.attributes?.forme ?? BALANCE.FORM.STARTING_VALUE),
       moral: clampMorale(config.attributes?.moral ?? BALANCE.MORALE.STARTING_VALUE),
-      /** Phase 3.1 v1: weekly-persisted physical load, spent/recovered by WEEKLY_PLANNING activities. See getReadiness(). */
-      fatigue: clampFatigue(config.attributes?.fatigue ?? BALANCE.FATIGUE.STARTING_VALUE),
+      /** Phase 3.1 v1/v2: weekly-persisted physical load, spent/recovered by WEEKLY_PLANNING activities. See getReadiness(). */
+      physicalFatigue: clampPhysicalFatigue(config.attributes?.physicalFatigue ?? BALANCE.PHYSICAL_FATIGUE.STARTING_VALUE),
+      /** Phase 3.1 v2: weekly-persisted cognitive/promotional load — "Charge Mentale", spent by VIDEO_PREP/MEDIA_SPONSORS. See getReadiness(). */
+      mentalFatigue: clampMentalFatigue(config.attributes?.mentalFatigue ?? BALANCE.MENTAL_FATIGUE.STARTING_VALUE),
     };
 
     const archetype = config.psychology?.personality?.archetype ?? BALANCE.PERSONALITY.DEFAULT_ARCHETYPE;
@@ -297,22 +303,26 @@ export class Fighter {
   }
 
   /**
-   * Phase 3.1 v1: the single combat-readiness gauge CombatEngine reads
-   * instead of Fatigue directly (see BALANCE.READINESS's doc comment for
-   * the formula's rationale and which coefficients are this
+   * Phase 3.1 v1/v2: the single combat-readiness gauge CombatEngine reads
+   * instead of either Fatigue gauge directly (see BALANCE.READINESS's doc
+   * comment for the formula's rationale and which coefficients are this
    * implementation's own chosen defaults vs. spec-given).
    *
-   * Readiness = 100 - Fatigue + MoralModifier + TacticalBonus - InjuryRisk,
+   * Readiness = 100 - (PHYSICAL_FATIGUE_WEIGHT * PhysicalFatigue +
+   *                     MENTAL_FATIGUE_WEIGHT * MentalFatigue)
+   *             + MoralModifier + TacticalBonus - InjuryRisk,
    * clamped to [READINESS.MIN, READINESS.MAX].
    *
    * @returns {number}
    */
   getReadiness() {
     const r = BALANCE.READINESS;
+    const blendedFatigue =
+      r.PHYSICAL_FATIGUE_WEIGHT * this.attributes.physicalFatigue + r.MENTAL_FATIGUE_WEIGHT * this.attributes.mentalFatigue;
     const moralModifier = (this.attributes.moral - BALANCE.MORALE.NEUTRAL_VALUE) * r.MORAL_MODIFIER_SCALE;
     const tacticalBonus = this.preparation.tacticalBonusPending ? r.TACTICAL_BONUS_POINTS : 0;
     const injuryRisk = this.preparation.weeklyCharge * r.INJURY_RISK_PER_CHARGE_POINT;
-    const raw = 100 - this.attributes.fatigue + moralModifier + tacticalBonus - injuryRisk;
+    const raw = 100 - blendedFatigue + moralModifier + tacticalBonus - injuryRisk;
     return clampReadiness(raw);
   }
 
@@ -536,8 +546,15 @@ export class Fighter {
   /**
    * @param {number} delta
    */
-  adjustFatigue(delta) {
-    this.attributes.fatigue = clampFatigue(this.attributes.fatigue + delta);
+  adjustPhysicalFatigue(delta) {
+    this.attributes.physicalFatigue = clampPhysicalFatigue(this.attributes.physicalFatigue + delta);
+  }
+
+  /**
+   * @param {number} delta
+   */
+  adjustMentalFatigue(delta) {
+    this.attributes.mentalFatigue = clampMentalFatigue(this.attributes.mentalFatigue + delta);
   }
 
   /**
@@ -625,7 +642,8 @@ export class Fighter {
         skills: { ...this.attributes.skills },
         forme: this.attributes.forme,
         moral: this.attributes.moral,
-        fatigue: this.attributes.fatigue,
+        physicalFatigue: this.attributes.physicalFatigue,
+        mentalFatigue: this.attributes.mentalFatigue,
       },
       psychology: {
         ...this.psychology,

@@ -1,13 +1,16 @@
 /**
  * engine/WeeklyPlanningEngine.js
  * ---------------------------------------------------------------------------
- * Phase 3.1 v1 ("Planning, Charge & Readiness System"): resolves each
- * roster fighter's 3-slot weekly plan (Fighter.weeklyPlan.slots — see
- * models/Fighter.js#setWeeklyPlanSlot) into skill gains, Fatigue changes, a
- * pending tactical-prep bonus consumed by the fighter's next fight, media/
- * sponsor income, and an occasional Sparring micro-injury. Pure function
- * over State + Models, driven entirely by BALANCE.WEEKLY_PLANNING — no
- * gameplay constant is hardcoded here.
+ * Phase 3.1 v1/v2 ("Planning, Charge & Readiness" / "Emergence, Moral &
+ * Personnalites Vibrantes"): resolves each roster fighter's 3-slot weekly
+ * plan (Fighter.weeklyPlan.slots — see models/Fighter.js#setWeeklyPlanSlot)
+ * into skill gains, Physical/Mental Fatigue changes, a pending tactical-prep
+ * bonus consumed by the fighter's next fight, media/sponsor income, a
+ * weekly Moral drift toward neutral, and a causally-gated Sparring
+ * micro-injury (only rolled once the fighter is already physically
+ * fatigued — see resolveSparringSlot). Pure function over State + Models,
+ * driven entirely by BALANCE.WEEKLY_PLANNING — no gameplay constant is
+ * hardcoded here.
  *
  * Deliberately independent from engine/TrainingEngine.js's legacy
  * training.focus/intensity path: the two resolve different Fighter fields
@@ -48,14 +51,21 @@ function rollWeightedSeverity(rng, weights) {
 }
 
 /**
- * Rolls SPARRING's "risque leger de blessure micro-traumatique" — a small,
- * documented-default chance (WEEKLY_PLANNING.ACTIVITIES.SPARRING.injuryChance)
- * of a real injury, severity/body-part rolled from the same BALANCE.INJURIES
- * tables TrainingEngine's overtraining roll uses.
+ * Rolls SPARRING's "risque de blessure causale" (Phase 3.1 v2): unlike v1's
+ * unconditional flat chance, the roll only happens at all once the fighter
+ * enters this slot at/above causalInjuryFatigueThreshold Physical Fatigue —
+ * below it, this always returns null, no roll attempted. Checked against
+ * the fighter's Physical Fatigue *before* this slot's own cost is applied
+ * (but after any earlier slot this same week already raised it), so a
+ * fighter who ground themselves down earlier in the week can trigger it on
+ * a later Sparring slot even if they entered the week fresh. Severity/
+ * body-part rolled from the same BALANCE.INJURIES tables TrainingEngine's
+ * overtraining roll uses.
  * @returns {Object|null}
  */
 function rollSparringInjury(fighter, worldState, rng) {
   const activity = BALANCE.WEEKLY_PLANNING.ACTIVITIES.SPARRING;
+  if (fighter.attributes.physicalFatigue < activity.causalInjuryFatigueThreshold) return null;
   if (rng() >= activity.injuryChance) return null;
 
   const severity = rollWeightedSeverity(rng, BALANCE.INJURIES.SEVERITY_WEIGHTS);
@@ -106,11 +116,13 @@ function resolveMediaSponsors(fighter, playerState, personalityModifiers) {
 
 /**
  * Resolves one fighter's one activity slot: skill gain, tactical-bonus flag,
- * Sparring injury roll, media payoff, and the Fatigue cost/recovery itself.
- * fatigueCost is scaled by this fighter's own PERSONALITY fatigueMultiplier
- * (the "wear a training/fight session leaves" dimension — see
- * engine/PersonalityEngine.js#computeCombinedModifiers); PHYSIO_REST's
- * fatigueDelta is recovery, not wear, so it is NOT scaled by that modifier.
+ * causally-gated Sparring injury roll, media payoff, and the Physical/
+ * Mental Fatigue cost/recovery itself (Phase 3.1 v2 split — see
+ * BALANCE.WEEKLY_PLANNING's doc comment for which activities cost which
+ * gauge). *Cost is scaled by this fighter's own PERSONALITY
+ * fatigueMultiplier (the "wear a training/fight session leaves" dimension
+ * — see engine/PersonalityEngine.js#computeCombinedModifiers); PHYSIO_REST's
+ * *Delta recovery fields are NOT scaled by that modifier (recovery, not wear).
  *
  * @returns {{ report: Object, injury: Object|null, mediaReport: Object|null }}
  */
@@ -138,20 +150,48 @@ function resolveSlot(activityKey, fighter, playerState, worldState, rng, persona
   const mediaReport = isMediaActivity ? resolveMediaSponsors(fighter, playerState, personalityModifiers) : null;
   if (mediaReport) report.media = mediaReport;
 
-  const fatigueFromCost = activity.fatigueCost ? activity.fatigueCost * personalityModifiers.fatigueMultiplier : 0;
-  const fatigueFromRecovery = activity.fatigueDelta ?? 0;
-  fighter.adjustFatigue(fatigueFromCost + fatigueFromRecovery);
-  report.fatigueDelta = Math.round((fatigueFromCost + fatigueFromRecovery) * 100) / 100;
+  const physicalFatigueFromCost = activity.physicalFatigueCost ? activity.physicalFatigueCost * personalityModifiers.fatigueMultiplier : 0;
+  const physicalFatigueFromRecovery = activity.physicalFatigueDelta ?? 0;
+  fighter.adjustPhysicalFatigue(physicalFatigueFromCost + physicalFatigueFromRecovery);
+  report.physicalFatigueDelta = Math.round((physicalFatigueFromCost + physicalFatigueFromRecovery) * 100) / 100;
+
+  const mentalFatigueFromCost = activity.mentalFatigueCost ? activity.mentalFatigueCost * personalityModifiers.fatigueMultiplier : 0;
+  const mentalFatigueFromRecovery = activity.mentalFatigueDelta ?? 0;
+  fighter.adjustMentalFatigue(mentalFatigueFromCost + mentalFatigueFromRecovery);
+  report.mentalFatigueDelta = Math.round((mentalFatigueFromCost + mentalFatigueFromRecovery) * 100) / 100;
 
   EventBus.publish(WEEKLY_PLANNING_EVENTS.ACTIVITY_RESOLVED, report);
   return { report, injury, mediaReport };
 }
 
 /**
+ * Phase 3.1 v2: drifts a fighter's Moral one step toward MORALE.NEUTRAL_VALUE
+ * by MORALE.WEEKLY_DRIFT_TOWARD_NEUTRAL — a passive weekly pull that was
+ * defined in data/balance.js since Phase 3.0 but never actually applied by
+ * any engine until now (mirrors how earlier phases of this project have
+ * repeatedly wired up a previously-reserved-but-dormant constant on first
+ * real use). Never overshoots past neutral in either direction.
+ */
+function applyWeeklyMoraleDrift(fighter) {
+  const target = BALANCE.MORALE.NEUTRAL_VALUE;
+  const drift = BALANCE.MORALE.WEEKLY_DRIFT_TOWARD_NEUTRAL;
+  const current = fighter.attributes.moral;
+  if (current > target) {
+    fighter.adjustMorale(-Math.min(drift, current - target));
+  } else if (current < target) {
+    fighter.adjustMorale(Math.min(drift, target - current));
+  }
+}
+
+/**
  * Processes one week of weekly-plan resolution for every fighter in the
- * player's roster: every non-empty slot in Fighter.weeklyPlan.slots is
- * resolved in order, then this week's total Charge is snapshotted onto
- * Fighter.preparation.weeklyCharge for getReadiness() to read.
+ * player's roster: Moral drifts one step toward neutral (see
+ * applyWeeklyMoraleDrift — win/loss swings themselves are already applied
+ * immediately by CombatEngine's post-fight rewards, this is just the
+ * passive weekly pull the rest of the time), then every non-empty slot in
+ * Fighter.weeklyPlan.slots is resolved in order, then this week's total
+ * Charge is snapshotted onto Fighter.preparation.weeklyCharge for
+ * getReadiness() to read.
  *
  * @param {Object} playerState - A PlayerState instance.
  * @param {Object} worldState - A WorldState instance (used to anchor injury dates).
@@ -167,6 +207,8 @@ export function processWeeklyPlan(playerState, worldState, options = {}) {
   const mediaEvents = [];
 
   for (const fighter of playerState.roster) {
+    applyWeeklyMoraleDrift(fighter);
+
     const personalityModifiers = computeCombinedModifiers(fighter);
     let weeklyCharge = 0;
 

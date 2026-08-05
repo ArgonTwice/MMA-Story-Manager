@@ -26,9 +26,10 @@
  *   BALANCE.GYM          - facilities, capacity, upgrades
  *   BALANCE.FORM         - fighter physical condition ("forme") bounds/decay
  *   BALANCE.MOMENTUM     - fight-local rhythm/confidence meter (reset every match)
- *   BALANCE.FATIGUE      - weekly-persisted physical load (Phase 3.1 v1)
- *   BALANCE.READINESS    - the CombatEngine-facing gauge derived from Fatigue/Moral/prep/injury-risk
- *   BALANCE.WEEKLY_PLANNING - the 3-slot weekly activity picker feeding Fatigue/skills/prep
+ *   BALANCE.PHYSICAL_FATIGUE - weekly-persisted physical load (Phase 3.1 v1/v2)
+ *   BALANCE.MENTAL_FATIGUE  - weekly-persisted cognitive/promotional load (Phase 3.1 v2)
+ *   BALANCE.READINESS    - the CombatEngine-facing gauge derived from both Fatigue gauges/Moral/prep/injury-risk
+ *   BALANCE.WEEKLY_PLANNING - the 3-slot weekly activity picker feeding both Fatigue gauges/skills/prep
  *   BALANCE.PSYCHOLOGY   - personality-driven stat bounds/starting values
  *   BALANCE.CALENDAR     - day/week/season/year length definitions
  *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
@@ -75,7 +76,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.7.0',
+  VERSION: '1.8.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -384,33 +385,53 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
-  // FATIGUE — Phase 3.1 v1, weekly-persisted physical load (0-100%), reset
-  // only by rest. Distinct from COMBAT.STAMINA (a fight-local pool that
-  // resets every match) and FORM (long-run condition drifting from other
-  // events) — Fatigue is the raw input the WEEKLY_PLANNING activities below
-  // spend/recover every week. CombatEngine never reads Fatigue directly; it
-  // only reads the derived READINESS gauge (see Fighter#getReadiness),
-  // which folds Fatigue together with Moral/Tactical-prep/Injury-risk.
+  // PHYSICAL_FATIGUE — Phase 3.1 v1/v2, weekly-persisted physical load
+  // (0-100%), reset only by rest. Distinct from COMBAT.STAMINA (a
+  // fight-local pool that resets every match) and FORM (long-run condition
+  // drifting from other events). Phase 3.1 v2 split the single v1 "Fatigue"
+  // gauge into this (physical wear — Technique/Sparring drilling) and
+  // MENTAL_FATIGUE below (cognitive/promotional load — Video prep, Media &
+  // Sponsors) so getReadiness() can weigh them differently. CombatEngine
+  // never reads either directly; it only reads the derived READINESS gauge
+  // (see Fighter#getReadiness).
   // ---------------------------------------------------------------------
-  FATIGUE: {
+  PHYSICAL_FATIGUE: {
     MIN: 0,
     MAX: 100,
     STARTING_VALUE: 0,
   },
 
   // ---------------------------------------------------------------------
-  // READINESS — Phase 3.1 v1, the single gauge CombatEngine reads instead
-  // of Fatigue directly. Readiness = 100 - Fatigue + MoralModifier +
-  // TacticalBonus - InjuryRisk, clamped to [MIN, MAX] (see
-  // Fighter#getReadiness). MORAL_MODIFIER_SCALE/TACTICAL_BONUS_POINTS/
-  // INJURY_RISK_PER_CHARGE_POINT are this implementation's own chosen
-  // coefficients — the spec described the formula's *shape* (four additive
-  // terms) but only gave exact numbers for Fatigue's role and the 5 curve
-  // calibration points below, not for these three sub-terms.
+  // MENTAL_FATIGUE — Phase 3.1 v2's "Charge Mentale" companion gauge to
+  // PHYSICAL_FATIGUE above — same bounds/shape, fed by cognitively/
+  // promotionally taxing activities (VIDEO_PREP, MEDIA_SPONSORS) rather
+  // than physically taxing ones.
+  // ---------------------------------------------------------------------
+  MENTAL_FATIGUE: {
+    MIN: 0,
+    MAX: 100,
+    STARTING_VALUE: 0,
+  },
+
+  // ---------------------------------------------------------------------
+  // READINESS — Phase 3.1 v1/v2, the single gauge CombatEngine reads
+  // instead of either Fatigue gauge directly. Phase 3.1 v2's formula:
+  //   Readiness = 100 - (PHYSICAL_FATIGUE_WEIGHT * PhysicalFatigue +
+  //                       MENTAL_FATIGUE_WEIGHT * MentalFatigue)
+  //               + MoralModifier + TacticalBonus - RisqueBlessure
+  // clamped to [MIN, MAX] (see Fighter#getReadiness). The two Fatigue
+  // weights are spec-given (60%/40%); MORAL_MODIFIER_SCALE/
+  // TACTICAL_BONUS_POINTS/INJURY_RISK_PER_CHARGE_POINT remain this
+  // implementation's own chosen coefficients, carried over unchanged from
+  // v1 (the spec described the formula's *shape*, not these three
+  // sub-terms' exact numbers).
   // ---------------------------------------------------------------------
   READINESS: {
     MIN: 0,
     MAX: 100,
+    /** Phase 3.1 v2: relative weight of Physical vs Mental Fatigue in the blended Fatigue term below. Spec-given (60%/40%). */
+    PHYSICAL_FATIGUE_WEIGHT: 0.6,
+    MENTAL_FATIGUE_WEIGHT: 0.4,
     /** Readiness points gained/lost per point of Moral above/below MORALE.NEUTRAL_VALUE (50). At Moral=100 -> +10, at Moral=0 -> -10. */
     MORAL_MODIFIER_SCALE: 0.2,
     /** Flat Readiness bonus while a VIDEO_PREP tactical bonus is pending (consumed at the fighter's next weigh-in — see Fighter#clearTacticalPrep). Matches VIDEO_PREP's own "+5%" framing below. */
@@ -435,31 +456,42 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
-  // WEEKLY_PLANNING — Phase 3.1 v1, the 3-slot weekly activity picker (see
-  // Fighter#setWeeklyPlanSlot / engine/WeeklyPlanningEngine.js). Every
-  // activity's `charge` feeds READINESS.INJURY_RISK_PER_CHARGE_POINT above;
-  // `fatigueCost`/`fatigueDelta` are scaled by that fighter's own
-  // PERSONALITY fatigueMultiplier (engine/PersonalityEngine.js's
-  // computeCombinedModifiers — the exact "wear a training/fight session
-  // leaves" dimension that field already documents, reused here rather than
-  // duplicated) for every activity except PHYSIO_REST's recovery, which
-  // isn't wear. TECHNIQUE/SPARRING both train the fighter's current
-  // weakest skill (mirroring tools/SimRunner.js's existing coach-AI
-  // heuristic) — the spec's v1 activities are generic "stat" gains, no
-  // longer split into separate Striking/Grappling activities like the
-  // pre-v1 draft. reputationGain/hypeGain/moneyGain/injuryChance are this
-  // implementation's own chosen defaults (order-of-magnitude matched to
-  // GYM.REPUTATION_EVENTS/HYPE.EVENTS and ECONOMY's weekly cashflow) since
-  // the spec named these effects but didn't give exact figures.
+  // WEEKLY_PLANNING — Phase 3.1 v1/v2, the 3-slot weekly activity picker
+  // (see Fighter#setWeeklyPlanSlot / engine/WeeklyPlanningEngine.js). Every
+  // activity's `charge` feeds READINESS.INJURY_RISK_PER_CHARGE_POINT above.
+  // physicalFatigueCost/mentalFatigueCost (and their *Delta recovery
+  // counterparts) are scaled by that fighter's own PERSONALITY
+  // fatigueMultiplier (engine/PersonalityEngine.js's computeCombinedModifiers
+  // — the "wear a training/fight session leaves" dimension) for every
+  // activity except PHYSIO_REST's recovery, which isn't wear.
+  // TECHNIQUE/SPARRING both train the fighter's current weakest skill
+  // (mirroring tools/SimRunner.js's existing coach-AI heuristic).
+  // reputationGain/hypeGain/moneyGain are this implementation's own chosen
+  // defaults (order-of-magnitude matched to GYM.REPUTATION_EVENTS/
+  // HYPE.EVENTS and ECONOMY's weekly cashflow) since the spec named these
+  // effects but didn't give exact figures. Phase 3.1 v2 split each
+  // activity's single fatigueCost into physical vs mental (VIDEO_PREP and
+  // MEDIA_SPONSORS are cognitive/promotional load, not physical exertion —
+  // MEDIA_SPONSORS' v1 spec text itself already called it "fatigue
+  // mentale"), and gated SPARRING's injury roll behind a causal Physical
+  // Fatigue threshold instead of v1's unconditional flat chance (see
+  // causalInjuryFatigueThreshold).
   // ---------------------------------------------------------------------
   WEEKLY_PLANNING: {
     SLOTS_PER_WEEK: 3,
     ACTIVITIES: {
-      TECHNIQUE: { charge: 1, skillGain: 0.008, fatigueCost: 5 },
-      SPARRING: { charge: 3, skillGain: 0.02, fatigueCost: 18, injuryChance: 0.015 },
-      VIDEO_PREP: { charge: 1, tacticalBonus: 0.05, fatigueCost: 5 },
-      MEDIA_SPONSORS: { charge: 1, fatigueCost: 8, reputationGain: 1, hypeGain: 3, moneyGain: 250 },
-      PHYSIO_REST: { charge: 0, fatigueDelta: -25 },
+      TECHNIQUE: { charge: 1, skillGain: 0.008, physicalFatigueCost: 5 },
+      SPARRING: {
+        charge: 3,
+        skillGain: 0.02,
+        physicalFatigueCost: 18,
+        /** Phase 3.1 v2: the injury roll only happens at all once the fighter enters this slot at/above this Physical Fatigue level — "causale", not a flat chance regardless of condition like v1's. */
+        causalInjuryFatigueThreshold: 75,
+        injuryChance: 0.05,
+      },
+      VIDEO_PREP: { charge: 1, tacticalBonus: 0.05, mentalFatigueCost: 5 },
+      MEDIA_SPONSORS: { charge: 1, mentalFatigueCost: 8, reputationGain: 1, hypeGain: 3, moneyGain: 250 },
+      PHYSIO_REST: { charge: 0, physicalFatigueDelta: -25, mentalFatigueDelta: -25 },
     },
   },
 
@@ -589,7 +621,8 @@ const BALANCE = {
   MORALE: {
     MIN: 0,
     MAX: 100,
-    STARTING_VALUE: 65,
+    /** Phase 3.1 v2: 65 -> 50, aligned with NEUTRAL_VALUE below (a fighter now starts perfectly neutral rather than already upbeat) — the "Systeme dynamique de Moral" spec's explicit baseline. */
+    STARTING_VALUE: 50,
 
     EVENTS: {
       WIN_FIGHT: 15,
@@ -1113,18 +1146,102 @@ const BALANCE = {
      *   salaryDemandMultiplier - scales how "high-maintenance" the fighter is.
      *   moraleVolatility       - scales the size of morale swings (< 1 = steadier).
      *   progressionMultiplier  - scales skill-gain speed.
+     *
+     * Phase 3.1 v2 ("Emergence, Moral & Personnalites Vibrantes") adds a
+     * 5th dimension, activityWeights — raw base weights (not multipliers)
+     * over WEEKLY_PLANNING.ACTIVITIES' 5 keys, "probabilites d'attraction"
+     * an archetype has toward each weekly activity, fed into
+     * engine/PersonalityEngine.js#computeActivityWeights and consumed by
+     * tools/SimRunner.js's coach-AI (weighted random pick, not a scripted
+     * fixed sequence — "non-scriptees" per the spec). Only ARCHETYPES
+     * define a full activityWeights table (guaranteed present on every
+     * Fighter); a handful of thematically train-relevant TRAITS below add
+     * a *multiplicative* activityWeights modulation on top — traits
+     * without one default to no modulation (all 1) when combined, this
+     * implementation's own deliberate scope choice rather than giving
+     * every one of the 12 traits its own table.
      */
     ARCHETYPES: {
-      Guerrier: { label: 'Guerrier', fatigueMultiplier: 0.9, salaryDemandMultiplier: 1.0, moraleVolatility: 0.9, progressionMultiplier: 1.0 },
-      Genie: { label: 'Genie', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.05, moraleVolatility: 0.85, progressionMultiplier: 1.2 },
-      Icone: { label: 'Icone', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.3, moraleVolatility: 1.1, progressionMultiplier: 0.95 },
-      Mercenaire: { label: 'Mercenaire', fatigueMultiplier: 0.95, salaryDemandMultiplier: 1.4, moraleVolatility: 0.8, progressionMultiplier: 0.95 },
-      Leader: { label: 'Leader', fatigueMultiplier: 0.95, salaryDemandMultiplier: 1.1, moraleVolatility: 0.85, progressionMultiplier: 1.0 },
-      Showman: { label: 'Showman', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.2, moraleVolatility: 1.15, progressionMultiplier: 0.95 },
-      Predateur: { label: 'Predateur', fatigueMultiplier: 0.9, salaryDemandMultiplier: 1.0, moraleVolatility: 1.05, progressionMultiplier: 1.05 },
-      Veteran: { label: 'Veteran', fatigueMultiplier: 1.1, salaryDemandMultiplier: 1.1, moraleVolatility: 0.7, progressionMultiplier: 0.8 },
-      Phenomene: { label: 'Phenomene', fatigueMultiplier: 0.95, salaryDemandMultiplier: 1.15, moraleVolatility: 1.0, progressionMultiplier: 1.3 },
-      Cameleon: { label: 'Cameleon', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.0, moraleVolatility: 1.0, progressionMultiplier: 1.0 },
+      Guerrier: {
+        label: 'Guerrier',
+        fatigueMultiplier: 0.9,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 0.9,
+        progressionMultiplier: 1.0,
+        activityWeights: { TECHNIQUE: 2, SPARRING: 5, VIDEO_PREP: 1, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
+      },
+      Genie: {
+        label: 'Genie',
+        fatigueMultiplier: 1.0,
+        salaryDemandMultiplier: 1.05,
+        moraleVolatility: 0.85,
+        progressionMultiplier: 1.2,
+        activityWeights: { TECHNIQUE: 4, SPARRING: 1, VIDEO_PREP: 3, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
+      },
+      Icone: {
+        label: 'Icone',
+        fatigueMultiplier: 1.0,
+        salaryDemandMultiplier: 1.3,
+        moraleVolatility: 1.1,
+        progressionMultiplier: 0.95,
+        activityWeights: { TECHNIQUE: 1, SPARRING: 1, VIDEO_PREP: 1, MEDIA_SPONSORS: 5, PHYSIO_REST: 1 },
+      },
+      Mercenaire: {
+        label: 'Mercenaire',
+        fatigueMultiplier: 0.95,
+        salaryDemandMultiplier: 1.4,
+        moraleVolatility: 0.8,
+        progressionMultiplier: 0.95,
+        activityWeights: { TECHNIQUE: 2, SPARRING: 1, VIDEO_PREP: 1, MEDIA_SPONSORS: 4, PHYSIO_REST: 1 },
+      },
+      Leader: {
+        label: 'Leader',
+        fatigueMultiplier: 0.95,
+        salaryDemandMultiplier: 1.1,
+        moraleVolatility: 0.85,
+        progressionMultiplier: 1.0,
+        activityWeights: { TECHNIQUE: 2, SPARRING: 2, VIDEO_PREP: 4, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
+      },
+      Showman: {
+        label: 'Showman',
+        fatigueMultiplier: 1.05,
+        salaryDemandMultiplier: 1.2,
+        moraleVolatility: 1.15,
+        progressionMultiplier: 0.95,
+        activityWeights: { TECHNIQUE: 1, SPARRING: 2, VIDEO_PREP: 1, MEDIA_SPONSORS: 5, PHYSIO_REST: 1 },
+      },
+      Predateur: {
+        label: 'Predateur',
+        fatigueMultiplier: 0.9,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 1.05,
+        progressionMultiplier: 1.05,
+        activityWeights: { TECHNIQUE: 2, SPARRING: 5, VIDEO_PREP: 1, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
+      },
+      Veteran: {
+        label: 'Veteran',
+        fatigueMultiplier: 1.1,
+        salaryDemandMultiplier: 1.1,
+        moraleVolatility: 0.7,
+        progressionMultiplier: 0.8,
+        activityWeights: { TECHNIQUE: 2, SPARRING: 1, VIDEO_PREP: 2, MEDIA_SPONSORS: 1, PHYSIO_REST: 4 },
+      },
+      Phenomene: {
+        label: 'Phenomene',
+        fatigueMultiplier: 0.95,
+        salaryDemandMultiplier: 1.15,
+        moraleVolatility: 1.0,
+        progressionMultiplier: 1.3,
+        activityWeights: { TECHNIQUE: 3, SPARRING: 3, VIDEO_PREP: 2, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
+      },
+      Cameleon: {
+        label: 'Cameleon',
+        fatigueMultiplier: 1.0,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 1.0,
+        progressionMultiplier: 1.0,
+        activityWeights: { TECHNIQUE: 2, SPARRING: 2, VIDEO_PREP: 2, MEDIA_SPONSORS: 2, PHYSIO_REST: 2 },
+      },
     },
     /** Used when a Fighter is created without an explicit archetype. */
     DEFAULT_ARCHETYPE: 'Cameleon',
@@ -1135,17 +1252,66 @@ const BALANCE = {
      * may be gained/lost over a career (see Fighter#addTrait/removeTrait).
      */
     TRAITS: {
-      Professionnel: { label: 'Professionnel', fatigueMultiplier: 0.92, salaryDemandMultiplier: 1.0, moraleVolatility: 0.85, progressionMultiplier: 1.08 },
-      Fetard: { label: 'Fetard', fatigueMultiplier: 1.15, salaryDemandMultiplier: 0.95, moraleVolatility: 1.2, progressionMultiplier: 0.9 },
-      Impulsif: { label: 'Impulsif', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.0, moraleVolatility: 1.3, progressionMultiplier: 1.0 },
+      Professionnel: {
+        label: 'Professionnel',
+        fatigueMultiplier: 0.92,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 0.85,
+        progressionMultiplier: 1.08,
+        activityWeights: { TECHNIQUE: 1.3, SPARRING: 1.0, VIDEO_PREP: 1.2, MEDIA_SPONSORS: 0.8, PHYSIO_REST: 1.0 },
+      },
+      Fetard: {
+        label: 'Fetard',
+        fatigueMultiplier: 1.15,
+        salaryDemandMultiplier: 0.95,
+        moraleVolatility: 1.2,
+        progressionMultiplier: 0.9,
+        activityWeights: { TECHNIQUE: 0.8, SPARRING: 0.9, VIDEO_PREP: 0.8, MEDIA_SPONSORS: 1.6, PHYSIO_REST: 1.0 },
+      },
+      Impulsif: {
+        label: 'Impulsif',
+        fatigueMultiplier: 1.05,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 1.3,
+        progressionMultiplier: 1.0,
+        activityWeights: { TECHNIQUE: 0.8, SPARRING: 1.5, VIDEO_PREP: 0.7, MEDIA_SPONSORS: 1.1, PHYSIO_REST: 0.8 },
+      },
       Provocateur: { label: 'Provocateur', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.05, moraleVolatility: 1.15, progressionMultiplier: 1.0 },
-      Discipline: { label: 'Discipline', fatigueMultiplier: 0.88, salaryDemandMultiplier: 1.0, moraleVolatility: 0.8, progressionMultiplier: 1.1 },
+      Discipline: {
+        label: 'Discipline',
+        fatigueMultiplier: 0.88,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 0.8,
+        progressionMultiplier: 1.1,
+        activityWeights: { TECHNIQUE: 1.3, SPARRING: 1.1, VIDEO_PREP: 1.2, MEDIA_SPONSORS: 0.7, PHYSIO_REST: 1.0 },
+      },
       Loyal: { label: 'Loyal', fatigueMultiplier: 1.0, salaryDemandMultiplier: 0.85, moraleVolatility: 0.85, progressionMultiplier: 1.0 },
-      Arrogant: { label: 'Arrogant', fatigueMultiplier: 1.0, salaryDemandMultiplier: 1.25, moraleVolatility: 1.2, progressionMultiplier: 1.0 },
+      Arrogant: {
+        label: 'Arrogant',
+        fatigueMultiplier: 1.0,
+        salaryDemandMultiplier: 1.25,
+        moraleVolatility: 1.2,
+        progressionMultiplier: 1.0,
+        activityWeights: { TECHNIQUE: 0.8, SPARRING: 1.1, VIDEO_PREP: 0.8, MEDIA_SPONSORS: 1.5, PHYSIO_REST: 0.9 },
+      },
       Humble: { label: 'Humble', fatigueMultiplier: 1.0, salaryDemandMultiplier: 0.8, moraleVolatility: 0.85, progressionMultiplier: 1.0 },
       Genereux: { label: 'Genereux', fatigueMultiplier: 1.0, salaryDemandMultiplier: 0.9, moraleVolatility: 0.9, progressionMultiplier: 1.0 },
-      Intense: { label: 'Intense', fatigueMultiplier: 1.2, salaryDemandMultiplier: 1.0, moraleVolatility: 1.05, progressionMultiplier: 1.15 },
-      Calme: { label: 'Calme', fatigueMultiplier: 0.9, salaryDemandMultiplier: 1.0, moraleVolatility: 0.7, progressionMultiplier: 1.0 },
+      Intense: {
+        label: 'Intense',
+        fatigueMultiplier: 1.2,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 1.05,
+        progressionMultiplier: 1.15,
+        activityWeights: { TECHNIQUE: 1.1, SPARRING: 1.5, VIDEO_PREP: 0.9, MEDIA_SPONSORS: 0.9, PHYSIO_REST: 0.7 },
+      },
+      Calme: {
+        label: 'Calme',
+        fatigueMultiplier: 0.9,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 0.7,
+        progressionMultiplier: 1.0,
+        activityWeights: { TECHNIQUE: 1.1, SPARRING: 0.8, VIDEO_PREP: 1.2, MEDIA_SPONSORS: 0.9, PHYSIO_REST: 1.3 },
+      },
       Ambitieux: { label: 'Ambitieux', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.15, moraleVolatility: 1.1, progressionMultiplier: 1.1 },
     },
 

@@ -64,6 +64,37 @@ export function computeCombinedModifiers(fighter) {
   return profile;
 }
 
+/**
+ * Phase 3.1 v2 ("Emergence, Moral & Personnalites Vibrantes"): combines a
+ * fighter's archetype (base weight per WEEKLY_PLANNING.ACTIVITIES key) and
+ * every trait that defines its own activityWeights (a multiplicative
+ * modulation on top, default 1 = no change for both traits without an
+ * activityWeights table and for any archetype/trait entry silently missing
+ * one of the 5 activity keys) into one weighted-pick profile. Pure and
+ * deterministic, same shape/rationale as computeCombinedModifiers above —
+ * consumed by tools/SimRunner.js's coach-AI for a weighted-random (not
+ * scripted) activity choice per weekly slot.
+ *
+ * @param {Object} fighter - A Fighter instance (duck-typed: needs psychology.personality).
+ * @returns {Object} { [activityKey]: weight } over Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES).
+ */
+export function computeActivityWeights(fighter) {
+  const { ARCHETYPES, TRAITS } = BALANCE.PERSONALITY;
+  const activityKeys = Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES);
+
+  const archetypeWeights = ARCHETYPES[fighter.psychology.personality.archetype].activityWeights;
+  const weights = {};
+  for (const key of activityKeys) weights[key] = archetypeWeights?.[key] ?? 1;
+
+  for (const trait of fighter.psychology.personality.traits) {
+    const traitWeights = TRAITS[trait]?.activityWeights;
+    if (!traitWeights) continue;
+    for (const key of activityKeys) weights[key] *= traitWeights[key] ?? 1;
+  }
+
+  return weights;
+}
+
 class PersonalityEngine {
   /**
    * @param {Object} [options]

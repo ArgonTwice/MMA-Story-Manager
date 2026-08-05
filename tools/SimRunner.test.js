@@ -314,7 +314,7 @@ test('grappling aggregate combines exactly the GROUND-affinity styles and matche
   assert.ok(g.winRate === null || (g.winRate >= 0 && g.winRate <= 1));
 });
 
-test('Phase 3.1 v1: weekly-planning telemetry (activity usage, Average Readiness, per-style overheat) is internally consistent', () => {
+test('Phase 3.1 v2: weekly-planning telemetry (activity usage, Average Readiness, Mental/Physical Fatigue, per-archetype overheat/distribution) is internally consistent', () => {
   const result = runSimulation({ seasons: 200, rosterSize: 8, seed: 99 });
   const wp = result.weeklyPlanning;
 
@@ -328,19 +328,34 @@ test('Phase 3.1 v1: weekly-planning telemetry (activity usage, Average Readiness
   assert.ok(wp.maxActivityShare >= 0 && wp.maxActivityShare <= 1);
 
   assert.ok(wp.averageReadinessOnFightDay === null || (wp.averageReadinessOnFightDay >= BALANCE.READINESS.MIN && wp.averageReadinessOnFightDay <= BALANCE.READINESS.MAX));
+  assert.ok(wp.averagePhysicalFatigue >= BALANCE.PHYSICAL_FATIGUE.MIN && wp.averagePhysicalFatigue <= BALANCE.PHYSICAL_FATIGUE.MAX);
+  assert.ok(wp.averageMentalFatigue >= BALANCE.MENTAL_FATIGUE.MIN && wp.averageMentalFatigue <= BALANCE.MENTAL_FATIGUE.MAX);
 
-  const byStyleFighterWeeks = Object.values(wp.byStyle).reduce((sum, s) => sum + s.fighterWeeks, 0);
-  const byStyleOverheatWeeks = Object.values(wp.byStyle).reduce((sum, s) => sum + s.overheatWeeks, 0);
-  assert.ok(byStyleFighterWeeks > 0, 'sanity: fighter-weeks should accumulate over 200 seasons');
-  assert.ok(byStyleOverheatWeeks <= byStyleFighterWeeks);
-  assert.ok(Math.abs(wp.overallOverheatRate - byStyleOverheatWeeks / byStyleFighterWeeks) < 1e-9);
+  assert.deepEqual(new Set(Object.keys(wp.byArchetype)), new Set(Object.keys(BALANCE.PERSONALITY.ARCHETYPES)));
+  let byArchetypeFighterWeeks = 0;
+  let byArchetypeOverheatWeeks = 0;
+  let byArchetypeSlotsResolved = 0;
+  for (const bucket of Object.values(wp.byArchetype)) {
+    byArchetypeFighterWeeks += bucket.fighterWeeks;
+    byArchetypeOverheatWeeks += bucket.overheatWeeks;
+    assert.ok(bucket.overheatWeeks <= bucket.fighterWeeks);
+    assert.ok(bucket.maxActivityShare >= 0 && bucket.maxActivityShare <= 1);
+    for (const key of activityKeys) byArchetypeSlotsResolved += bucket.activityUsage[key].count;
+  }
+  assert.ok(byArchetypeFighterWeeks > 0, 'sanity: fighter-weeks should accumulate over 200 seasons');
+  assert.ok(Math.abs(wp.overallOverheatRate - byArchetypeOverheatWeeks / byArchetypeFighterWeeks) < 1e-9);
+  assert.equal(byArchetypeSlotsResolved, wp.totalSlotsResolved, 'every resolved slot should be attributed to exactly one archetype bucket');
+  const expectedMaxArchetypeShare = Math.max(...Object.values(wp.byArchetype).map((b) => b.maxActivityShare));
+  assert.ok(Math.abs(wp.maxArchetypeActivityShare - expectedMaxArchetypeShare) < 1e-9);
 
   assert.ok(wp.decisionQualityIndex === null || (wp.decisionQualityIndex >= 0 && wp.decisionQualityIndex <= 100));
 
   const report = formatReport(result);
   assert.ok(report.includes('PLANNING HEBDOMADAIRE & READINESS'));
   assert.ok(report.includes('TRAINING DIVERSITY INDEX'));
+  assert.ok(report.includes('ARCHETYPE ACTIVITY DISTRIBUTION'));
   assert.ok(report.includes('AVERAGE READINESS'));
+  assert.ok(report.includes('MENTAL FATIGUE'));
   assert.ok(report.includes('DECISION QUALITY INDEX'));
   assert.ok(!report.includes('NaN'), 'the weekly-planning section should never render NaN');
 });

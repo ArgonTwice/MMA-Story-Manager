@@ -492,8 +492,8 @@ test('final result payload carries A3 telemetry: takedownDefended is real data, 
 
 test('a pristine fighter (0 Fatigue, 100 Moral) reaches Readiness 100 (clamped) and gets the top calibration point\'s +5% Stamina Max at weigh-in', () => {
   const engine = new CombatEngine({ rng: createSeededRng(1) });
-  const fresh = makeFighter('Fresh', 50, { attributes: { fatigue: 0, moral: 100 } });
-  const foil = makeFighter('Foil', 50, { attributes: { fatigue: 0, moral: 65 } });
+  const fresh = makeFighter('Fresh', 50, { attributes: { physicalFatigue: 0, moral: 100 } });
+  const foil = makeFighter('Foil', 50, { attributes: { physicalFatigue: 0, moral: 65 } });
 
   engine.setupMatch(fresh, foil, 'WFC', false);
   engine.executeNextStep(); // INIT -> WEIGH_IN
@@ -513,8 +513,8 @@ test('a pristine fighter (0 Fatigue, 100 Moral) reaches Readiness 100 (clamped) 
 
 test('a heavily-fatigued, demoralized fighter reads a low Readiness and the curve\'s lowest calibration point\'s stamina/momentum malus', () => {
   const engine = new CombatEngine({ rng: createSeededRng(1) });
-  const exhausted = makeFighter('Exhausted', 50, { attributes: { fatigue: 100, moral: 0 } });
-  const foil = makeFighter('Foil', 50, { attributes: { fatigue: 0, moral: 65 } });
+  const exhausted = makeFighter('Exhausted', 50, { attributes: { physicalFatigue: 100, mentalFatigue: 100, moral: 0 } });
+  const foil = makeFighter('Foil', 50, { attributes: { physicalFatigue: 0, moral: 65 } });
 
   engine.setupMatch(exhausted, foil, 'WFC', false);
   engine.executeNextStep();
@@ -531,8 +531,8 @@ test('a heavily-fatigued, demoralized fighter reads a low Readiness and the curv
 
 test('a pending tactical-prep bonus is consumed (cleared) at weigh-in, and contributes READINESS.TACTICAL_BONUS_POINTS beforehand', () => {
   const engine = new CombatEngine({ rng: createSeededRng(1) });
-  const prepared = makeFighter('Prepared', 50, { attributes: { fatigue: 20, moral: 65 } });
-  const foil = makeFighter('Foil', 50, { attributes: { fatigue: 20, moral: 65 } });
+  const prepared = makeFighter('Prepared', 50, { attributes: { physicalFatigue: 20, moral: 65 } });
+  const foil = makeFighter('Foil', 50, { attributes: { physicalFatigue: 20, moral: 65 } });
   prepared.preparation.tacticalBonusPending = true;
 
   const readinessWithoutBonus = new Fighter({
@@ -552,8 +552,8 @@ test('a pending tactical-prep bonus is consumed (cleared) at weigh-in, and contr
 
 test('the final result payload snapshots each corner\'s weigh-in Readiness onto combatMetrics.readiness', () => {
   const engine = new CombatEngine({ rng: createSeededRng(1) });
-  const a = makeFighter('A', 50, { attributes: { fatigue: 10, moral: 65 } });
-  const b = makeFighter('B', 50, { attributes: { fatigue: 60, moral: 65 } });
+  const a = makeFighter('A', 50, { attributes: { physicalFatigue: 10, moral: 65 } });
+  const b = makeFighter('B', 50, { attributes: { physicalFatigue: 60, moral: 65 } });
 
   engine.setupMatch(a, b, 'WFC', false);
   const result = engine.simulateFullMatch();

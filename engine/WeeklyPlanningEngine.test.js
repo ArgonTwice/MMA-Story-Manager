@@ -35,12 +35,18 @@ test('an empty weekly plan (all null slots) is a complete no-op: no skill/fatigu
   const fighter = makeFighter();
   player.addFighter(fighter);
 
-  const before = { boxe: fighter.attributes.skills.boxe, fatigue: fighter.attributes.fatigue, money: player.money };
+  const before = {
+    boxe: fighter.attributes.skills.boxe,
+    physicalFatigue: fighter.attributes.physicalFatigue,
+    mentalFatigue: fighter.attributes.mentalFatigue,
+    money: player.money,
+  };
   const report = processWeeklyPlan(player, world, { rng: neverRng });
 
   assert.equal(report.activityLog.length, 0);
   assert.equal(fighter.attributes.skills.boxe, before.boxe);
-  assert.equal(fighter.attributes.fatigue, before.fatigue);
+  assert.equal(fighter.attributes.physicalFatigue, before.physicalFatigue);
+  assert.equal(fighter.attributes.mentalFatigue, before.mentalFatigue);
   assert.equal(player.money, before.money);
   assert.equal(fighter.preparation.weeklyCharge, 0);
 });
@@ -59,7 +65,8 @@ test('TECHNIQUE trains the fighter\'s current weakest skill by exactly ACTIVITIE
   assert.equal(report.activityLog.length, 1);
   assert.equal(report.activityLog[0].skillKey, 'boxe', 'weakest skill by SKILL_KEYS order among the tied-lowest');
   assert.ok(Math.abs(fighter.attributes.skills.boxe - before - activity.skillGain) < 1e-9);
-  assert.ok(fighter.attributes.fatigue > 0, 'TECHNIQUE has a positive fatigueCost');
+  assert.ok(fighter.attributes.physicalFatigue > 0, 'TECHNIQUE has a positive physicalFatigueCost');
+  assert.equal(fighter.attributes.mentalFatigue, 0, 'TECHNIQUE costs no Mental Fatigue');
   assert.equal(fighter.preparation.weeklyCharge, activity.charge);
 });
 
@@ -95,31 +102,46 @@ test('MEDIA_SPONSORS grants gym reputation/hype/money and a personality-scaled m
   assert.ok(report.mediaEvents.length === 1);
 });
 
-test('PHYSIO_REST reduces Fatigue by ACTIVITIES.PHYSIO_REST.fatigueDelta, unscaled by personality (recovery, not wear)', () => {
+test('PHYSIO_REST reduces both Fatigue gauges by ACTIVITIES.PHYSIO_REST.*Delta, unscaled by personality (recovery, not wear)', () => {
   const player = new PlayerState({ gymName: 'Recovery Gym' });
   const world = new WorldState();
-  const fighter = makeFighter({ attributes: { fatigue: 50 } });
+  const fighter = makeFighter({ attributes: { physicalFatigue: 50, mentalFatigue: 50 } });
   fighter.setWeeklyPlanSlot(0, 'PHYSIO_REST');
   player.addFighter(fighter);
 
   processWeeklyPlan(player, world, { rng: neverRng });
 
   const activity = BALANCE.WEEKLY_PLANNING.ACTIVITIES.PHYSIO_REST;
-  assert.equal(fighter.attributes.fatigue, 50 + activity.fatigueDelta);
+  assert.equal(fighter.attributes.physicalFatigue, 50 + activity.physicalFatigueDelta);
+  assert.equal(fighter.attributes.mentalFatigue, 50 + activity.mentalFatigueDelta);
 });
 
-test('SPARRING can roll a micro-injury and applies it via Fighter#applyInjury, publishing SPARRING_INJURY', () => {
+test('SPARRING never rolls for injury below causalInjuryFatigueThreshold Physical Fatigue, even with a guaranteed-roll rng', () => {
+  const player = new PlayerState({ gymName: 'Fresh Camp' });
+  const world = new WorldState();
+  const fighter = makeFighter({ attributes: { physicalFatigue: 10 } }); // well under causalInjuryFatigueThreshold
+  fighter.setWeeklyPlanSlot(0, 'SPARRING');
+  player.addFighter(fighter);
+
+  const report = processWeeklyPlan(player, world, { rng: () => 0 });
+
+  assert.equal(report.injuries.length, 0, 'the injury is causal — no threshold crossed, no roll attempted at all');
+});
+
+test('SPARRING can roll a causal micro-injury once Physical Fatigue is at/over causalInjuryFatigueThreshold, applying it via Fighter#applyInjury and publishing SPARRING_INJURY', () => {
   const player = new PlayerState({ gymName: 'Hard Camp' });
   const world = new WorldState();
-  const fighter = makeFighter();
+  const threshold = BALANCE.WEEKLY_PLANNING.ACTIVITIES.SPARRING.causalInjuryFatigueThreshold;
+  const fighter = makeFighter({ attributes: { physicalFatigue: threshold } });
   fighter.setWeeklyPlanSlot(0, 'SPARRING');
   player.addFighter(fighter);
 
   const events = [];
   const unsub = EventBus.subscribe(WEEKLY_PLANNING_EVENTS.SPARRING_INJURY, (payload) => events.push(payload));
 
-  // A constant rng below SPARRING.injuryChance always triggers the roll, and
-  // severity/bodyPart selection then consumes the same source deterministically.
+  // A constant rng below SPARRING.injuryChance always triggers the roll once
+  // the causal threshold is met, and severity/bodyPart selection then
+  // consumes the same source deterministically.
   const report = processWeeklyPlan(player, world, { rng: () => 0 });
   unsub();
 
@@ -144,4 +166,20 @@ test('3 slots in the same week all resolve independently, and weeklyCharge sums 
   assert.equal(report.activityLog.length, 3);
   assert.equal(fighter.preparation.weeklyCharge, a.TECHNIQUE.charge + a.VIDEO_PREP.charge + a.PHYSIO_REST.charge);
   assert.equal(fighter.preparation.tacticalBonusPending, true);
+});
+
+test('Moral drifts one MORALE.WEEKLY_DRIFT_TOWARD_NEUTRAL step toward NEUTRAL_VALUE every week, from either side, never overshooting', () => {
+  const player = new PlayerState({ gymName: 'Mood Swing Gym' });
+  const world = new WorldState();
+  const happy = makeFighter({ identity: { name: 'Happy' }, attributes: { moral: BALANCE.MORALE.NEUTRAL_VALUE + 1 } });
+  const sad = makeFighter({ identity: { name: 'Sad' }, attributes: { moral: BALANCE.MORALE.NEUTRAL_VALUE - 100 } });
+  player.addFighter(happy);
+  player.addFighter(sad);
+
+  processWeeklyPlan(player, world, { rng: neverRng });
+
+  // happy started only 1 point above neutral: drift never overshoots past it.
+  assert.equal(happy.attributes.moral, BALANCE.MORALE.NEUTRAL_VALUE);
+  // sad started far below (clamped to MORALE.MIN=0): one full drift step up, no more.
+  assert.equal(sad.attributes.moral, BALANCE.MORALE.MIN + BALANCE.MORALE.WEEKLY_DRIFT_TOWARD_NEUTRAL);
 });

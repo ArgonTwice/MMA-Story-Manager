@@ -491,11 +491,13 @@ const WEEKLY_PLANNING_ACTIVITY_LABELS = Object.freeze({
 
 /** Training Diversity Index target: no single activity should account for more than half of all resolved slots. */
 const TRAINING_DIVERSITY_MAX_SHARE = 0.5;
+/** Archetype Activity Distribution target (Phase 3.1 v2): no single archetype should spend more than 60% of ITS OWN slots on one activity. */
+const ARCHETYPE_ACTIVITY_MAX_SHARE = 0.6;
 /** Average Readiness on fight day target band (Phase 3.1 v1 spec). */
 const AVERAGE_READINESS_TARGET = Object.freeze({ MIN: 75, MAX: 85 });
 
 function renderWeeklyPlanningHeader() {
-  return '\n=== PLANNING HEBDOMADAIRE & READINESS (Phase 3.1 v1) ===';
+  return '\n=== PLANNING HEBDOMADAIRE & READINESS (Phase 3.1 v1/v2) ===';
 }
 
 function renderTrainingDiversitySubsection(result) {
@@ -517,6 +519,32 @@ function renderTrainingDiversitySubsection(result) {
   return lines.join('\n');
 }
 
+function renderArchetypeActivityDistributionSubsection(result) {
+  const wp = result.weeklyPlanning;
+  const lines = [renderSectionTitle('\u{1F3AD} ARCHETYPE ACTIVITY DISTRIBUTION (Phase 3.1 v2)')];
+  const activityKeys = Object.keys(WEEKLY_PLANNING_ACTIVITY_LABELS);
+  const headers = ['Archetype', ...activityKeys.map((key) => WEEKLY_PLANNING_ACTIVITY_LABELS[key]), 'Part max'];
+  const rows = Object.entries(wp.byArchetype).map(([archetype, a]) => [
+    archetype,
+    ...activityKeys.map((key) => formatPercent(a.activityUsage[key]?.share ?? null, 0)),
+    formatPercent(a.maxActivityShare, 1),
+  ]);
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  const maxSharePass = wp.maxArchetypeActivityShare <= ARCHETYPE_ACTIVITY_MAX_SHARE;
+  lines.push(
+    `Part maximale d'un archetype sur une seule activite : ${formatPercent(wp.maxArchetypeActivityShare, 1)} ` +
+      `(cible : <= ${formatPercent(ARCHETYPE_ACTIVITY_MAX_SHARE, 0)}) : ${maxSharePass ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
+  );
+  lines.push(
+    '(Les probabilites d\'attraction par archetype/trait — PERSONALITY.ARCHETYPES/TRAITS[*].activityWeights — sont' +
+      ' des poids de choix non-scriptes, pas une politique fixe : un archetype tres oriente vers une activite' +
+      ' (ex. Guerrier -> Sparring) peut legitimement s\'en approcher ou depasser la cible ci-dessus ; c\'est un' +
+      ' signal a surveiller, pas necessairement un bug.)'
+  );
+  return lines.join('\n');
+}
+
 function renderAverageReadinessSubsection(result) {
   const wp = result.weeklyPlanning;
   const lines = [renderSectionTitle('\u{1F4AA} AVERAGE READINESS (le jour du combat)')];
@@ -529,15 +557,31 @@ function renderAverageReadinessSubsection(result) {
   return lines.join('\n');
 }
 
+function renderFatigueBreakdownSubsection(result) {
+  const wp = result.weeklyPlanning;
+  const lines = [renderSectionTitle('\u{1F9E0} MENTAL FATIGUE vs PHYSICAL FATIGUE (Phase 3.1 v2)')];
+  lines.push(`Fatigue Physique moyenne (fin de semaine, tout le roster) : ${formatDecimal(wp.averagePhysicalFatigue, 1)}`);
+  lines.push(`Charge Mentale moyenne (fin de semaine, tout le roster)   : ${formatDecimal(wp.averageMentalFatigue, 1)}`);
+  const gap = wp.averagePhysicalFatigue !== null && wp.averageMentalFatigue !== null ? wp.averagePhysicalFatigue - wp.averageMentalFatigue : null;
+  lines.push(`Ecart (Physique - Mentale)                                : ${gap === null ? 'N/A' : formatDecimal(gap, 1)}`);
+  lines.push('');
+  lines.push(
+    '(Readiness pondere Fatigue Physique a 60% et Charge Mentale a 40% — voir BALANCE.READINESS et' +
+      ' Fighter#getReadiness — donc un ecart important entre les deux gauges ci-dessus indique lequel des deux' +
+      ' pese le plus lourd dans la Readiness observee cette periode.)'
+  );
+  return lines.join('\n');
+}
+
 function renderDecisionQualitySubsection(result) {
   const wp = result.weeklyPlanning;
-  const lines = [renderSectionTitle('\u{1F3AF} DECISION QUALITY INDEX (viabilite des strategies de planning)')];
-  const headers = ['Strategie de planning', 'Semaines-combattant', 'Semaines en surmenage massif', 'Taux de surmenage'];
-  const rows = Object.entries(wp.byStyle).map(([style, s]) => [
-    style,
-    formatNumber(s.fighterWeeks),
-    formatNumber(s.overheatWeeks),
-    formatPercent(s.overheatRate, 1),
+  const lines = [renderSectionTitle('\u{1F3AF} DECISION QUALITY INDEX (viabilite des strategies de planning par archetype)')];
+  const headers = ['Archetype', 'Semaines-combattant', 'Semaines en surmenage massif', 'Taux de surmenage'];
+  const rows = Object.entries(wp.byArchetype).map(([archetype, a]) => [
+    archetype,
+    formatNumber(a.fighterWeeks),
+    formatNumber(a.overheatWeeks),
+    formatPercent(a.overheatRate, 1),
   ]);
   lines.push(renderTable(headers, rows));
   lines.push('');
@@ -548,9 +592,10 @@ function renderDecisionQualitySubsection(result) {
   lines.push(
     '(Index = moyenne de deux sous-scores non officiels definis par cette implementation : sante financiere du' +
       ' gymnase (inverse du taux d\'insolvabilite) et absence de surmenage massif (inverse du taux de semaines-' +
-      ' combattant a >= 90% de Fatigue) — le spec ne donnait qu\'un objectif qualitatif ("plusieurs strategies' +
-      ' restent viables sans faillite ni surmenage massif"), pas de formule ; voir tools/SimRunner.js\'s' +
-      ' finalizeWeeklyPlanning pour le detail.)'
+      ' combattant a >= 90% de Fatigue Physique) — le spec ne donnait qu\'un objectif qualitatif ("plusieurs' +
+      ' strategies restent viables sans faillite ni surmenage massif"), pas de formule ; voir' +
+      ' tools/SimRunner.js\'s finalizeWeeklyPlanning pour le detail. Depuis v2, "strategie de planning" =' +
+      ' l\'archetype reel du combattant, pas un bucket synthetique.)'
   );
   return lines.join('\n');
 }
@@ -559,7 +604,9 @@ function renderWeeklyPlanningSection(result) {
   return [
     renderWeeklyPlanningHeader(),
     renderTrainingDiversitySubsection(result),
+    renderArchetypeActivityDistributionSubsection(result),
     renderAverageReadinessSubsection(result),
+    renderFatigueBreakdownSubsection(result),
     renderDecisionQualitySubsection(result),
   ].join('\n');
 }
@@ -911,14 +958,32 @@ function renderNotesSection(result) {
   );
   lines.push(
     '* Phase 3.1 v1 (Planning, Charge & Readiness) : CombatEngine ne lit plus jamais la Fatigue directement, ' +
-      'seulement la Readiness derivee (Fighter#getReadiness = 100 - Fatigue + ModificateurMoral + BonusTactique -' +
-      ' RisqueBlessure). Le spec donnait la forme de cette formule et les 5 points de calibration de la courbe' +
-      ' continue Readiness -> Stamina Max/Momentum, mais pas les coefficients des 3 sous-termes (Moral/Tactique/' +
+      'seulement la Readiness derivee (voir Fighter#getReadiness — la formule exacte a evolue en v2, voir' +
+      ' ci-dessous). Le spec donnait la forme de cette formule et les 5 points de calibration de la courbe' +
+      ' continue Readiness -> Stamina Max/Momentum, mais pas les coefficients des sous-termes (Moral/Tactique/' +
       ' Blessure) ni les gains reputation/argent/risque de blessure des activites — ce sont les valeurs par' +
       ' defaut choisies par cette implementation (voir data/balance.js#READINESS et #WEEKLY_PLANNING pour le' +
-      ' detail et la justification de chacune). Le Decision Quality Index et les 4 "strategies de planning"' +
-      ' (AGGRESSIVE/CONSERVATIVE/BALANCED/MEDIA_FOCUSED) sont egalement une operationnalisation de cette' +
-      ' implementation, pas une formule officielle du jeu (voir tools/SimRunner.js).'
+      ' detail et la justification de chacune).'
+  );
+  lines.push(
+    '* Phase 3.1 v2 (Emergence, Moral & Personnalites Vibrantes) : (1) la Fatigue v1 est desormais scindee en' +
+      ' PHYSICAL_FATIGUE et MENTAL_FATIGUE, et getReadiness() les pondere 60%/40% (valeurs donnees par le spec) ;' +
+      ' (2) le coach-AI n\'assigne plus 4 "strategies de planning" synthetiques (AGGRESSIVE/CONSERVATIVE/' +
+      ' BALANCED/MEDIA_FOCUSED, v1) mais pioche directement dans les probabilites d\'attraction reelles de' +
+      ' l\'archetype (et, pour certains traits, une modulation multiplicative) du combattant — voir' +
+      ' PERSONALITY.ARCHETYPES/TRAITS[*].activityWeights et' +
+      ' engine/PersonalityEngine.js#computeActivityWeights ; contrairement a v1, il n\'y a plus de seuil de' +
+      ' repos force scripte, seul le statut "blesse" bloque l\'entrainement — le surmenage eventuel d\'un' +
+      ' archetype peu enclin au repos est donc un resultat emergent honnete, pas un bug a corriger ; (3) le' +
+      ' Moral (attributes.moral, deja existant depuis Phase 3.0) recoit desormais une derive hebdomadaire vers' +
+      ' MORALE.NEUTRAL_VALUE (MORALE.WEEKLY_DRIFT_TOWARD_NEUTRAL, definie depuis le debut mais jamais appliquee' +
+      ' avant ce test) en plus des sauts immediats sur victoire/defaite (deja geres par' +
+      ' CombatEngine#_processPostMatchRewards) — sa valeur de depart passe de 65 a 50 (NEUTRAL_VALUE) ; (4) la' +
+      ' blessure de Sparring devient causale : le jet n\'a lieu que si la Fatigue Physique du combattant est' +
+      ' deja >= SPARRING.causalInjuryFatigueThreshold (75%) en entrant dans le creneau, contre une chance fixe' +
+      ' inconditionnelle en v1. Le Decision Quality Index est toujours une operationnalisation de cette' +
+      ' implementation (voir tools/SimRunner.js), desormais ventilee par archetype reel plutot que par bucket' +
+      ' synthetique.'
   );
   return lines.join('\n');
 }

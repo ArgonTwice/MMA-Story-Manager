@@ -43,7 +43,7 @@ import { CombatEngine, createSeededRng, FINISH_METHODS } from '../engine/CombatE
 import { advanceWeek } from '../engine/ProgressionEngine.js';
 import { processWeeklyPlan } from '../engine/WeeklyPlanningEngine.js';
 import { generatePersonality } from '../engine/FighterGenerator.js';
-import { PersonalityEngine } from '../engine/PersonalityEngine.js';
+import { PersonalityEngine, computeActivityWeights } from '../engine/PersonalityEngine.js';
 import { RelationshipEngine } from '../engine/RelationshipEngine.js';
 import { StoryEngine } from '../engine/StoryEngine.js';
 import { NarrativeEngine, NARRATIVE_ENGINE_EVENTS } from '../engine/NarrativeEngine.js';
@@ -379,20 +379,28 @@ function createStatsAccumulator() {
   };
 }
 
-/** Phase 3.1 v1 telemetry accumulator: Training Diversity Index, Average Readiness on fight day, and per-planning-style "Decision Quality" (fatigue-overheat exposure) inputs. */
-function createWeeklyPlanningAccumulator() {
-  const activityUsageCount = {};
-  for (const key of Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES)) activityUsageCount[key] = 0;
+function emptyActivityUsageCount() {
+  const usage = {};
+  for (const key of Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES)) usage[key] = 0;
+  return usage;
+}
 
-  const byStyle = {};
-  for (const key of PLANNING_STYLE_KEYS) byStyle[key] = { fighterWeeks: 0, overheatWeeks: 0 };
+/** Phase 3.1 v1/v2 telemetry accumulator: Training Diversity Index, Average Readiness on fight day, Mental vs Physical Fatigue, and per-archetype "Decision Quality"/Activity Distribution inputs. */
+function createWeeklyPlanningAccumulator() {
+  const byArchetype = {};
+  for (const archetype of Object.keys(BALANCE.PERSONALITY.ARCHETYPES)) {
+    byArchetype[archetype] = { fighterWeeks: 0, overheatWeeks: 0, activityUsageCount: emptyActivityUsageCount() };
+  }
 
   return {
-    activityUsageCount,
+    activityUsageCount: emptyActivityUsageCount(),
     totalSlotsResolved: 0,
     readinessOnFightDaySum: 0,
     readinessOnFightDaySamples: 0,
-    byStyle,
+    physicalFatigueSum: 0,
+    mentalFatigueSum: 0,
+    fatigueSamples: 0,
+    byArchetype,
   };
 }
 
@@ -559,53 +567,19 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
 }
 
 /**
- * Phase 3.1 v1's weekly-planning coach AI. Replaces the legacy
- * assignTrainingPlans/TrainingEngine path for this headless simulator (see
- * this file's own header comment on the "coach AI" concept, and
- * engine/WeeklyPlanningEngine.js's doc comment on why the two weekly
- * resolution paths are never both driven for the same fighter/run).
- *
- * Every fighter is deterministically assigned one of PLANNING_STYLE_KEYS
- * from a hash of their (stable) id — not persisted on the Fighter model,
- * since this is purely a SimRunner-side simulation concept, mirroring how
- * this file already treats "coach AI" as its own layer — so the same
- * fighter keeps the same style for their whole simulated career, letting
- * BalanceReporter's Training Diversity/Decision Quality telemetry break
- * results down by style. Coach-AI weighting constants (not gameplay
- * balance) deliberately live here rather than in data/balance.js,
- * mirroring SIM_DEFAULTS.HARD_TRAINING_CHANCE's existing precedent above.
+ * Phase 3.1 v2's weekly-planning coach AI: replaces v1's 4 synthetic,
+ * hash-assigned "planning styles" with the fighter's own REAL
+ * archetype+traits, via engine/PersonalityEngine.js#computeActivityWeights
+ * — "transformer les comportements d'archetypes en probabilites
+ * d'attraction (non-scriptees)" per the spec. Every slot is an independent
+ * weighted-random pick over that fighter's own activity-attraction profile;
+ * there is no scripted fixed sequence and, deliberately, no
+ * archetype-specific forced-rest override like v1 had — letting emergent
+ * behavior (including runaway Fatigue for low-PHYSIO_REST-weight
+ * archetypes) show up honestly in the telemetry rather than being
+ * safety-netted away. The one remaining hard override is a real game-state
+ * constraint, not a personality choice: an injured fighter cannot train.
  */
-const PLANNING_STYLE_KEYS = Object.freeze(['AGGRESSIVE', 'CONSERVATIVE', 'BALANCED', 'MEDIA_FOCUSED']);
-
-const PLANNING_STYLE_WEIGHTS = Object.freeze({
-  AGGRESSIVE: { TECHNIQUE: 3, SPARRING: 5, VIDEO_PREP: 1, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
-  CONSERVATIVE: { TECHNIQUE: 2, SPARRING: 0, VIDEO_PREP: 2, MEDIA_SPONSORS: 1, PHYSIO_REST: 4 },
-  BALANCED: { TECHNIQUE: 3, SPARRING: 2, VIDEO_PREP: 2, MEDIA_SPONSORS: 1, PHYSIO_REST: 2 },
-  MEDIA_FOCUSED: { TECHNIQUE: 1, SPARRING: 1, VIDEO_PREP: 1, MEDIA_SPONSORS: 4, PHYSIO_REST: 2 },
-});
-
-/** Fatigue level at/above which the coach forces PHYSIO_REST for a slot regardless of the style's weighted pick — a safety net on top of each style's own weighting, tighter for cautious styles. */
-const PLANNING_STYLE_FORCED_REST_THRESHOLD = Object.freeze({
-  AGGRESSIVE: 85,
-  CONSERVATIVE: 55,
-  BALANCED: 65,
-  MEDIA_FOCUSED: 65,
-});
-
-/** Deterministic FNV-1a style hash, same shape as ProgressionEngine.js's own (module-private there) — kept as a small local copy rather than imported, matching this codebase's Engine-modules-never-import-each-other convention. */
-function hashToUint32(value) {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-function getPlanningStyle(fighter) {
-  return PLANNING_STYLE_KEYS[hashToUint32(fighter.identity.id) % PLANNING_STYLE_KEYS.length];
-}
-
 function weightedPick(rng, weights) {
   const entries = Object.entries(weights);
   const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
@@ -617,35 +591,33 @@ function weightedPick(rng, weights) {
   return entries[entries.length - 1][0];
 }
 
-/** Sets this week's 3-slot weekly plan for every fighter: PHYSIO_REST-only while injured or over their style's forced-rest Fatigue threshold, otherwise a style-weighted pick per slot. */
+/** Sets this week's 3-slot weekly plan for every fighter: PHYSIO_REST-only while injured, otherwise a per-fighter archetype/trait-weighted pick per slot (see computeActivityWeights). */
 function assignWeeklyPlan(playerState, worldState, rng) {
   const slotCount = BALANCE.WEEKLY_PLANNING.SLOTS_PER_WEEK;
 
   for (const fighter of playerState.roster) {
-    const style = getPlanningStyle(fighter);
     const injured = fighter.isInjured(worldState.currentDay);
+    const weights = injured ? null : computeActivityWeights(fighter);
 
     for (let slot = 0; slot < slotCount; slot += 1) {
-      const activityKey =
-        injured || fighter.attributes.fatigue >= PLANNING_STYLE_FORCED_REST_THRESHOLD[style]
-          ? 'PHYSIO_REST'
-          : weightedPick(rng, PLANNING_STYLE_WEIGHTS[style]);
+      const activityKey = injured ? 'PHYSIO_REST' : weightedPick(rng, weights);
       fighter.setWeeklyPlanSlot(slot, activityKey);
     }
   }
 }
 
-/** Fatigue level at/above which a fighter-week counts as "surmenage massif" for the Decision Quality Index below — this implementation's own chosen definition (Version 1 of the spec dropped the earlier draft's fixed ">70%" framing in favor of a qualitative "sans... surmenage massif" goal). */
+/** Physical Fatigue level at/above which a fighter-week counts as "surmenage massif" for the Decision Quality Index below — this implementation's own chosen definition (the spec frames a qualitative "sans... surmenage massif" goal, not a fixed number). */
 const MASSIVE_OVERHEAT_FATIGUE_THRESHOLD = 90;
 
 /**
- * Folds one week's processWeeklyPlan() report into the run-wide Phase 3.1 v1
- * telemetry: which activities got used (Training Diversity Index) and, per
- * planning style, whether that fighter ended the week at/over the massive-
- * overheat Fatigue threshold (Decision Quality Index — see
- * tools/BalanceReporter.js). Average Readiness on fight day is recorded
- * separately, in bookWeeklyFights, since it's only meaningful the week a
- * fight actually happens.
+ * Folds one week's processWeeklyPlan() report into the run-wide Phase 3.1
+ * v1/v2 telemetry: which activities got used, globally and per archetype
+ * (Training Diversity Index / Archetype Activity Distribution), whether
+ * each fighter ended the week at/over the massive-overheat Physical
+ * Fatigue threshold (Decision Quality Index), and this week's Physical vs
+ * Mental Fatigue snapshot (see tools/BalanceReporter.js). Average
+ * Readiness on fight day is recorded separately, in bookWeeklyFights,
+ * since it's only meaningful the week a fight actually happens.
  */
 function recordWeeklyPlanningTelemetry(stats, playerState, weeklyPlanReport) {
   const wp = stats.weeklyPlanning;
@@ -653,14 +625,21 @@ function recordWeeklyPlanningTelemetry(stats, playerState, weeklyPlanReport) {
   for (const entry of weeklyPlanReport.activityLog) {
     wp.activityUsageCount[entry.activity] += 1;
     wp.totalSlotsResolved += 1;
+
+    const fighter = playerState.getFighter(entry.fighterId);
+    if (fighter) wp.byArchetype[fighter.psychology.personality.archetype].activityUsageCount[entry.activity] += 1;
   }
 
   for (const fighter of playerState.roster) {
-    const style = getPlanningStyle(fighter);
-    wp.byStyle[style].fighterWeeks += 1;
-    if (fighter.attributes.fatigue >= MASSIVE_OVERHEAT_FATIGUE_THRESHOLD) {
-      wp.byStyle[style].overheatWeeks += 1;
+    const archetype = fighter.psychology.personality.archetype;
+    wp.byArchetype[archetype].fighterWeeks += 1;
+    if (fighter.attributes.physicalFatigue >= MASSIVE_OVERHEAT_FATIGUE_THRESHOLD) {
+      wp.byArchetype[archetype].overheatWeeks += 1;
     }
+
+    wp.physicalFatigueSum += fighter.attributes.physicalFatigue;
+    wp.mentalFatigueSum += fighter.attributes.mentalFatigue;
+    wp.fatigueSamples += 1;
   }
 }
 
@@ -966,31 +945,46 @@ function finalizeCombatMetrics(combat) {
   };
 }
 
+function finalizeActivityUsage(activityUsageCount, totalSlotsResolved) {
+  const usage = {};
+  for (const [key, count] of Object.entries(activityUsageCount)) {
+    usage[key] = { count, share: totalSlotsResolved > 0 ? count / totalSlotsResolved : null };
+  }
+  return usage;
+}
+
 /**
- * Phase 3.1 v1 telemetry: Training Diversity Index (per-activity usage
+ * Phase 3.1 v1/v2 telemetry: Training Diversity Index (per-activity usage
  * share — "verifier qu'aucun choix ne depasse 50%"), Average Readiness on
- * fight day, and a Decision Quality Index blending gym-wide solvency with
- * how often each planning style ran a fighter into massive Fatigue
- * overheat (MASSIVE_OVERHEAT_FATIGUE_THRESHOLD) — this implementation's own
- * operationalization of the spec's qualitative "plusieurs strategies...
- * viables sans faillite ni surmenage massif" goal, documented here rather
- * than asserted as an official game-design formula.
+ * fight day, Mental vs Physical Fatigue, Archetype Activity Distribution
+ * ("aucun archetype ne depasse 60% d'utilisation sur une seule activite" —
+ * per-archetype version of the same idea), and a Decision Quality Index
+ * blending gym-wide solvency with how often each archetype ran a fighter
+ * into massive Physical Fatigue overheat (MASSIVE_OVERHEAT_FATIGUE_THRESHOLD)
+ * — this implementation's own operationalization of the spec's qualitative
+ * "plusieurs strategies... viables sans faillite ni surmenage massif" goal,
+ * documented here rather than asserted as an official game-design formula.
  */
 function finalizeWeeklyPlanning(wp, insolvencyRate) {
-  const activityUsage = {};
-  for (const [key, count] of Object.entries(wp.activityUsageCount)) {
-    activityUsage[key] = { count, share: wp.totalSlotsResolved > 0 ? count / wp.totalSlotsResolved : null };
-  }
+  const activityUsage = finalizeActivityUsage(wp.activityUsageCount, wp.totalSlotsResolved);
   const maxActivityShare = Math.max(...Object.values(activityUsage).map((a) => a.share ?? 0));
 
-  const byStyle = {};
+  const byArchetype = {};
   let totalFighterWeeks = 0;
   let totalOverheatWeeks = 0;
-  for (const [style, bucket] of Object.entries(wp.byStyle)) {
-    byStyle[style] = {
+  let maxArchetypeActivityShare = 0;
+  for (const [archetype, bucket] of Object.entries(wp.byArchetype)) {
+    const archetypeSlotsResolved = Object.values(bucket.activityUsageCount).reduce((sum, c) => sum + c, 0);
+    const archetypeActivityUsage = finalizeActivityUsage(bucket.activityUsageCount, archetypeSlotsResolved);
+    const archetypeMaxActivityShare = Math.max(...Object.values(archetypeActivityUsage).map((a) => a.share ?? 0));
+    maxArchetypeActivityShare = Math.max(maxArchetypeActivityShare, archetypeMaxActivityShare);
+
+    byArchetype[archetype] = {
       fighterWeeks: bucket.fighterWeeks,
       overheatWeeks: bucket.overheatWeeks,
       overheatRate: bucket.fighterWeeks > 0 ? bucket.overheatWeeks / bucket.fighterWeeks : null,
+      activityUsage: archetypeActivityUsage,
+      maxActivityShare: archetypeMaxActivityShare,
     };
     totalFighterWeeks += bucket.fighterWeeks;
     totalOverheatWeeks += bucket.overheatWeeks;
@@ -1010,7 +1004,10 @@ function finalizeWeeklyPlanning(wp, insolvencyRate) {
     maxActivityShare,
     averageReadinessOnFightDay:
       wp.readinessOnFightDaySamples > 0 ? wp.readinessOnFightDaySum / wp.readinessOnFightDaySamples : null,
-    byStyle,
+    averagePhysicalFatigue: wp.fatigueSamples > 0 ? wp.physicalFatigueSum / wp.fatigueSamples : null,
+    averageMentalFatigue: wp.fatigueSamples > 0 ? wp.mentalFatigueSum / wp.fatigueSamples : null,
+    byArchetype,
+    maxArchetypeActivityShare,
     overallOverheatRate,
     decisionQualityIndex,
   };
