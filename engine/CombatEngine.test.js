@@ -246,7 +246,7 @@ test('combatMetrics telemetry: a fighter kept entirely on STRIKING never accumul
   }
 });
 
-test('combatMetrics telemetry: a fighter kept entirely on GROUND logs one takedown/submission attempt per round it survives, faithfully at a 100% success/0% defense rate', () => {
+test('combatMetrics telemetry: a fighter kept entirely on GROUND only reaches the submission roll on rounds the takedown itself actually landed (Test A3 contest)', () => {
   const engine = new CombatEngine({ rng: createSeededRng(11) });
   const a = makeFighter('Grappler A', 40);
   const b = makeFighter('Grappler B', 40);
@@ -261,12 +261,11 @@ test('combatMetrics telemetry: a fighter kept entirely on GROUND logs one takedo
     assert.equal(m.groundRounds, result.round);
     assert.equal(m.standingRounds, 0);
     assert.equal(m.takedownAttempts, result.round);
-    assert.equal(m.takedownSuccess, m.takedownAttempts, 'no takedown contest exists yet, so success always matches attempts');
-    assert.equal(m.takedownDefended, 0);
-    assert.equal(m.submissionAttempts, result.round);
+    assert.ok(m.takedownSuccess <= m.takedownAttempts, 'a real contest means success can no longer exceed attempts, and need not equal them');
+    // Submission is only ever attempted on a landed takedown.
+    assert.equal(m.submissionAttempts, m.takedownSuccess);
     assert.ok(m.submissionSuccess <= m.submissionAttempts);
-    assert.ok(m.groundDamageDealt > 0 || result.round === 0);
-    assert.ok(m.judgePointsFromGroundControl > 0);
+    assert.ok(m.judgePointsFromGroundControl >= 0);
   }
 
   // Every failed submission attempt by one corner is a counted counter
@@ -276,6 +275,14 @@ test('combatMetrics telemetry: a fighter kept entirely on GROUND logs one takedo
   const failedSubsB = result.combatMetrics.B.submissionAttempts - result.combatMetrics.B.submissionSuccess;
   assert.equal(result.combatMetrics.B.countersTriggered, failedSubsA);
   assert.equal(result.combatMetrics.A.countersTriggered, failedSubsB);
+
+  // Every failed takedown by one corner is real defense credit for the
+  // other, and every landed one adds up with the failed count to the
+  // total attempts (Test A3: no more "always succeeds, defense always 0").
+  const failedTdA = result.combatMetrics.A.takedownAttempts - result.combatMetrics.A.takedownSuccess;
+  const failedTdB = result.combatMetrics.B.takedownAttempts - result.combatMetrics.B.takedownSuccess;
+  assert.equal(result.combatMetrics.B.takedownDefended, failedTdA);
+  assert.equal(result.combatMetrics.A.takedownDefended, failedTdB);
 });
 
 test('combatMetrics telemetry is also mirrored onto runtimeState.lastCombatMetrics when a runtimeState is provided', () => {
@@ -362,4 +369,116 @@ test('styleIdentityScores is null for a style with no distance affinity (Freesty
   const result = engine.simulateFullMatch();
 
   assert.equal(result.styleIdentityScores.A, null);
+});
+
+// ---- Test A3: "Risque Decisionnel & Sprawl" (real takedown contest) -------
+
+/**
+ * seed=1 with this exact sol(0) vs sol(100) mismatch is empirically
+ * confirmed (see the test suite's own convention) to fail A's very first
+ * takedown attempt against B — the deterministic scenario every A3 test
+ * below builds on.
+ */
+function makeMismatchedGrapplers() {
+  const wrestler = makeFighter('Whiffing Wrestler', 40, { attributes: { skills: { sol: 0 } } });
+  const sprawler = makeFighter('Elite Sprawler', 40, { attributes: { skills: { sol: 100 } } });
+  return { wrestler, sprawler };
+}
+
+/**
+ * Drives the FSM forward exactly one simulated round at a time, regardless
+ * of which phase it currently sits in (INIT/WEIGH_IN/INTRO/ROUND_START all
+ * precede the actual ROUND_SIMULATION step; CORNER_PAUSE/ROUND_START repeat
+ * that preamble for every round after the first) — only
+ * _processRoundSimulation's return value carries a `log` key, so that's
+ * the unambiguous signal to stop on.
+ * @param {CombatEngine} engine
+ * @returns {Object} The ROUND_SIMULATION step's own return value.
+ */
+function stepUntilRoundSimulated(engine) {
+  let stepResult;
+  do {
+    stepResult = engine.executeNextStep();
+  } while (!('log' in stepResult) && engine.state !== COMBAT_STATES.FINISHED);
+  return stepResult;
+}
+
+test('A3.1: a failed/defended takedown burns extra stamina and loses momentum for the wrestler, and grants zero offense that round', () => {
+  const { wrestler, sprawler } = makeMismatchedGrapplers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+
+  const staminaBefore = engine.context.live.A.stamina;
+  const momentumBefore = engine.context.live.A.momentum;
+  const { log } = stepUntilRoundSimulated(engine); // round 1
+
+  assert.equal(engine.context.combatMetrics.A.takedownAttempts, 1);
+  assert.equal(engine.context.combatMetrics.A.takedownSuccess, 0, 'seed=1 with this skill gap is confirmed to whiff round 1');
+  assert.equal(log.damageDealt.A, 0, 'a defended takedown produces no offense that round');
+
+  const risk = BALANCE.COMBAT.TAKEDOWN_RISK;
+  const expectedStaminaCost = BALANCE.COMBAT.STAMINA.COST_PER_TAKEDOWN_ATTEMPT * 0.7 /* CONSERVATIVE staminaCostMultiplier */ + risk.FAILURE_STAMINA_PENALTY;
+  assert.ok(Math.abs(staminaBefore - engine.context.live.A.stamina - expectedStaminaCost) < 1e-9);
+  assert.equal(momentumBefore - engine.context.live.A.momentum, risk.FAILURE_MOMENTUM_PENALTY);
+});
+
+test('A3.2: stuffing a takedown grants the defender a one-round counter window (accuracy + damage bonus), consumed and cleared by their very next offense', () => {
+  const { wrestler, sprawler } = makeMismatchedGrapplers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+
+  stepUntilRoundSimulated(engine); // round 1: A's takedown fails against B
+
+  assert.equal(engine.context.live.B.counterWindowActive, true, 'B should hold an active counter window after stuffing round 1');
+  assert.equal(engine.context.combatMetrics.B.counterWindowsGranted, 1);
+
+  stepUntilRoundSimulated(engine); // round 2 — B's counter window is consumed here
+
+  assert.equal(engine.context.live.B.counterWindowActive, false, 'the counter window must be consumed/cleared after exactly one round');
+  assert.equal(engine.context.combatMetrics.B.counterWindowsUsed, 1);
+});
+
+test('A3.3: each stuffed takedown against the same defender stacks their sprawl-defense bonus cumulatively, up to the documented cap', () => {
+  const { wrestler, sprawler } = makeMismatchedGrapplers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const risk = BALANCE.COMBAT.TAKEDOWN_RISK;
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+
+  let previousBonus = 0;
+  for (let round = 0; round < 3 && engine.state !== COMBAT_STATES.FINISHED; round += 1) {
+    stepUntilRoundSimulated(engine);
+    const bonus = engine.context.live.B.takedownDefenseBonus;
+    assert.ok(bonus >= previousBonus, 'the sprawl bonus must never decrease mid-match');
+    assert.ok(bonus <= risk.SPRAWL_DEFENSE_BONUS_MAX, 'the stacking bonus must never exceed its documented safety ceiling');
+    previousBonus = bonus;
+  }
+
+  assert.ok(previousBonus > 0, 'expected at least one stuffed takedown to have stacked a sprawl bonus over 3 rounds');
+});
+
+test('final result payload carries A3 telemetry: takedownDefended is real data, and finalTakedownDefenseBonus reflects the ending stack', () => {
+  const { wrestler, sprawler } = makeMismatchedGrapplers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  assert.ok(result.combatMetrics.B.takedownDefended > 0, 'B should have real, non-zero defense credit now that a contest exists');
+  assert.ok(result.combatMetrics.B.finalTakedownDefenseBonus >= 0);
+  assert.ok(result.combatMetrics.B.finalTakedownDefenseBonus <= BALANCE.COMBAT.TAKEDOWN_RISK.SPRAWL_DEFENSE_BONUS_MAX);
+  assert.equal(
+    result.combatMetrics.A.momentumLost,
+    (result.combatMetrics.A.takedownAttempts - result.combatMetrics.A.takedownSuccess) * BALANCE.COMBAT.TAKEDOWN_RISK.FAILURE_MOMENTUM_PENALTY
+  );
 });

@@ -85,57 +85,70 @@ test('formatReport renders every required section as plain text without throwing
   }
 });
 
-test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.30/v0.31 entries are internally consistent', () => {
+test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.31/v0.32 entries are internally consistent', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 
   assert.ok(report.includes('v0.30'));
   assert.ok(report.includes('v0.31'));
   assert.ok(report.includes('v0.32'));
+  assert.ok(report.includes('v0.33'));
   assert.ok(report.includes('Baseline'));
   assert.ok(report.includes('Test A1'));
   assert.ok(report.includes('Test A2'));
-  assert.ok(report.includes('TEST A2 — CONDITIONS DE VALIDATION'));
+  assert.ok(report.includes('Test A3'));
+  assert.ok(report.includes('TEST A3 — COMPARATIF DES PREDICTIONS'));
 
   // Fun Detector's delta is reported against the immediately preceding
-  // entry (v0.31, funScore=69); Meta Health Index's delta is reported
+  // entry (v0.32, funScore=69); Meta Health Index's delta is reported
   // against the fixed baseline (v0.30, metaHealthIndex=86) — see
   // renderVersionHistorySection.
   const funDelta = result.metaHealth.funScore - 69;
   const metaDelta = result.metaHealth.overallIndex - 86;
   const formatSigned = (n) => (n > 0 ? `+${n}` : `${n}`);
-  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.31`));
+  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.32`));
   assert.ok(report.includes(`${formatSigned(metaDelta)} vs baseline v0.30`));
 });
 
-test('Test A2 validation checklist reports exactly 4 conditions, each with a PASS or FAIL verdict and a "Bilan : n / 4" summary', () => {
+test('Test A3 prediction comparison reports exactly 4 predictions, each marked "DANS LA CIBLE" or "HORS CIBLE", with a matching "Bilan : n / 4" summary', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 
   for (const label of [
     '1. Winrate Grappling',
-    '2. Meta Health Index',
-    '3. Winrate min par style',
-    '4. Victoires Grappling par soumission',
+    '2. Winrate Freestyle',
+    '3. Meta Health Index',
+    '4. Fun Detector (delta vs v0.32)',
   ]) {
-    assert.ok(report.includes(label), `expected the validation checklist to include "${label}"`);
+    assert.ok(report.includes(label), `expected the prediction checklist to include "${label}"`);
   }
 
-  const verdictCount = (report.match(/\bPASS\b/g) ?? []).length + (report.match(/\bFAIL\b/g) ?? []).length;
-  assert.equal(verdictCount, 4, 'expected exactly 4 PASS/FAIL verdicts (one per condition)');
+  const verdictCount = (report.match(/DANS LA CIBLE/g) ?? []).length + (report.match(/HORS CIBLE/g) ?? []).length;
+  assert.equal(verdictCount, 4, 'expected exactly 4 DANS LA CIBLE/HORS CIBLE verdicts (one per prediction)');
 
-  assert.ok(!report.includes('NaN'), 'the validation checklist should never render NaN (regression: worst-style reduce had a mismatched accumulator shape)');
-  const worstStyleLine = report.split('\n').find((line) => line.includes('Winrate min par style'));
-  const actualWorst = Object.entries(result.styles).reduce(
-    (min, [style, s]) => (s.winRate !== null && s.winRate < min[1] ? [style, s.winRate] : min),
-    [null, Infinity]
-  );
-  assert.ok(worstStyleLine.includes(actualWorst[0]), `expected the worst-style line to name ${actualWorst[0]}, got: ${worstStyleLine}`);
+  assert.ok(!report.includes('NaN'), 'the prediction checklist should never render NaN');
 
-  const bilanMatch = report.match(/Bilan : (\d) \/ 4 conditions validees\./);
-  assert.ok(bilanMatch, 'expected a "Bilan : n / 4 conditions validees." summary line');
-  const passCount = (report.match(/\bPASS\b/g) ?? []).length;
+  const bilanMatch = report.match(/Bilan : (\d) \/ 4 predictions confirmees\./);
+  assert.ok(bilanMatch, 'expected a "Bilan : n / 4 predictions confirmees." summary line');
+  const passCount = (report.match(/DANS LA CIBLE/g) ?? []).length;
   assert.equal(Number(bilanMatch[1]), passCount);
+});
+
+test('Risk / Reward Index reports all 6 action buckets, with Risk shown as N/A only for buckets with no discrete failure', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const report = formatReport(result);
+
+  assert.ok(report.includes('RISK / REWARD INDEX'));
+  for (const label of ['Frappes Tete (Debout)', 'Frappes Corps (Debout)', 'Coups de Jambes (Debout)', 'Clinch', 'Takedown / Controle Sol', 'Tentative de Soumission']) {
+    assert.ok(report.includes(label), `expected the Risk/Reward table to include "${label}"`);
+  }
+
+  const a = result.combat.actionMetrics;
+  for (const key of ['HEAD_STRIKE', 'BODY_STRIKE', 'LEG_STRIKE', 'CLINCH']) {
+    assert.equal(a[key].failures, 0, `${key} should never have a discrete failure`);
+  }
+  assert.ok(a.TAKEDOWN.failures >= 0);
+  assert.equal(a.TAKEDOWN.failures, a.TAKEDOWN.attempts - a.TAKEDOWN.successes);
 });
 
 test('Average Round EV Ratio is reported and, when both EVs are known, the printed ratio matches EV Sol / EV Debout', () => {
@@ -163,14 +176,17 @@ test('combat telemetry is faithfully aggregated from every fight\'s CombatEngine
   assert.ok(result.fights.total > 0, 'sanity: this run should have produced fights to aggregate');
   assert.equal(c.fightsWithMetrics, result.fights.total, 'one combatMetrics fold per simulated fight');
 
-  // In the current CombatEngine, choosing GROUND distance always attempts
-  // (and, since there's no contest, always "succeeds" at) exactly one
-  // takedown and one submission per round — see CombatEngine's
-  // _recordFighterCombatMetrics and this run's own methodology notes.
+  // Test A3 ("Risque Decisionnel & Sprawl"): choosing GROUND distance
+  // always *attempts* a takedown, but it's now a real contest (see
+  // CombatEngine#_computeTakedownChance) — success can no longer be
+  // assumed to equal attempts, and a real, non-zero takedownDefended
+  // exists. A submission is only ever attempted on a *landed* takedown,
+  // so submissionAttempts now tracks takedownSuccess, not groundRounds.
   assert.equal(c.takedownAttempts, c.groundRounds);
-  assert.equal(c.takedownSuccess, c.takedownAttempts);
-  assert.equal(c.takedownDefended, 0, 'no takedown-defense mechanic exists yet');
-  assert.equal(c.submissionAttempts, c.groundRounds);
+  assert.ok(c.takedownSuccess <= c.takedownAttempts);
+  assert.equal(c.takedownDefended, c.takedownAttempts - c.takedownSuccess, 'every non-landed attempt across the run is defended by the opponent');
+  assert.ok(c.takedownDefended > 0, 'sanity: a real contest should produce at least some defended attempts over 60 seasons');
+  assert.equal(c.submissionAttempts, c.takedownSuccess);
   assert.ok(c.submissionSuccess <= c.submissionAttempts);
   assert.equal(
     c.countersTriggered,

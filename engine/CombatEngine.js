@@ -503,6 +503,7 @@ export class CombatEngine {
     const offenseB = this._computeRoundOffense('B', 'A');
 
     this._recordCombatMetrics(offenseA, offenseB);
+    this._applyTakedownRiskEffects(offenseA, offenseB);
 
     // Both fighters' damage is computed from pre-round stats above, then
     // applied together, so neither fighter gets an order-of-evaluation edge.
@@ -577,6 +578,12 @@ export class CombatEngine {
     const finish = c.finish;
     const isDraw = finish.method === FINISH_METHODS.DRAW;
     const byFinish = !DECISION_METHODS.includes(finish.method);
+
+    // Test A3: snapshot each corner's ending cumulative sprawl-defense
+    // bonus (see BALANCE.COMBAT.TAKEDOWN_RISK.SPRAWL_DEFENSE_BONUS_PER_STUFF) —
+    // a match-end value, unlike the round-by-round sums above it.
+    c.combatMetrics.A.finalTakedownDefenseBonus = c.live.A.takedownDefenseBonus;
+    c.combatMetrics.B.finalTakedownDefenseBonus = c.live.B.takedownDefenseBonus;
 
     const titleOnTheLine = c.isTitle;
     const titleWinnerKey = titleOnTheLine && !isDraw ? finish.winnerKey : null;
@@ -707,6 +714,17 @@ export class CombatEngine {
       stamina: BALANCE.COMBAT.STAMINA.MAX,
       forme: fighter.attributes.forme,
       tkoStreak: 0,
+      // Test A3 ("Risque Decisionnel & Sprawl") fight-local state — reset
+      // every match, never persisted back to the Fighter model.
+      momentum: BALANCE.MOMENTUM.STARTING_VALUE,
+      // True for exactly one round: set on the defender when the opponent's
+      // takedown attempt against them fails, consumed (and cleared) the
+      // next time this fighter's own offense is computed. See A3.2.
+      counterWindowActive: false,
+      // Cumulative, fight-long defense bonus stacked one
+      // SPRAWL_DEFENSE_BONUS_PER_STUFF at a time for every takedown this
+      // fighter stuffs — never resets mid-match (anti-spam). See A3.3.
+      takedownDefenseBonus: 0,
     };
   }
 
@@ -796,10 +814,36 @@ export class CombatEngine {
   }
 
   /**
+   * Test A3: the takedown *contest* a GROUND gameplan choice now has to
+   * win, mirroring _computeHitChance's shape exactly but over `sol`
+   * (wrestling/positional skill, symmetric for both offense and defense —
+   * the same DISTANCE_SKILL_WEIGHTS.GROUND entry already leans on it)
+   * instead of `intelligence`. `defenseBonus` is the defender's A3.3
+   * cumulative sprawl bonus, subtracted after the base chance is computed
+   * so it can push an already-low chance down further without being
+   * double-clamped away.
+   * @param {Fighter} attacker
+   * @param {Fighter} defender
+   * @param {number} [defenseBonus=0]
+   * @returns {number}
+   */
+  _computeTakedownChance(attacker, defender, defenseBonus = 0) {
+    const acc = BALANCE.COMBAT.ACCURACY;
+    const raw =
+      acc.TAKEDOWN_BASE_SUCCESS_CHANCE +
+      acc.SKILL_DELTA_CHANCE_SCALING * (attacker.attributes.skills.sol - defender.attributes.skills.sol);
+    return clamp(raw - defenseBonus, acc.MIN_HIT_CHANCE, acc.MAX_HIT_CHANCE);
+  }
+
+  /**
    * Resolves one fighter's offensive output for the current round: raw
-   * damage, stamina cost, KO-chance influence, and submission attempt/result.
-   * Reads only pre-round state so A and B can be computed independently and
-   * applied simultaneously.
+   * damage, stamina cost, KO-chance influence, and takedown/submission
+   * attempt/result. Reads only pre-round state so A and B can be computed
+   * independently and applied simultaneously — it never mutates `c.live`
+   * itself; side effects it *decides* (momentum loss, counter window,
+   * sprawl bonus — see Test A3) are returned as data and actually applied
+   * by _applyTakedownRiskEffects, same "compute both, then apply both"
+   * shape _processRoundSimulation already uses for damage/stamina.
    *
    * @param {('A'|'B')} attackerKey
    * @param {('A'|'B')} defenderKey
@@ -810,6 +854,7 @@ export class CombatEngine {
     const attacker = c.fighters[attackerKey];
     const defender = c.fighters[defenderKey];
     const attackerLive = c.live[attackerKey];
+    const defenderLive = c.live[defenderKey];
     const plan = c.gameplans[attackerKey];
 
     const skillWeights = BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS[plan.distance];
@@ -824,6 +869,7 @@ export class CombatEngine {
 
     const tempoMods = BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS[plan.tempo];
     const formMultiplier = attackerLive.forme / BALANCE.FORM.MAX;
+    const momentumMultiplier = attackerLive.momentum / BALANCE.MOMENTUM.MAX;
     const moraleMultiplier = this._computeMoraleMultiplier(attacker.attributes.moral);
     const staminaMultiplier =
       attackerLive.stamina <= BALANCE.COMBAT.STAMINA.LOW_STAMINA_THRESHOLD
@@ -831,7 +877,35 @@ export class CombatEngine {
         : 1;
     const perkDamageMultiplier = this._getPerkMultiplier(attacker, 'damageMultiplier');
     const varianceMultiplier = this._rollVarianceMultiplier();
-    const hitChance = this._computeHitChance(attacker, defender);
+
+    // A3.2 Counter Window: a bonus earned *last* round (by stuffing the
+    // opponent's takedown) and consumed here, on this fighter's very next
+    // offense — regardless of what they choose to do with it.
+    const counterWindowActive = attackerLive.counterWindowActive === true;
+    const risk = BALANCE.COMBAT.TAKEDOWN_RISK;
+    const counterAccuracyMultiplier = counterWindowActive ? 1 + risk.COUNTER_WINDOW_ACCURACY_BONUS : 1;
+    const counterDamageMultiplier = counterWindowActive ? 1 + risk.COUNTER_WINDOW_DAMAGE_BONUS : 1;
+
+    const hitChance = clamp(
+      this._computeHitChance(attacker, defender) * counterAccuracyMultiplier,
+      BALANCE.COMBAT.ACCURACY.MIN_HIT_CHANCE,
+      BALANCE.COMBAT.ACCURACY.MAX_HIT_CHANCE
+    );
+
+    // A3.1/A3.3: a GROUND gameplan is now a real takedown *contest* (see
+    // _computeTakedownChance) instead of landing unopposed — only a
+    // landed takedown reaches the submission-attempt roll below; a
+    // defended one produces no offense this round at all (see rawDamage)
+    // and instead triggers the penalties/bonuses _applyTakedownRiskEffects
+    // hands out to both corners.
+    let takedownAttempted = false;
+    let takedownSuccess = false;
+    if (plan.distance === 'GROUND') {
+      takedownAttempted = true;
+      const chance = this._computeTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
+      takedownSuccess = this.rng() < chance;
+    }
+    const takedownFailed = takedownAttempted && !takedownSuccess;
 
     const output =
       offenseRaw *
@@ -839,6 +913,7 @@ export class CombatEngine {
       styleTargetMultiplier *
       tempoMods.outputMultiplier *
       formMultiplier *
+      momentumMultiplier *
       moraleMultiplier *
       staminaMultiplier *
       perkDamageMultiplier *
@@ -850,24 +925,28 @@ export class CombatEngine {
     const advantageMultiplier = 1 + overallGap * BALANCE.COMBAT.DAMAGE.ATTRIBUTE_ADVANTAGE_SCALING;
     const defenderDamageTakenMultiplier = this._getPerkMultiplier(defender, 'damageTakenMultiplier');
 
-    const rawDamage = Math.max(
-      0,
-      output *
-        BALANCE.COMBAT.GAMEPLAN.ROUND_DAMAGE_SCALING *
-        targetEffects.damageMultiplier *
-        advantageMultiplier *
-        tempoMods.damageTakenMultiplier *
-        defenderDamageTakenMultiplier
-    );
+    const rawDamage = takedownFailed
+      ? 0
+      : Math.max(
+          0,
+          output *
+            BALANCE.COMBAT.GAMEPLAN.ROUND_DAMAGE_SCALING *
+            targetEffects.damageMultiplier *
+            advantageMultiplier *
+            tempoMods.damageTakenMultiplier *
+            defenderDamageTakenMultiplier *
+            counterDamageMultiplier
+        );
 
     const staminaCostKey = BALANCE.COMBAT.GAMEPLAN.DISTANCE_STAMINA_COST_KEY[plan.distance];
     const staminaCostBase = BALANCE.COMBAT.STAMINA[staminaCostKey];
     const perkStaminaMultiplier = this._getPerkMultiplier(attacker, 'staminaCostMultiplier');
-    const staminaCost = staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier;
+    const failureStaminaPenalty = takedownFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
+    const staminaCost = staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier + failureStaminaPenalty;
 
     let submissionAttempted = false;
     let submissionSuccess = false;
-    if (plan.distance === 'GROUND') {
+    if (takedownAttempted && takedownSuccess) {
       submissionAttempted = true;
       const sub = BALANCE.COMBAT.SUBMISSIONS;
       const attackerGrappling = (attacker.attributes.skills.sol + attacker.attributes.skills.soumission) / 2;
@@ -895,6 +974,12 @@ export class CombatEngine {
       koChanceMultiplier: targetEffects.koChanceMultiplier * perkKoMultiplier,
       submissionAttempted,
       submissionSuccess,
+      takedownAttempted,
+      takedownSuccess,
+      counterWindowConsumed: counterWindowActive,
+      momentumDelta: takedownFailed ? -risk.FAILURE_MOMENTUM_PENALTY : 0,
+      grantsCounterWindowToDefender: takedownFailed,
+      grantsSprawlBonusToDefender: takedownFailed,
     };
   }
 
@@ -915,6 +1000,50 @@ export class CombatEngine {
     }
 
     c.live[targetKey].health = clamp(c.live[targetKey].health - offense.rawDamage, 0, BALANCE.COMBAT.HEALTH.MAX);
+  }
+
+  /**
+   * Applies Test A3's takedown-risk side effects, decided (but not
+   * mutated) by _computeRoundOffense for both corners: momentum lost by a
+   * wrestler whose takedown just failed, and the counter-window/sprawl-
+   * bonus a defender earns from stuffing one. Kept as its own "apply"
+   * step — mirroring _applyDamage — so _computeRoundOffense stays a pure
+   * read of pre-round state for both fighters.
+   * @param {Object} offenseA
+   * @param {Object} offenseB
+   */
+  _applyTakedownRiskEffects(offenseA, offenseB) {
+    const c = this.context;
+    const risk = BALANCE.COMBAT.TAKEDOWN_RISK;
+    const pairs = [
+      ['A', offenseA, 'B'],
+      ['B', offenseB, 'A'],
+    ];
+
+    for (const [key, offense, opponentKey] of pairs) {
+      const live = c.live[key];
+
+      // The counter window (if any) this fighter held coming into the
+      // round was already folded into their hitChance/rawDamage above —
+      // clear it here so it's never silently reused next round.
+      if (offense.counterWindowConsumed) live.counterWindowActive = false;
+
+      if (offense.momentumDelta !== 0) {
+        live.momentum = clamp(live.momentum + offense.momentumDelta, BALANCE.MOMENTUM.MIN, BALANCE.MOMENTUM.MAX);
+      }
+
+      if (offense.grantsCounterWindowToDefender) {
+        c.live[opponentKey].counterWindowActive = true;
+      }
+      if (offense.grantsSprawlBonusToDefender) {
+        const defenderLive = c.live[opponentKey];
+        defenderLive.takedownDefenseBonus = clamp(
+          defenderLive.takedownDefenseBonus + risk.SPRAWL_DEFENSE_BONUS_PER_STUFF,
+          0,
+          risk.SPRAWL_DEFENSE_BONUS_MAX
+        );
+      }
+    }
   }
 
   /**
@@ -987,20 +1116,26 @@ export class CombatEngine {
    * Splits one fighter's round offense into the two families of points a
    * judge's composite score is actually made of: damage (effective strikes
    * proxy) versus everything ground/control-derived (takedowns, control
-   * time, submission attempts — all of which key off `distance` alone, not
-   * off any contested roll). Kept as its own step — rather than folding
+   * time, submission attempts). Kept as its own step — rather than folding
    * straight into a single total — so combat-metrics telemetry (see
    * _recordFighterCombatMetrics) can report exactly how much of a fighter's
    * scoring came from ground/control versus damage, without recomputing or
    * duplicating this formula.
+   *
+   * Test A3: a GROUND round only earns takedown/control-time credit if the
+   * takedown actually landed (offenseSelf.takedownSuccess) — a defended
+   * attempt scores nothing here, same as it deals no damage. CLINCH still
+   * earns control-time credit unconditionally; that distance has no
+   * contest of its own and A3 doesn't touch it.
    * @param {Object} offenseSelf
    * @returns {{ damagePoints: number, groundControlPoints: number }}
    */
   _computeScoreBreakdown(offenseSelf) {
     const scoring = BALANCE.COMBAT.SCORING;
     const scale = scoring.NON_STRIKE_METRIC_SCALE;
-    const takedowns = offenseSelf.distance === 'GROUND' ? 1 : 0;
-    const controlTime = offenseSelf.distance !== 'STRIKING' ? 1 : 0;
+    const takedownLanded = offenseSelf.distance === 'GROUND' && offenseSelf.takedownSuccess;
+    const takedowns = takedownLanded ? 1 : 0;
+    const controlTime = offenseSelf.distance === 'CLINCH' || takedownLanded ? 1 : 0;
     const submissionAttempts = offenseSelf.submissionAttempted ? 1 : 0;
 
     return {
@@ -1029,7 +1164,24 @@ export class CombatEngine {
    *   ACTION_BUCKET_KEYS / _resolveActionBucket).
    */
   _createEmptyActionMetric() {
-    return { attempts: 0, successes: 0, totalDamage: 0, totalScorePoints: 0, totalControlRounds: 0 };
+    return {
+      attempts: 0,
+      successes: 0,
+      totalDamage: 0,
+      totalScorePoints: 0,
+      totalControlRounds: 0,
+      // Test A3 Risk/Reward telemetry: summed across every attempt of this
+      // bucket, not just failures — BalanceReporter divides by (attempts -
+      // successes) to get the average penalty conditioned on failure, which
+      // is only meaningful for TAKEDOWN/SUBMISSION_ATTEMPT (the only buckets
+      // with a real pass/fail roll); stamina/momentum penalties are only
+      // ever non-zero for TAKEDOWN, since only a failed takedown triggers
+      // them (SUBMISSION_ATTEMPT never carries one — see
+      // _recordFighterCombatMetrics).
+      totalDamageTaken: 0,
+      totalStaminaPenalty: 0,
+      totalMomentumPenalty: 0,
+    };
   }
 
   /**
@@ -1062,10 +1214,9 @@ export class CombatEngine {
     return {
       takedownAttempts: 0,
       takedownSuccess: 0,
-      // Always 0 today: CombatEngine has no takedown *contest* yet — a
-      // fighter choosing GROUND distance always gets there unopposed (see
-      // _recordFighterCombatMetrics below). Kept in the shape so reports
-      // can surface that gap explicitly instead of silently omitting it.
+      // Test A3: real data since the takedown contest was wired up (see
+      // _computeTakedownChance) — every attempt the OPPONENT stuffed
+      // against this fighter increments their own takedownDefended.
       takedownDefended: 0,
       standingRounds: 0,
       clinchRounds: 0,
@@ -1077,6 +1228,13 @@ export class CombatEngine {
       countersTriggered: 0,
       judgePointsFromDamage: 0,
       judgePointsFromGroundControl: 0,
+      // Test A3 ("Risque Decisionnel & Sprawl") telemetry.
+      momentumLost: 0,
+      counterWindowsGranted: 0,
+      counterWindowsUsed: 0,
+      sprawlStacksEarned: 0,
+      /** Snapshot of live.takedownDefenseBonus at match end (set once, in _processPostMatchRewards) — not summed round-by-round like the others above. */
+      finalTakedownDefenseBonus: 0,
       /**
        * EV-per-action-type telemetry. Buckets are the finest-grained
        * distinction CombatEngine actually resolves (gameplan target x
@@ -1136,16 +1294,24 @@ export class CombatEngine {
    * @param {number} damage
    * @param {number} scorePoints
    * @param {boolean} success - Whether this attempt counts as a "success"
-   *   (always true for buckets with no discrete pass/fail roll — see
-   *   _createEmptyCombatMetrics — only SUBMISSION_ATTEMPT ever passes false).
+   *   (always true for buckets with no discrete pass/fail roll: HEAD_STRIKE,
+   *   BODY_STRIKE, LEG_STRIKE, CLINCH. TAKEDOWN and SUBMISSION_ATTEMPT both
+   *   carry a real roll — Test A3's takedown contest and the pre-existing
+   *   submission roll, respectively — so both can pass false.)
    * @param {boolean} wonControl
+   * @param {number} damageTaken - Opponent's rawDamage the same round (Test A3 Risk telemetry).
+   * @param {number} staminaPenalty - A3.1 failure penalty, 0 outside a failed TAKEDOWN.
+   * @param {number} momentumPenalty - A3.1 failure penalty, 0 outside a failed TAKEDOWN.
    */
-  _recordActionMetric(bucket, damage, scorePoints, success, wonControl) {
+  _recordActionMetric(bucket, damage, scorePoints, success, wonControl, damageTaken, staminaPenalty, momentumPenalty) {
     bucket.attempts += 1;
     if (success) bucket.successes += 1;
     bucket.totalDamage += damage;
     bucket.totalScorePoints += scorePoints;
     if (wonControl) bucket.totalControlRounds += 1;
+    bucket.totalDamageTaken += damageTaken;
+    bucket.totalStaminaPenalty += staminaPenalty;
+    bucket.totalMomentumPenalty += momentumPenalty;
   }
 
   /**
@@ -1158,25 +1324,43 @@ export class CombatEngine {
    */
   _recordCombatMetrics(offenseA, offenseB) {
     const c = this.context;
-    this._recordFighterCombatMetrics('A', offenseA);
-    this._recordFighterCombatMetrics('B', offenseB);
+    this._recordFighterCombatMetrics('A', offenseA, offenseB);
+    this._recordFighterCombatMetrics('B', offenseB, offenseA);
 
     // A failed submission attempt is the only discrete pass/fail roll this
-    // engine currently models on offense (strikes resolve through a
-    // continuous hit-chance multiplier, never a binary hit/miss) — so it's
-    // the only faithful "counter opportunity" signal available today. This
-    // only *counts* the opportunity; CombatEngine does not yet apply any
-    // actual counter-damage/counter-punish effect for it.
+    // engine models on offense besides Test A3's takedown contest (strikes
+    // resolve through a continuous hit-chance multiplier, never a binary
+    // hit/miss) — tracked separately from A3's real counter-window
+    // mechanic below. This only *counts* the opportunity; CombatEngine
+    // does not resolve any counter-damage/counter-punish effect for it.
     if (offenseA.submissionAttempted && !offenseA.submissionSuccess) c.combatMetrics.B.countersTriggered += 1;
     if (offenseB.submissionAttempted && !offenseB.submissionSuccess) c.combatMetrics.A.countersTriggered += 1;
+
+    // Test A3: the defender of a failed takedown earns the real
+    // takedownDefended count this telemetry always reported as 0 before
+    // the contest existed, plus a tally of the counter window/sprawl
+    // stack they were granted (see _applyTakedownRiskEffects for where
+    // those actually get applied to live state).
+    if (offenseA.takedownAttempted && !offenseA.takedownSuccess) {
+      c.combatMetrics.B.takedownDefended += 1;
+      c.combatMetrics.B.counterWindowsGranted += 1;
+      c.combatMetrics.B.sprawlStacksEarned += 1;
+    }
+    if (offenseB.takedownAttempted && !offenseB.takedownSuccess) {
+      c.combatMetrics.A.takedownDefended += 1;
+      c.combatMetrics.A.counterWindowsGranted += 1;
+      c.combatMetrics.A.sprawlStacksEarned += 1;
+    }
   }
 
   /**
    * @param {('A'|'B')} key
    * @param {Object} offense - This fighter's own _computeRoundOffense() output for the round.
+   * @param {Object} opponentOffense - The opponent's same-round output (Test A3 Risk telemetry needs same-round damage taken).
    */
-  _recordFighterCombatMetrics(key, offense) {
+  _recordFighterCombatMetrics(key, offense, opponentOffense) {
     const metrics = this.context.combatMetrics[key];
+    const risk = BALANCE.COMBAT.TAKEDOWN_RISK;
 
     if (offense.distance === 'STRIKING') {
       metrics.standingRounds += 1;
@@ -1187,7 +1371,7 @@ export class CombatEngine {
       metrics.groundRounds += 1;
       metrics.groundDamageDealt += offense.rawDamage;
       metrics.takedownAttempts += 1;
-      metrics.takedownSuccess += 1;
+      if (offense.takedownSuccess) metrics.takedownSuccess += 1;
     }
 
     if (offense.submissionAttempted) {
@@ -1200,18 +1384,49 @@ export class CombatEngine {
     metrics.judgePointsFromDamage += breakdown.damagePoints;
     metrics.judgePointsFromGroundControl += breakdown.groundControlPoints;
 
-    const wonControl = offense.distance !== 'STRIKING';
+    const takedownLanded = offense.distance === 'GROUND' && offense.takedownSuccess;
+    const takedownFailed = offense.takedownAttempted && !offense.takedownSuccess;
+    const wonControl = offense.distance === 'CLINCH' || takedownLanded;
+    const staminaPenalty = takedownFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
+    const momentumPenalty = takedownFailed ? risk.FAILURE_MOMENTUM_PENALTY : 0;
+    const damageTaken = opponentOffense.rawDamage;
+
+    // Test A3: GROUND rounds now carry a real pass/fail roll (takedownSuccess),
+    // so the primary bucket's success flag must reflect it — before the
+    // contest existed, "always true" was accurate for a GROUND round, but
+    // leaving it hardcoded now would silently misreport TAKEDOWN.successRate
+    // as 100% while the separate takedownSuccessRate telemetry correctly
+    // shows the real contest outcome.
+    const primarySuccess = offense.distance === 'GROUND' ? offense.takedownSuccess : true;
+
     const primaryBucket = metrics.actionMetrics[this._resolveActionBucket(offense)];
-    this._recordActionMetric(primaryBucket, offense.rawDamage, totalScorePoints, true, wonControl);
+    this._recordActionMetric(
+      primaryBucket,
+      offense.rawDamage,
+      totalScorePoints,
+      primarySuccess,
+      wonControl,
+      damageTaken,
+      staminaPenalty,
+      momentumPenalty
+    );
     if (offense.submissionAttempted) {
+      // Submission attempts only ever fire on a landed takedown (see
+      // _computeRoundOffense), so they never carry a failure penalty.
       this._recordActionMetric(
         metrics.actionMetrics.SUBMISSION_ATTEMPT,
         offense.rawDamage,
         totalScorePoints,
         offense.submissionSuccess,
-        wonControl
+        wonControl,
+        damageTaken,
+        0,
+        0
       );
     }
+
+    if (takedownFailed) metrics.momentumLost += momentumPenalty;
+    if (offense.counterWindowConsumed) metrics.counterWindowsUsed += 1;
 
     const tempoBucket = metrics.tempoMetrics[offense.tempo];
     if (tempoBucket) {

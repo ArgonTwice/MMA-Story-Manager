@@ -265,7 +265,16 @@ function createStyleMatchupMatrix() {
 
 /** Mirrors CombatEngine's _createEmptyActionMetric() shape — see engine/CombatEngine.js's actionMetrics doc comment. */
 function emptyActionMetricBucket() {
-  return { attempts: 0, successes: 0, totalDamage: 0, totalScorePoints: 0, totalControlRounds: 0 };
+  return {
+    attempts: 0,
+    successes: 0,
+    totalDamage: 0,
+    totalScorePoints: 0,
+    totalControlRounds: 0,
+    totalDamageTaken: 0,
+    totalStaminaPenalty: 0,
+    totalMomentumPenalty: 0,
+  };
 }
 
 /** Same 6 buckets CombatEngine's _resolveActionBucket() ever produces. */
@@ -440,6 +449,9 @@ function recordCombatMetrics(stats, result) {
       dst.totalDamage += src.totalDamage;
       dst.totalScorePoints += src.totalScorePoints;
       dst.totalControlRounds += src.totalControlRounds;
+      dst.totalDamageTaken += src.totalDamageTaken;
+      dst.totalStaminaPenalty += src.totalStaminaPenalty;
+      dst.totalMomentumPenalty += src.totalMomentumPenalty;
     }
     for (const tempoKey of TEMPO_KEYS) {
       const src = m.tempoMetrics[tempoKey];
@@ -844,16 +856,31 @@ function finalizeCombatMetrics(combat) {
  * CombatEngine's _computeScoreBreakdown). SUBMISSION_ATTEMPT is a deliberate
  * subset of TAKEDOWN's rounds (both fire on every GROUND round) — don't sum
  * bucket totals together expecting them to add up to a round count.
+ *
+ * Test A3 adds `failures`/`avgPenaltyOnFailure` for the Risk/Reward Index:
+ * only TAKEDOWN and SUBMISSION_ATTEMPT carry a real pass/fail roll (see
+ * CombatEngine's _recordFighterCombatMetrics — every other bucket's
+ * `success` is hardcoded true, no discrete failure exists to condition on),
+ * so `avgPenaltyOnFailure` is null for HEAD_STRIKE/BODY_STRIKE/LEG_STRIKE/CLINCH.
  */
 function finalizeActionMetrics(actionMetrics) {
   const result = {};
   for (const [bucketKey, bucket] of Object.entries(actionMetrics)) {
+    const failures = bucket.attempts - bucket.successes;
     result[bucketKey] = {
       attempts: bucket.attempts,
+      successes: bucket.successes,
+      failures,
       successRate: bucket.attempts > 0 ? bucket.successes / bucket.attempts : null,
       avgDamage: bucket.attempts > 0 ? bucket.totalDamage / bucket.attempts : null,
       avgScorePoints: bucket.attempts > 0 ? bucket.totalScorePoints / bucket.attempts : null,
       controlRate: bucket.attempts > 0 ? bucket.totalControlRounds / bucket.attempts : null,
+      avgDamageOnSuccess: bucket.successes > 0 ? bucket.totalDamage / bucket.successes : null,
+      avgScorePointsOnSuccess: bucket.successes > 0 ? bucket.totalScorePoints / bucket.successes : null,
+      controlRateOnSuccess: bucket.successes > 0 ? bucket.totalControlRounds / bucket.successes : null,
+      avgDamageTakenOnFailure: failures > 0 ? bucket.totalDamageTaken / failures : null,
+      avgStaminaPenaltyOnFailure: failures > 0 ? bucket.totalStaminaPenalty / failures : null,
+      avgMomentumPenaltyOnFailure: failures > 0 ? bucket.totalMomentumPenalty / failures : null,
     };
   }
   return result;

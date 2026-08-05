@@ -346,6 +346,58 @@ function renderActionEVSubsection(result) {
   return lines.join('\n');
 }
 
+/**
+ * Test A3's "Risk / Reward Index" per action bucket:
+ *   Risk   = avg penalty on FAILURE (damage taken + stamina lost + momentum
+ *            lost, using the *OnFailure fields SimRunner derives from
+ *            CombatEngine's per-attempt totals).
+ *   Reward = avg gain on SUCCESS (damage + judge points + control, using the
+ *            *OnSuccess fields).
+ *   Ratio  = Reward / Risk.
+ * Risk (and therefore Ratio) is only defined for buckets with a real
+ * pass/fail roll: TAKEDOWN (Test A3's new contest) and SUBMISSION_ATTEMPT
+ * (the pre-existing submission roll). HEAD_STRIKE/BODY_STRIKE/LEG_STRIKE/
+ * CLINCH never fail outright (continuous hit-chance multiplier, no discrete
+ * miss), so they show N/A rather than a fabricated risk figure.
+ */
+function computeRiskRewardIndex(result) {
+  const rows = [];
+  for (const [key, m] of Object.entries(result.combat.actionMetrics)) {
+    const reward =
+      m.avgDamageOnSuccess === null && m.avgScorePointsOnSuccess === null && m.controlRateOnSuccess === null
+        ? null
+        : (m.avgDamageOnSuccess ?? 0) + (m.avgScorePointsOnSuccess ?? 0) + (m.controlRateOnSuccess ?? 0);
+    const risk =
+      m.avgDamageTakenOnFailure === null && m.avgStaminaPenaltyOnFailure === null && m.avgMomentumPenaltyOnFailure === null
+        ? null
+        : (m.avgDamageTakenOnFailure ?? 0) + (m.avgStaminaPenaltyOnFailure ?? 0) + (m.avgMomentumPenaltyOnFailure ?? 0);
+    const ratio = reward !== null && risk !== null && risk > 0 ? reward / risk : null;
+    rows.push({ key, failures: m.failures, reward, risk, ratio });
+  }
+  return rows;
+}
+
+function renderRiskRewardSubsection(result) {
+  const lines = [renderSectionTitle('⚖️ RISK / REWARD INDEX (par action)')];
+  const rows = computeRiskRewardIndex(result);
+  const headers = ['Action', 'Echecs (N)', 'Risk (penalite moy./echec)', 'Reward (gain moy./reussite)', 'Ratio Reward/Risk'];
+  const tableRows = rows.map((r) => [
+    ACTION_LABELS[r.key] ?? r.key,
+    formatNumber(r.failures),
+    r.risk === null ? 'N/A (pas d\'echec discret)' : formatDecimal(r.risk, 2),
+    r.reward === null ? 'N/A' : formatDecimal(r.reward, 2),
+    r.ratio === null ? 'N/A' : `x${r.ratio.toFixed(2)}`,
+  ]);
+  lines.push(renderTable(headers, tableRows));
+  lines.push('');
+  lines.push(
+    'Note : seuls TAKEDOWN (contest A3) et SUBMISSION_ATTEMPT ont un jet de reussite/echec discret dans' +
+      ' CombatEngine — HEAD_STRIKE/BODY_STRIKE/LEG_STRIKE/CLINCH se resolvent via un multiplicateur continu, sans' +
+      ' echec binaire, d\'ou leur Risk "N/A" plutot qu\'un chiffre invente.'
+  );
+  return lines.join('\n');
+}
+
 function renderMetaJudgeBiasSubsection(result) {
   const c = result.combat;
   const totalJudgePoints = c.judgePointsFromDamage + c.judgePointsFromGroundControl;
@@ -419,6 +471,7 @@ function renderMetaHealthDashboard(result) {
     renderMetaHealthHeader(),
     renderWinConditionSubsection(result),
     renderActionEVSubsection(result),
+    renderRiskRewardSubsection(result),
     renderMetaJudgeBiasSubsection(result),
     renderStyleIdentitySubsection(result),
     renderDiversitySubsection(result),
@@ -468,15 +521,30 @@ const VERSION_HISTORY = Object.freeze([
     funScore: 69,
     metaHealthIndex: 87,
   }),
+  Object.freeze({
+    version: 'v0.32',
+    label: 'Test A2',
+    change: 'COMBAT.SCORING.WEIGHT_CONTROL_TIME : 0.2 -> 0.14 (valeur des gains de position/controle au sol, a poids des juges v0.31 inchange)',
+    grapplingWinRate: 0.664,
+    groundDominantDecisionWinRate: 0.696,
+    evRatio: 1.87,
+    balanceScore: 77,
+    funScore: 69,
+    metaHealthIndex: 87,
+  }),
 ]);
 
 /** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
 function buildCurrentVersionEntry(result) {
   const { ratio } = computeRoundEVRatio(result);
   return {
-    version: 'v0.32',
-    label: 'Test A2',
-    change: 'COMBAT.SCORING.WEIGHT_CONTROL_TIME : 0.2 -> 0.14 (valeur des gains de position/controle au sol, a poids des juges v0.31 inchange)',
+    version: 'v0.33',
+    label: 'Test A3',
+    change:
+      'Boucle de Risque Decisionnel sur les takedowns : contest reel (ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE=0.4' +
+      ' desormais branche via CombatEngine#_computeTakedownChance, au lieu d\'atterrir a 100%) + COMBAT.TAKEDOWN_RISK' +
+      ' (A3.1 cout Stamina/Momentum sur echec, A3.2 fenetre de contre pour le defenseur, A3.3 bonus de Sprawl' +
+      ' cumulatif anti-spam). Juges v0.31 et controle sol v0.32 inchanges.',
     grapplingWinRate: result.grappling.winRate,
     groundDominantDecisionWinRate: result.combat.groundDominantWinRate,
     evRatio: ratio,
@@ -533,91 +601,82 @@ function renderVersionHistorySection(result) {
     `  Meta Health Index : ${formatNumber(current.metaHealthIndex)}/100 (${formatSignedInt(current.metaHealthIndex - baseline.metaHealthIndex)} vs baseline ${baseline.version})`
   );
   lines.push('');
-  lines.push(renderTestA2ValidationSubsection(result));
+  lines.push(renderTestA3PredictionSubsection(result));
   return lines.join('\n');
 }
 
 /**
- * Test A2's 4 explicit acceptance conditions. Thresholds are named
- * constants so a future test can cite/adjust them rather than re-deriving
- * magic numbers — condition 4's "significatif" is inherently a judgment
- * call, defined here as >= 30% of Grappling's wins coming by submission
- * (documented in the section's own footer, not silently assumed).
+ * Test A3's 4 explicit predictions (ranges, not pass/fail thresholds like
+ * A2's conditions — the task framed these as a forecast to check the
+ * implementation against, not acceptance criteria). Fun Detector's
+ * prediction is relative ("+2 a +3 points vs v0.32"), so it's evaluated
+ * against v0.32's frozen funScore (69) rather than an absolute band.
  */
-const TEST_A2_TARGETS = Object.freeze({
-  GRAPPLING_WINRATE_MIN: 0.58,
-  GRAPPLING_WINRATE_MAX: 0.6,
-  META_HEALTH_MIN: 88,
-  MIN_STYLE_WINRATE_FLOOR: 0.45,
-  SUBMISSION_WIN_SHARE_MIN: 0.3,
+const TEST_A3_PREDICTIONS = Object.freeze({
+  GRAPPLING_WINRATE_MIN: 0.59,
+  GRAPPLING_WINRATE_MAX: 0.61,
+  FREESTYLE_WINRATE_MIN: 0.44,
+  FREESTYLE_WINRATE_MAX: 0.47,
+  META_HEALTH_MIN: 89,
+  META_HEALTH_MAX: 90,
+  FUN_DELTA_MIN: 2,
+  FUN_DELTA_MAX: 3,
 });
 
-function evaluateTestA2Conditions(result) {
-  const t = TEST_A2_TARGETS;
+function evaluateTestA3Predictions(result) {
+  const p = TEST_A3_PREDICTIONS;
+  const v032FunScore = VERSION_HISTORY[VERSION_HISTORY.length - 1].funScore;
 
   const grapplingWinRate = result.grappling.winRate;
-  const grapplingPass = grapplingWinRate !== null && grapplingWinRate >= t.GRAPPLING_WINRATE_MIN && grapplingWinRate <= t.GRAPPLING_WINRATE_MAX;
+  const grapplingPass = grapplingWinRate !== null && grapplingWinRate >= p.GRAPPLING_WINRATE_MIN && grapplingWinRate <= p.GRAPPLING_WINRATE_MAX;
+
+  const freestyleWinRate = result.styles.Freestyle?.winRate ?? null;
+  const freestylePass = freestyleWinRate !== null && freestyleWinRate >= p.FREESTYLE_WINRATE_MIN && freestyleWinRate <= p.FREESTYLE_WINRATE_MAX;
 
   const metaHealthIndex = result.metaHealth.overallIndex;
-  const metaHealthPass = metaHealthIndex !== null && metaHealthIndex >= t.META_HEALTH_MIN;
+  const metaHealthPass = metaHealthIndex !== null && metaHealthIndex >= p.META_HEALTH_MIN && metaHealthIndex <= p.META_HEALTH_MAX;
 
-  const styleWinRates = Object.entries(result.styles)
-    .filter(([, s]) => s.winRate !== null)
-    .map(([style, s]) => [style, s.winRate]);
-  const worstStyle = styleWinRates.reduce(
-    (min, [style, winRate]) => (winRate < min[1] ? [style, winRate] : min),
-    styleWinRates[0] ?? [null, null]
-  );
-  const minStylePass = worstStyle[1] !== null && worstStyle[1] >= t.MIN_STYLE_WINRATE_FLOOR;
-
-  const grapplingSubmissionWins = result.grappling.styles.reduce(
-    (sum, style) => sum + (result.styleWinMethods[style]?.byMethod.SUBMISSION.count ?? 0),
-    0
-  );
-  const submissionWinShare = result.grappling.wins > 0 ? grapplingSubmissionWins / result.grappling.wins : null;
-  const submissionPass = submissionWinShare !== null && submissionWinShare >= t.SUBMISSION_WIN_SHARE_MIN;
+  const funScore = result.metaHealth.funScore;
+  const funDelta = funScore === null ? null : funScore - v032FunScore;
+  const funPass = funDelta !== null && funDelta >= p.FUN_DELTA_MIN && funDelta <= p.FUN_DELTA_MAX;
 
   return [
     {
       label: '1. Winrate Grappling',
       actual: grapplingWinRate === null ? 'N/A' : formatPercent(grapplingWinRate, 1),
-      target: `${formatPercent(t.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(t.GRAPPLING_WINRATE_MAX, 0)}`,
+      target: `${formatPercent(p.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(p.GRAPPLING_WINRATE_MAX, 0)}`,
       pass: grapplingPass,
     },
     {
-      label: '2. Meta Health Index',
+      label: '2. Winrate Freestyle',
+      actual: freestyleWinRate === null ? 'N/A' : formatPercent(freestyleWinRate, 1),
+      target: `${formatPercent(p.FREESTYLE_WINRATE_MIN, 0)} - ${formatPercent(p.FREESTYLE_WINRATE_MAX, 0)}`,
+      pass: freestylePass,
+    },
+    {
+      label: '3. Meta Health Index',
       actual: metaHealthIndex === null ? 'N/A' : `${formatNumber(metaHealthIndex)}/100`,
-      target: `>= ${t.META_HEALTH_MIN}/100`,
+      target: `${p.META_HEALTH_MIN} - ${p.META_HEALTH_MAX}/100`,
       pass: metaHealthPass,
     },
     {
-      label: '3. Winrate min par style',
-      actual: worstStyle[0] === null ? 'N/A' : `${worstStyle[0]} a ${formatPercent(worstStyle[1], 1)}`,
-      target: `aucun style < ${formatPercent(t.MIN_STYLE_WINRATE_FLOOR, 0)}`,
-      pass: minStylePass,
-    },
-    {
-      label: '4. Victoires Grappling par soumission',
-      actual: submissionWinShare === null ? 'N/A' : formatPercent(submissionWinShare, 1),
-      target: `>= ${formatPercent(t.SUBMISSION_WIN_SHARE_MIN, 0)} des victoires Grappling`,
-      pass: submissionPass,
+      label: '4. Fun Detector (delta vs v0.32)',
+      actual: funDelta === null ? 'N/A' : formatSignedInt(funDelta),
+      target: `+${p.FUN_DELTA_MIN} a +${p.FUN_DELTA_MAX}`,
+      pass: funPass,
     },
   ];
 }
 
-function renderTestA2ValidationSubsection(result) {
-  const conditions = evaluateTestA2Conditions(result);
-  const lines = [renderSectionTitle('🎯 TEST A2 — CONDITIONS DE VALIDATION')];
-  const headers = ['Condition', 'Mesure', 'Cible', 'Statut'];
-  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.pass ? 'PASS' : 'FAIL']);
+function renderTestA3PredictionSubsection(result) {
+  const conditions = evaluateTestA3Predictions(result);
+  const lines = [renderSectionTitle('🎯 TEST A3 — COMPARATIF DES PREDICTIONS')];
+  const headers = ['Prediction', 'Mesure', 'Cible', 'Statut'];
+  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.pass ? 'DANS LA CIBLE' : 'HORS CIBLE']);
   lines.push(renderTable(headers, rows));
   lines.push('');
   const passed = conditions.filter((c) => c.pass).length;
-  lines.push(`Bilan : ${passed} / ${conditions.length} conditions validees.`);
-  lines.push(
-    '(Condition 4 : "significatif" est defini ici comme >= 30% des victoires Grappling obtenues par soumission —' +
-      ' seuil documente, pas une regle du jeu.)'
-  );
+  lines.push(`Bilan : ${passed} / ${conditions.length} predictions confirmees.`);
   return lines.join('\n');
 }
 
@@ -638,21 +697,23 @@ function renderNotesSection(result) {
       ' (tools/SimRunner.js), pas un systeme du jeu reel.'
   );
   lines.push(
-    "* CombatEngine ne modelise pas (encore) de veritable contestation de takedown : choisir la distance GROUND" +
-      ' reussit toujours instantanement, sans jet de defense pour l\'adversaire — d\'ou un taux de reussite a 100%' +
-      ' et un taux de defense a 0% ci-dessus. C\'est une donnee telemetrique fidele au jeu actuel, pas un bug de ce rapport.'
+    '* Depuis Test A3, CombatEngine modelise une veritable contestation de takedown (ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE' +
+      ' desormais branchee via #_computeTakedownChance) : le taux de reussite/defense ci-dessus reflete un jet reel,' +
+      ' pas 100%/0% garanti comme avant ce test. Un echec coute Stamina + Momentum au lutteur (A3.1), ouvre une' +
+      ' fenetre de contre pour le defenseur (A3.2) et augmente cumulativement sa Defense de Takedown (A3.3, Sprawl).'
   );
   lines.push(
-    "* De meme, \"contres declenches\" compte uniquement l'opportunite (une tentative de soumission ratee par" +
-      " l'adversaire) : CombatEngine ne resout aucun effet de contre-attaque (pas de degats/bonus) sur cette" +
-      ' opportunite a ce jour.'
+    "* \"Contres declenches\" compte uniquement l'opportunite issue d'une tentative de soumission ratee (aucun effet" +
+      ' de contre-attaque resolu dessus) — a ne pas confondre avec la fenetre de contre A3.2 (counterWindowsGranted/' +
+      'counterWindowsUsed), qui elle applique un vrai bonus de precision/degats sur le round suivant du defenseur.'
   );
   lines.push(
     '* Les actions de l\'EV (Frappes Tete/Corps/Jambes, Clinch, Takedown, Tentative de Soumission) correspondent aux' +
       ' seules combinaisons cible x distance que CombatEngine resout reellement — il ne simule pas de coups' +
-      ' individuels (pas de distinction Jab/Cross/Uppercut) ; "Tentative de Soumission" est un sous-ensemble des' +
-      " rounds Takedown (un round GROUND declenche toujours les deux a la fois), donc sommer tous les buckets" +
-      ' surcompte les rounds GROUND — chaque bucket se lit independamment.'
+      ' individuels (pas de distinction Jab/Cross/Uppercut) ; depuis Test A3, "Tentative de Soumission" est un' +
+      ' sous-ensemble STRICT des rounds Takedown reussis (un round GROUND ne declenche la soumission que si le' +
+      ' takedown a lui-meme atterri — voir le contest A3), donc sommer tous les buckets surcompte encore les' +
+      ' rounds GROUND — chaque bucket se lit independamment.'
   );
   lines.push(
     '* Le Style Identity Score mesure la fidelite des COMPETENCES du combattant a son style (recouvrement entre' +
@@ -677,9 +738,16 @@ function renderNotesSection(result) {
       ' pas derive de la seule formule — la relation entre ce coefficient et l\'EV/winrate mesures n\'est pas' +
       ' parfaitement lineaire (les combattants qui gagnent enchainent plus de combats, ce qui retroagit sur la' +
       ' distribution de competences observee). Ce seul levier ramene l\'EV Sol pres de la cible mais ne suffit' +
-      ' pas, a lui seul, a satisfaire les 4 conditions de validation (voir la section dediee ci-dessus) — un' +
-      ' Test A3 cible sur un autre levier (probablement les degats bruts ou les competences des styles debout)' +
-      ' est le candidat naturel pour la suite.'
+      ' pas, a lui seul, a satisfaire les 4 conditions de validation de l\'epoque.'
+  );
+  lines.push(
+    '* Test A3 : contrairement a A1/A2, les coefficients de TAKEDOWN_RISK sont imposes par la specification du' +
+      ' test (pas de latitude de tuning empirique) — le seul veritable levier est le branchement de' +
+      ' ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE=0.4, une donnee reservee depuis une phase anterieure mais jamais lue' +
+      ' avant ce test. Verifie sur 5 graines a 3000 saisons (pas un artefact d\'une seule graine) : le contest a' +
+      ' 40% de chance de base fait chuter le Winrate Grappling et l\'EV Sol nettement plus bas que les predictions —' +
+      ' voir le comparatif des predictions ci-dessus pour le detail chiffre. C\'est le resultat honnete de la' +
+      ' specification telle que demandee, pas un bug de cette implementation.'
   );
   return lines.join('\n');
 }

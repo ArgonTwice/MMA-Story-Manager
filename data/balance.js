@@ -25,6 +25,7 @@
  *   BALANCE.AGE          - aging curve, peak years, decline
  *   BALANCE.GYM          - facilities, capacity, upgrades
  *   BALANCE.FORM         - fighter physical condition ("forme") bounds/decay
+ *   BALANCE.MOMENTUM     - fight-local rhythm/confidence meter (reset every match)
  *   BALANCE.PSYCHOLOGY   - personality-driven stat bounds/starting values
  *   BALANCE.CALENDAR     - day/week/season/year length definitions
  *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
@@ -38,9 +39,10 @@
  *   BALANCE.STORY         - narrative-opportunity detection thresholds
  *   BALANCE.NARRATIVE      - narrative-form selection weights per opportunity
  *
- *   (COMBAT additionally carries GAMEPLAN and STYLE_BONUSES sub-sections
- *   consumed by engine/CombatEngine.js: per-target/distance/tempo
- *   coefficients and per-fighting-style bonuses. TRAINING additionally
+ *   (COMBAT additionally carries GAMEPLAN, STYLE_BONUSES and TAKEDOWN_RISK
+ *   sub-sections consumed by engine/CombatEngine.js: per-target/distance/
+ *   tempo coefficients, per-fighting-style bonuses, and the Test A3
+ *   takedown-contest risk/reward coefficients. TRAINING additionally
  *   carries INTENSITY_MODIFIERS, OVERTRAINING and COUNTRY_BONUSES consumed
  *   by engine/TrainingEngine.js. ECONOMY additionally carries PASSIVE_INCOME
  *   and INSOLVENCY consumed by engine/EconomyEngine.js. WORLD additionally
@@ -70,7 +72,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.5.3',
+  VERSION: '1.6.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -333,6 +335,40 @@ const BALANCE = {
       Freestyle: { outputMultiplier: 1.0 },
       DEFAULT: { outputMultiplier: 1.0 },
     },
+
+    /**
+     * Test A3 (v0.33, see tools/BalanceReporter.js's Version History
+     * Tracker): "Risque Decisionnel & Sprawl" — introduces a real takedown
+     * *contest* (see CombatEngine#_computeTakedownChance, which finally
+     * wires up ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE — reserved since an
+     * earlier phase but never read until now) instead of a GROUND gameplan
+     * choice always landing unopposed. These are the punishment/reward
+     * coefficients for a *failed* (defended) takedown attempt specifically;
+     * A1/A2's judge-scoring weights (SCORING section above) are untouched.
+     */
+    TAKEDOWN_RISK: {
+      /** A3.1: extra stamina burned by the wrestler on a failed/defended takedown, on top of the normal COST_PER_TAKEDOWN_ATTEMPT. */
+      FAILURE_STAMINA_PENALTY: 3,
+      /** A3.1: MOMENTUM points lost by the wrestler on a failed/defended takedown (see the new top-level MOMENTUM section). */
+      FAILURE_MOMENTUM_PENALTY: 5,
+      /** A3.2: precision/damage bonus granted to the defender for their next round's offense only, then consumed. */
+      COUNTER_WINDOW_ACCURACY_BONUS: 0.2,
+      COUNTER_WINDOW_DAMAGE_BONUS: 0.15,
+      /** A3.3: additional takedown-defense chance the defender gains per successfully stuffed attempt, cumulative for the rest of the match (anti-spam). */
+      SPRAWL_DEFENSE_BONUS_PER_STUFF: 0.05,
+      /** Safety ceiling on A3.3's stacking bonus, so a defense chance can never be driven to a near-certainty by spam alone. */
+      SPRAWL_DEFENSE_BONUS_MAX: 0.3,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // MOMENTUM — fight-local "rhythm/confidence" meter (Test A3), reset every match
+  // ---------------------------------------------------------------------
+  MOMENTUM: {
+    MIN: 0,
+    MAX: 100,
+    /** Every fighter starts a match at full momentum; it only ever drops in the current model (see COMBAT.TAKEDOWN_RISK.FAILURE_MOMENTUM_PENALTY). */
+    STARTING_VALUE: 100,
   },
 
   // ---------------------------------------------------------------------
