@@ -504,6 +504,7 @@ const VERSION_HISTORY = Object.freeze([
     label: 'Baseline',
     change: 'Reference (fin de la Phase 3.0.3, avant tout Test A/B)',
     grapplingWinRate: null,
+    freestyleWinRate: null,
     groundDominantDecisionWinRate: null,
     evRatio: null,
     balanceScore: 74,
@@ -515,6 +516,7 @@ const VERSION_HISTORY = Object.freeze([
     label: 'Test A1',
     change: 'COMBAT.SCORING.NON_STRIKE_METRIC_SCALE : 10 -> 7.5 (poids du controle sol/soumission/takedown dans le score des juges)',
     grapplingWinRate: 0.655,
+    freestyleWinRate: null,
     groundDominantDecisionWinRate: 0.712,
     evRatio: null,
     balanceScore: 74,
@@ -526,18 +528,14 @@ const VERSION_HISTORY = Object.freeze([
     label: 'Test A2',
     change: 'COMBAT.SCORING.WEIGHT_CONTROL_TIME : 0.2 -> 0.14 (valeur des gains de position/controle au sol, a poids des juges v0.31 inchange)',
     grapplingWinRate: 0.664,
+    freestyleWinRate: null,
     groundDominantDecisionWinRate: 0.696,
     evRatio: 1.87,
     balanceScore: 77,
     funScore: 69,
     metaHealthIndex: 87,
   }),
-]);
-
-/** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
-function buildCurrentVersionEntry(result) {
-  const { ratio } = computeRoundEVRatio(result);
-  return {
+  Object.freeze({
     version: 'v0.33',
     label: 'Test A3',
     change:
@@ -545,12 +543,34 @@ function buildCurrentVersionEntry(result) {
       ' desormais branche via CombatEngine#_computeTakedownChance, au lieu d\'atterrir a 100%) + COMBAT.TAKEDOWN_RISK' +
       ' (A3.1 cout Stamina/Momentum sur echec, A3.2 fenetre de contre pour le defenseur, A3.3 bonus de Sprawl' +
       ' cumulatif anti-spam). Juges v0.31 et controle sol v0.32 inchanges.',
+    grapplingWinRate: 0.416,
+    freestyleWinRate: 0.527,
+    groundDominantDecisionWinRate: 0.388,
+    evRatio: 0.71,
+    balanceScore: 90,
+    funScore: 69,
+    metaHealthIndex: 90,
+    submissionAttemptRatio: 8.61,
+  }),
+]);
+
+/** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
+function buildCurrentVersionEntry(result) {
+  const { ratio } = computeRoundEVRatio(result);
+  return {
+    version: 'v0.34a',
+    label: 'Test A3.4a',
+    change:
+      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.4 -> 0.5 (seule variable modifiee vs Test A3 — A3.1/A3.2/A3.3' +
+      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique).',
     grapplingWinRate: result.grappling.winRate,
+    freestyleWinRate: result.styles.Freestyle?.winRate ?? null,
     groundDominantDecisionWinRate: result.combat.groundDominantWinRate,
     evRatio: ratio,
     balanceScore: result.metaHealth.balanceScore,
     funScore: result.metaHealth.funScore,
     metaHealthIndex: result.metaHealth.overallIndex,
+    submissionAttemptRatio: computeRiskRewardIndex(result).find((r) => r.key === 'SUBMISSION_ATTEMPT')?.ratio ?? null,
   };
 }
 
@@ -565,6 +585,7 @@ function renderVersionHistorySection(result) {
     'Version',
     'Label',
     'Winrate Grappling',
+    'Winrate Freestyle',
     'Biais Juges (sol dominant)',
     'Ratio EV Sol/Debout',
     'Equilibre',
@@ -575,6 +596,7 @@ function renderVersionHistorySection(result) {
     entry.version,
     entry.label,
     entry.grapplingWinRate === null ? 'N/A' : formatPercent(entry.grapplingWinRate, 1),
+    entry.freestyleWinRate === null || entry.freestyleWinRate === undefined ? 'N/A' : formatPercent(entry.freestyleWinRate, 1),
     entry.groundDominantDecisionWinRate === null ? 'N/A' : formatPercent(entry.groundDominantDecisionWinRate, 1),
     entry.evRatio === null ? 'N/A' : `x${entry.evRatio.toFixed(2)}`,
     entry.balanceScore === null ? 'N/A' : `${formatNumber(entry.balanceScore)}/100`,
@@ -591,6 +613,10 @@ function renderVersionHistorySection(result) {
       `(${formatSignedPercentPoints(current.grapplingWinRate, previous.grapplingWinRate)} vs ${previous.version})`
   );
   lines.push(
+    `  Winrate Freestyle : ${formatPercent(current.freestyleWinRate, 1)} ` +
+      `(${formatSignedPercentPoints(current.freestyleWinRate, previous.freestyleWinRate)} vs ${previous.version})`
+  );
+  lines.push(
     `  Biais des juges (winrate a la decision quand le controle sol est dominant) : ${formatPercent(current.groundDominantDecisionWinRate, 1)} ` +
       `(${formatSignedPercentPoints(current.groundDominantDecisionWinRate, previous.groundDominantDecisionWinRate)} vs ${previous.version})`
   );
@@ -600,8 +626,13 @@ function renderVersionHistorySection(result) {
   lines.push(
     `  Meta Health Index : ${formatNumber(current.metaHealthIndex)}/100 (${formatSignedInt(current.metaHealthIndex - baseline.metaHealthIndex)} vs baseline ${baseline.version})`
   );
+  lines.push(
+    `  Submission Attempt Ratio (Reward/Risk, monitore, pas de cible chiffree) : ` +
+      `${current.submissionAttemptRatio === null ? 'N/A' : `x${current.submissionAttemptRatio.toFixed(2)}`} ` +
+      `(vs x${previous.submissionAttemptRatio?.toFixed(2) ?? 'N/A'} en ${previous.version})`
+  );
   lines.push('');
-  lines.push(renderTestA3PredictionSubsection(result));
+  lines.push(renderTestA34aPredictionSubsection(result));
   return lines.join('\n');
 }
 
@@ -612,20 +643,25 @@ function renderVersionHistorySection(result) {
  * prediction is relative ("+2 a +3 points vs v0.32"), so it's evaluated
  * against v0.32's frozen funScore (69) rather than an absolute band.
  */
-const TEST_A3_PREDICTIONS = Object.freeze({
-  GRAPPLING_WINRATE_MIN: 0.59,
-  GRAPPLING_WINRATE_MAX: 0.61,
-  FREESTYLE_WINRATE_MIN: 0.44,
-  FREESTYLE_WINRATE_MAX: 0.47,
-  META_HEALTH_MIN: 89,
-  META_HEALTH_MAX: 90,
-  FUN_DELTA_MIN: 2,
-  FUN_DELTA_MAX: 3,
+const TEST_A3_4A_PREDICTIONS = Object.freeze({
+  GRAPPLING_WINRATE_MIN: 0.5,
+  GRAPPLING_WINRATE_MAX: 0.53,
+  FREESTYLE_WINRATE_MIN: 0.49,
+  FREESTYLE_WINRATE_MAX: 0.51,
+  META_HEALTH_MIN: 90,
+  META_HEALTH_MAX: 91,
 });
 
-function evaluateTestA3Predictions(result) {
-  const p = TEST_A3_PREDICTIONS;
-  const v032FunScore = VERSION_HISTORY[VERSION_HISTORY.length - 1].funScore;
+/**
+ * Test A3.4a's 3 range predictions (ChatGPT), plus a 4th row that only
+ * *monitors* the Submission Attempt Ratio against v0.33's x8.61 — the task
+ * gave no target band for it, just an instruction to watch it, so it's
+ * reported with its own delta rather than forced into a fabricated
+ * PASS/FAIL judgment.
+ */
+function evaluateTestA34aPredictions(result) {
+  const p = TEST_A3_4A_PREDICTIONS;
+  const v033 = VERSION_HISTORY[VERSION_HISTORY.length - 1];
 
   const grapplingWinRate = result.grappling.winRate;
   const grapplingPass = grapplingWinRate !== null && grapplingWinRate >= p.GRAPPLING_WINRATE_MIN && grapplingWinRate <= p.GRAPPLING_WINRATE_MAX;
@@ -636,47 +672,55 @@ function evaluateTestA3Predictions(result) {
   const metaHealthIndex = result.metaHealth.overallIndex;
   const metaHealthPass = metaHealthIndex !== null && metaHealthIndex >= p.META_HEALTH_MIN && metaHealthIndex <= p.META_HEALTH_MAX;
 
-  const funScore = result.metaHealth.funScore;
-  const funDelta = funScore === null ? null : funScore - v032FunScore;
-  const funPass = funDelta !== null && funDelta >= p.FUN_DELTA_MIN && funDelta <= p.FUN_DELTA_MAX;
+  const submissionRatio = computeRiskRewardIndex(result).find((r) => r.key === 'SUBMISSION_ATTEMPT')?.ratio ?? null;
+  const submissionRatioDelta = submissionRatio === null ? null : submissionRatio - v033.submissionAttemptRatio;
 
   return [
     {
       label: '1. Winrate Grappling',
       actual: grapplingWinRate === null ? 'N/A' : formatPercent(grapplingWinRate, 1),
       target: `${formatPercent(p.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(p.GRAPPLING_WINRATE_MAX, 0)}`,
+      status: grapplingPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+      countsTowardBilan: true,
       pass: grapplingPass,
     },
     {
       label: '2. Winrate Freestyle',
       actual: freestyleWinRate === null ? 'N/A' : formatPercent(freestyleWinRate, 1),
       target: `${formatPercent(p.FREESTYLE_WINRATE_MIN, 0)} - ${formatPercent(p.FREESTYLE_WINRATE_MAX, 0)}`,
+      status: freestylePass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+      countsTowardBilan: true,
       pass: freestylePass,
     },
     {
       label: '3. Meta Health Index',
       actual: metaHealthIndex === null ? 'N/A' : `${formatNumber(metaHealthIndex)}/100`,
       target: `${p.META_HEALTH_MIN} - ${p.META_HEALTH_MAX}/100`,
+      status: metaHealthPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+      countsTowardBilan: true,
       pass: metaHealthPass,
     },
     {
-      label: '4. Fun Detector (delta vs v0.32)',
-      actual: funDelta === null ? 'N/A' : formatSignedInt(funDelta),
-      target: `+${p.FUN_DELTA_MIN} a +${p.FUN_DELTA_MAX}`,
-      pass: funPass,
+      label: '4. Submission Attempt Ratio (monitore)',
+      actual: submissionRatio === null ? 'N/A' : `x${submissionRatio.toFixed(2)} (${formatSignedInt(submissionRatioDelta)} vs v0.33)`,
+      target: `pas de cible chiffree — reference v0.33 : x${v033.submissionAttemptRatio.toFixed(2)}`,
+      status: 'SUIVI',
+      countsTowardBilan: false,
+      pass: false,
     },
   ];
 }
 
-function renderTestA3PredictionSubsection(result) {
-  const conditions = evaluateTestA3Predictions(result);
-  const lines = [renderSectionTitle('🎯 TEST A3 — COMPARATIF DES PREDICTIONS')];
+function renderTestA34aPredictionSubsection(result) {
+  const conditions = evaluateTestA34aPredictions(result);
+  const lines = [renderSectionTitle('🎯 TEST A3.4a — COMPARATIF DES PREDICTIONS')];
   const headers = ['Prediction', 'Mesure', 'Cible', 'Statut'];
-  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.pass ? 'DANS LA CIBLE' : 'HORS CIBLE']);
+  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.status]);
   lines.push(renderTable(headers, rows));
   lines.push('');
-  const passed = conditions.filter((c) => c.pass).length;
-  lines.push(`Bilan : ${passed} / ${conditions.length} predictions confirmees.`);
+  const scored = conditions.filter((c) => c.countsTowardBilan);
+  const passed = scored.filter((c) => c.pass).length;
+  lines.push(`Bilan : ${passed} / ${scored.length} predictions confirmees (le Submission Attempt Ratio est monitore, pas evalue).`);
   return lines.join('\n');
 }
 
@@ -748,6 +792,12 @@ function renderNotesSection(result) {
       ' 40% de chance de base fait chuter le Winrate Grappling et l\'EV Sol nettement plus bas que les predictions —' +
       ' voir le comparatif des predictions ci-dessus pour le detail chiffre. C\'est le resultat honnete de la' +
       ' specification telle que demandee, pas un bug de cette implementation.'
+  );
+  lines.push(
+    '* Test A3.4a : une seule variable modifiee vs Test A3 (methodologie A/B atomique) —' +
+      ' ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE 0.4 -> 0.5, A3.1/A3.2/A3.3 (COMBAT.TAKEDOWN_RISK) intacts. Le' +
+      ' Submission Attempt Ratio est reporte en comparaison avec v0.33 (x8.61) mais volontairement non evalue' +
+      ' PASS/FAIL — la tache demandait de le "monitorer", pas de fixer une cible chiffree.'
   );
   return lines.join('\n');
 }

@@ -72,7 +72,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.6.0',
+  VERSION: '1.6.1',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -195,7 +195,15 @@ const BALANCE = {
     /** Base probability an action attempt lands, before attribute deltas. */
     ACCURACY: {
       STRIKE_BASE_HIT_CHANCE: 0.55,
-      TAKEDOWN_BASE_SUCCESS_CHANCE: 0.4,
+      /**
+       * Test A3.4a (v0.34a): 0.4 -> 0.5, seule variable modifiee vs Test A3
+       * (methodologie A/B atomique) — A3.1/A3.2/A3.3 (COMBAT.TAKEDOWN_RISK
+       * ci-dessous) restent intacts. Test A3 avait branche ce taux reserve
+       * pour la premiere fois et observe un Winrate Grappling (41.6%) et un
+       * EV Sol nettement sous les predictions ; ce tuning fin remonte la
+       * chance de base du contest sans toucher aux penalites de risque.
+       */
+      TAKEDOWN_BASE_SUCCESS_CHANCE: 0.5,
       SKILL_DELTA_CHANCE_SCALING: 0.012,
       MIN_HIT_CHANCE: 0.1,
       MAX_HIT_CHANCE: 0.92,
