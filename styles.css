@@ -1,0 +1,765 @@
+/* =============================================================================
+   styles.css — MMA Gym Manager v2
+   Dark / gold / Kairosoft-esque art direction: near-black panels, a warm
+   gold accent for money/highlights, red for danger/damage, green for
+   health/success. Oswald for headers (condensed, sporty), Inter for body
+   copy, JetBrains Mono for stats/numbers (a Football-Manager-style nod to
+   "this is a data screen").
+   ============================================================================= */
+
+:root {
+  /* palette */
+  --bg-void: #0b0d10;
+  --bg-panel: #14171c;
+  --bg-panel-alt: #1a1e25;
+  --bg-tile: #1f242c;
+  --border: #2a2f38;
+  --border-strong: #3a4150;
+
+  --gold: #d4af37;
+  --gold-bright: #f0c75e;
+  --gold-dim: #8a712a;
+
+  --red: #c0392b;
+  --red-bright: #ff5b4d;
+  --green: #3fa66a;
+  --green-bright: #5fd68f;
+  --blue: #4a90d9;
+
+  --text-primary: #e8e6e1;
+  --text-secondary: #a8aeb8;
+  --text-muted: #666d78;
+
+  /* type */
+  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+
+  /* misc */
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow-panel: 0 4px 18px rgba(0, 0, 0, 0.45);
+  --transition-fast: 150ms ease;
+  --transition-med: 400ms ease;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Static structural headings/labels get the punchy all-caps display
+   treatment. Plain <header> blocks (which often wrap live game data like a
+   gym name or the current day) keep the display font but NOT forced
+   uppercase, so player-entered text and numbers stay legible as typed. */
+h1,
+h2,
+h3,
+.section-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+header {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+}
+
+.section-title {
+  font-size: 0.95rem;
+  color: var(--gold);
+  margin: 1.25rem 0 0.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+
+.gold {
+  color: var(--gold-bright) !important;
+}
+
+/* =============================================================================
+   Buttons
+   ============================================================================= */
+
+.btn {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.85rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-tile);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--gold);
+  transform: translateY(-1px);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-gold {
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  border-color: var(--gold-dim);
+  color: #1a1400;
+  font-weight: 600;
+}
+
+.btn-gold:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn-outline {
+  background: transparent;
+}
+
+/* =============================================================================
+   Start Screen
+   ============================================================================= */
+
+#startScreen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: radial-gradient(circle at 50% 20%, #1a1408 0%, var(--bg-void) 60%);
+}
+
+.start-panel {
+  width: min(720px, 100%);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: 2.5rem;
+  text-align: center;
+}
+
+.brand {
+  font-size: 2.6rem;
+  margin: 0;
+  color: var(--gold-bright);
+  text-shadow: 0 2px 12px rgba(212, 175, 55, 0.25);
+}
+
+.tagline {
+  color: var(--text-secondary);
+  margin: 0.4rem 0 2rem;
+  font-style: italic;
+}
+
+.start-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  text-align: left;
+}
+
+@media (max-width: 640px) {
+  .start-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.new-game-form,
+.load-game-panel {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+
+.new-game-form input {
+  width: 100%;
+  margin-bottom: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--bg-void);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+}
+
+.slot-list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.slot-list li {
+  margin-bottom: 0.4rem;
+}
+
+.slot-list .empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* =============================================================================
+   Game shell: HUD + tab bar + panels
+   ============================================================================= */
+
+#gameShell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+#hud {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 0.7rem 1.5rem;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.hud-sub {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-left: 0.4rem;
+}
+
+#tabbar {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.5rem 1.5rem;
+  background: var(--bg-panel-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-btn {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  color: var(--gold-bright);
+  border-color: var(--border-strong);
+  background: var(--bg-tile);
+}
+
+.tab-action {
+  margin-left: auto;
+}
+
+#panels {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.panel {
+  display: none;
+}
+
+.panel.active {
+  display: block;
+  animation: fade-in var(--transition-med);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* =============================================================================
+   Dashboard
+   ============================================================================= */
+
+.dashboard-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.dashboard-sub {
+  font-family: var(--font-body);
+  text-transform: none;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+}
+
+.stat-tile {
+  background: var(--bg-tile);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.stat-value {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.charges-breakdown,
+.logbook {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+}
+
+.charges-breakdown li {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+  color: var(--text-secondary);
+}
+
+.journal-entry {
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  border-left: 2px solid var(--border-strong);
+  margin-bottom: 0.3rem;
+  background: var(--bg-panel-alt);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.journal-entry[data-kind='ECONOMY'] {
+  border-left-color: var(--gold);
+}
+.journal-entry[data-kind='NARRATIVE'] {
+  border-left-color: var(--blue);
+}
+.journal-entry[data-kind='WEEK'] {
+  border-left-color: var(--green);
+}
+.journal-entry[data-kind='WORLD'],
+.journal-entry[data-kind='GYM'] {
+  border-left-color: var(--red);
+}
+
+.journal-day {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  margin-right: 0.5rem;
+}
+
+/* =============================================================================
+   Gauges (shared: roster forme/moral, combat health/stamina)
+   ============================================================================= */
+
+.gauge-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 34px;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  margin: 0.25rem 0;
+}
+
+.gauge-label {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.gauge-bar {
+  height: 10px;
+  background: var(--bg-void);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.gauge-fill {
+  height: 100%;
+  transition: width var(--transition-med);
+}
+
+.gauge-fill.gauge-form,
+.gauge-fill.gauge-stamina {
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold-bright));
+}
+
+.gauge-fill.gauge-morale {
+  background: linear-gradient(90deg, var(--blue), #7cb8f2);
+}
+
+.gauge-fill.gauge-health {
+  background: linear-gradient(90deg, var(--red), var(--green-bright));
+}
+
+.gauge-value {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+/* =============================================================================
+   Roster
+   ============================================================================= */
+
+.fighter-grid {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.fighter-card {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1rem;
+  position: relative;
+}
+
+.fighter-card.injured {
+  border-color: var(--red);
+}
+
+.fighter-card-header {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0.4rem;
+}
+
+.fighter-name {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-size: 1.05rem;
+}
+
+.fighter-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.fighter-record {
+  font-family: var(--font-mono);
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+}
+
+.fighter-rating {
+  color: var(--gold);
+  margin-left: 0.5rem;
+}
+
+.skill-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0;
+  margin: 0.6rem 0 0;
+}
+
+.skill-pill {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: var(--bg-tile);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  text-transform: capitalize;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-family: var(--font-display);
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius);
+  margin-top: 0.5rem;
+}
+
+.badge-injured {
+  background: var(--red);
+  color: #fff;
+}
+
+.btn-retire {
+  display: block;
+  margin-top: 0.6rem;
+  width: 100%;
+}
+
+/* =============================================================================
+   Combat screen
+   ============================================================================= */
+
+.combat {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+}
+
+.round-header {
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.fighter-gauges {
+  background: var(--bg-tile);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.corner-label {
+  font-family: var(--font-display);
+  color: var(--gold);
+  margin-bottom: 0.35rem;
+}
+
+.weighin-card,
+.gameplan-selector {
+  background: var(--bg-tile);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.weighin-profiles,
+.gameplan-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.gameplan-row span {
+  width: 90px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.corner-pause-banner {
+  background: var(--bg-void);
+  border-left: 3px solid var(--gold);
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.round-log {
+  list-style: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.result-banner {
+  text-align: center;
+  padding: 2rem;
+}
+
+.result-banner.reveal {
+  animation: result-reveal 600ms ease-out;
+}
+
+@keyframes result-reveal {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.result-method {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  color: var(--gold-bright);
+  text-shadow: 0 2px 14px rgba(212, 175, 55, 0.35);
+}
+
+.result-headline {
+  color: var(--text-secondary);
+  margin-top: 0.5rem;
+}
+
+.combat-idle {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem;
+}
+
+/* =============================================================================
+   Gym
+   ============================================================================= */
+
+.equipment-owned,
+.equipment-catalog,
+.rival-gym-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.equipment-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-tile);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.9rem;
+}
+
+.equipment-item.owned {
+  border-color: var(--green);
+}
+
+.equipment-item.not-affordable {
+  opacity: 0.55;
+}
+
+.equipment-cost {
+  font-family: var(--font-mono);
+  color: var(--gold);
+  margin: 0 0.75rem;
+}
+
+.rival-gym-item {
+  display: flex;
+  gap: 1rem;
+  background: var(--bg-tile);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.9rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.rival-name {
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+
+/* =============================================================================
+   Social feed
+   ============================================================================= */
+
+.feed-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.social-post {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 0.7rem 1rem;
+}
+
+.social-post[data-author-type='FAN'] {
+  border-left-color: var(--blue);
+}
+.social-post[data-author-type='JOURNALIST'] {
+  border-left-color: var(--gold);
+}
+.social-post[data-author-type='RIVAL'] {
+  border-left-color: var(--red);
+}
+.social-post[data-author-type='FIGHTER_STATEMENT'] {
+  border-left-color: var(--green);
+}
+
+.post-author {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.post-text {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 0.2rem 0;
+}
+
+.post-likes {
+  font-family: var(--font-mono);
+  color: var(--gold);
+  font-size: 0.75rem;
+}

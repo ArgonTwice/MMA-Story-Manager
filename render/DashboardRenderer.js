@@ -22,13 +22,16 @@ export class DashboardRenderer extends BaseRenderer {
    * @param {Object} options
    * @param {Object} options.playerState - A PlayerState instance.
    * @param {Object} options.worldState - A WorldState instance.
-   * @param {Object} [options.mount]
+   * @param {Object} [options.mount] - The Dashboard tab panel (#p-dash): full journal + stats.
+   * @param {Object} [options.hudMount] - The persistent top bar (#hud): compact stats only,
+   *   visible across every tab. Optional — this renderer works fine with only `mount`.
    * @param {Function} [options.onRender]
    */
   constructor(options = {}) {
     super(options);
     this.playerState = options.playerState;
     this.worldState = options.worldState;
+    this.hudMount = options.hudMount ?? null;
     this.viewModel = { ...this._buildStats(), logEntries: [] };
   }
 
@@ -117,17 +120,58 @@ export class DashboardRenderer extends BaseRenderer {
     this._flush();
   }
 
+  /**
+   * Also mirrors a compact stats strip into hudMount (if any), in addition
+   * to the base flush that writes the full panel into mount.
+   * @override
+   */
+  _flush() {
+    super._flush();
+    if (this.hudMount) {
+      this.hudMount.innerHTML = this._toHUDHTML();
+    }
+    return this.viewModel;
+  }
+
+  _toHUDHTML() {
+    const v = this.viewModel;
+    return (
+      `<div class="hud-stat hud-day">Jour ${v.day} <span class="hud-sub">${v.season}, an ${v.year}</span></div>` +
+      `<div class="hud-stat hud-money gold">${v.money}$</div>` +
+      `<div class="hud-stat hud-rep">Reputation <strong>${v.reputation}</strong></div>` +
+      `<div class="hud-stat hud-hype">Hype <strong>${v.hype}</strong></div>`
+    );
+  }
+
   toHTML() {
     const v = this.viewModel;
-    const logHTML = v.logEntries.map((e) => `<li data-kind="${e.kind}">J${e.day} — ${e.text}</li>`).join('');
+    const logHTML = v.logEntries
+      .map(
+        (e) =>
+          `<li class="journal-entry" data-kind="${e.kind}"><span class="journal-day">J${e.day}</span>${e.text}</li>`
+      )
+      .join('');
+    const charges = v.weeklyCharges;
+    const chargesHTML = charges
+      ? `<ul class="charges-breakdown">` +
+        `<li>Loyer : ${Math.round(charges.rent)}$</li>` +
+        `<li>Salaires coachs : ${Math.round(charges.coachPayroll)}$</li>` +
+        `<li>Entretien equipements : ${Math.round(charges.equipmentMaintenance)}$</li>` +
+        `<li>Revenus passifs : +${Math.round(charges.passiveIncome)}$</li>` +
+        `</ul>`
+      : `<p class="charges-empty">Aucune semaine ecoulee pour l'instant.</p>`;
+
     return (
       `<section class="dashboard">` +
-      `<header>${v.gymName} — Jour ${v.day} (${v.season}, an ${v.year})</header>` +
-      `<ul class="stats">` +
-      `<li>Tresorerie: ${v.money}$</li>` +
-      `<li>Reputation: ${v.reputation}</li>` +
-      `<li>Hype: ${v.hype}</li>` +
+      `<header class="dashboard-header">${v.gymName} <span class="dashboard-sub">Jour ${v.day} (${v.season}, an ${v.year})</span></header>` +
+      `<ul class="stats stat-grid">` +
+      `<li class="stat-tile"><span class="stat-label">Tresorerie</span><span class="stat-value gold">${v.money}$</span></li>` +
+      `<li class="stat-tile"><span class="stat-label">Reputation</span><span class="stat-value">${v.reputation}</span></li>` +
+      `<li class="stat-tile"><span class="stat-label">Hype</span><span class="stat-value">${v.hype}</span></li>` +
       `</ul>` +
+      `<h3 class="section-title">Charges de la semaine</h3>` +
+      chargesHTML +
+      `<h3 class="section-title">Journal de bord</h3>` +
       `<ol class="logbook">${logHTML}</ol>` +
       `</section>`
     );

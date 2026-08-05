@@ -60,6 +60,95 @@ export class App {
     this.screen = APP_SCREENS.START_SCREEN;
     /** @type {Object<string, import('./render/BaseRenderer.js').BaseRenderer>} */
     this.renderers = {};
+    this._started = false;
+  }
+
+  // ---- browser bootstrap -------------------------------------------------------
+
+  /**
+   * Wires this App up to the real DOM: looks up the standard mount points
+   * (#hud, #p-dash, #p-roster, #p-fight, #p-gym, #p-social), binds the
+   * start-screen form/buttons, the tab bar, and start/game visibility
+   * toggling, then shows the start screen. Safe to import/instantiate in
+   * Node (e.g. under `node --test`) — this is a no-op there, since
+   * `document` doesn't exist outside a browser; nothing here runs unless
+   * something explicitly calls start().
+   *
+   * @returns {App} this, for chaining.
+   */
+  start() {
+    if (typeof document === 'undefined') return this;
+    if (this._started) return this;
+    this._started = true;
+
+    this.mounts = {
+      hud: document.getElementById('hud'),
+      dashboard: document.getElementById('p-dash'),
+      roster: document.getElementById('p-roster'),
+      combat: document.getElementById('p-fight'),
+      gym: document.getElementById('p-gym'),
+      social: document.getElementById('p-social'),
+    };
+
+    this._wireStartScreen();
+    this._wireTabBar();
+    this._wireScreenVisibility();
+
+    this.showStartScreen();
+    return this;
+  }
+
+  _wireStartScreen() {
+    const btnNewGame = document.getElementById('btnNewGame');
+    const nameInput = document.getElementById('newGymName');
+    const countryInput = document.getElementById('newGymCountry');
+    btnNewGame?.addEventListener('click', () => {
+      this.startNewGame({
+        gymName: nameInput?.value || undefined,
+        country: countryInput?.value || undefined,
+      });
+    });
+
+    const btnShowSlots = document.getElementById('btnShowSlots');
+    const slotList = document.getElementById('slotList');
+    btnShowSlots?.addEventListener('click', () => {
+      const slots = this.showSlotPicker();
+      if (!slotList) return;
+      slotList.innerHTML = slots.length
+        ? slots
+            .map((slot) => `<li><button class="btn btn-outline slot-btn" data-slot="${slot}">${slot}</button></li>`)
+            .join('')
+        : '<li class="empty">Aucune sauvegarde disponible.</li>';
+      slotList.querySelectorAll('.slot-btn').forEach((button) => {
+        button.addEventListener('click', () => this.loadGame(button.dataset.slot));
+      });
+    });
+  }
+
+  _wireTabBar() {
+    const tabButtons = Array.from(document.querySelectorAll('#tabbar .tab-btn'));
+    tabButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = button.dataset.tab;
+        tabButtons.forEach((b) => b.classList.toggle('active', b === button));
+        document.querySelectorAll('#panels .panel').forEach((panel) => {
+          panel.classList.toggle('active', panel.id === `p-${target}`);
+        });
+      });
+    });
+
+    document.getElementById('btnAdvanceWeek')?.addEventListener('click', () => this.advanceWeek());
+  }
+
+  _wireScreenVisibility() {
+    EventBus.subscribe(APP_EVENTS.SCREEN_CHANGED, ({ to }) => {
+      const startScreen = document.getElementById('startScreen');
+      const gameShell = document.getElementById('gameShell');
+      if (!startScreen || !gameShell) return;
+      const inGame = to === APP_SCREENS.GAME;
+      startScreen.classList.toggle('hidden', inGame);
+      gameShell.classList.toggle('hidden', !inGame);
+    });
   }
 
   // ---- screen flow ------------------------------------------------------------
@@ -160,6 +249,7 @@ export class App {
       playerState,
       worldState,
       mount: this.mounts.dashboard,
+      hudMount: this.mounts.hud,
     }).attach();
 
     this.renderers.roster = new RosterRenderer({ playerState, mount: this.mounts.roster }).attach();

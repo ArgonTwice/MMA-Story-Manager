@@ -49,10 +49,14 @@ export class SocialRenderer extends BaseRenderer {
     const postsHTML = this.viewModel.feed
       .map(
         (post) =>
-          `<li data-author-type="${post.authorType}"><strong>${post.author}</strong>: ${post.text} (${post.likes} likes)</li>`
+          `<li class="social-post" data-author-type="${post.authorType}">` +
+          `<div class="post-author">${post.author}</div>` +
+          `<div class="post-text">${post.text}</div>` +
+          `<div class="post-likes">&#9733; ${post.likes}</div>` +
+          `</li>`
       )
       .join('');
-    return `<section class="social-feed"><ul>${postsHTML}</ul></section>`;
+    return `<section class="social-feed"><ul class="feed-list">${postsHTML}</ul></section>`;
   }
 }
 

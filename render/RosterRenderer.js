@@ -127,20 +127,46 @@ export class RosterRenderer extends BaseRenderer {
     };
   }
 
+  _gaugeHTML(label, percent, kind) {
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    return (
+      `<div class="gauge-row" data-kind="${kind}">` +
+      `<span class="gauge-label">${label}</span>` +
+      `<div class="gauge-bar"><div class="gauge-fill gauge-${kind}" style="width:${clamped}%"></div></div>` +
+      `<span class="gauge-value">${clamped}</span>` +
+      `</div>`
+    );
+  }
+
   toHTML() {
     const v = this.viewModel;
     const cardsHTML = v.cards
-      .map(
-        (c) =>
-          `<li class="fighter-card" data-id="${c.id}">` +
-          `<strong>${c.name}</strong> (${c.age} ans, ${c.style}, ${c.weightClass}) — ${c.record}` +
-          `<div class="gauges">Forme ${Math.round(c.formPercent)} · Moral ${Math.round(c.moralePercent)} · Note ${c.overallRating}</div>` +
-          `${c.isInjured ? '<span class="injured">BLESSE</span>' : ''}` +
-          `${c.eligibleForRetirement ? '<button data-action="retire">Retraite</button>' : ''}` +
+      .map((c) => {
+        const skillsHTML = Object.entries(c.skills)
+          .map(([skill, value]) => `<li class="skill-pill" data-skill="${skill}">${skill} ${Math.round(value)}</li>`)
+          .join('');
+        return (
+          `<li class="fighter-card${c.isInjured ? ' injured' : ''}" data-id="${c.id}">` +
+          `<header class="fighter-card-header">` +
+          `<strong class="fighter-name">${c.name}</strong>` +
+          `<span class="fighter-meta">${c.age} ans · ${c.style} · ${c.weightClass}</span>` +
+          `</header>` +
+          `<div class="fighter-record">${c.record} <span class="fighter-rating">Note ${c.overallRating}</span></div>` +
+          this._gaugeHTML('Forme', c.formPercent, 'form') +
+          this._gaugeHTML('Moral', c.moralePercent, 'morale') +
+          `<ul class="skill-list">${skillsHTML}</ul>` +
+          `${c.isInjured ? '<span class="badge badge-injured">BLESSE</span>' : ''}` +
+          `${c.eligibleForRetirement ? `<button class="btn btn-outline btn-retire" data-action="retire" data-id="${c.id}">Retraite</button>` : ''}` +
           `</li>`
-      )
+        );
+      })
       .join('');
-    return `<section class="roster">Effectif (${v.cards.length}/${v.capacity})<ul>${cardsHTML}</ul></section>`;
+    return (
+      `<section class="roster">` +
+      `<header class="roster-header">Effectif (${v.cards.length}/${v.capacity})</header>` +
+      `<ul class="fighter-grid">${cardsHTML}</ul>` +
+      `</section>`
+    );
   }
 }
 

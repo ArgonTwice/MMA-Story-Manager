@@ -122,20 +122,42 @@ export class GymRenderer extends BaseRenderer {
 
   toHTML() {
     const v = this.viewModel;
+    const ownedHTML = v.owned
+      .map((item) => `<li class="equipment-item owned" data-id="${item.id}">${item.label}</li>`)
+      .join('');
     const catalogHTML = v.catalog
       .map(
         (item) =>
-          `<li data-id="${item.id}" data-affordable="${item.affordable}">${item.label} — ${item.purchaseCost}$</li>`
+          `<li class="equipment-item${item.affordable ? ' affordable' : ' not-affordable'}" data-id="${item.id}">` +
+          `<span class="equipment-label">${item.label}</span>` +
+          `<span class="equipment-cost">${item.purchaseCost}$</span>` +
+          `<button class="btn btn-outline btn-buy" data-action="buy-equipment" data-id="${item.id}" ${item.affordable ? '' : 'disabled'}>Acheter</button>` +
+          `</li>`
       )
       .join('');
+    const upgradeHTML = v.upgrade.atMax
+      ? `<p class="upgrade-max">Niveau maximum atteint.</p>`
+      : `<button class="btn btn-gold" data-action="upgrade-facility">Ameliorer (${v.upgrade.nextLevelCost}$)</button>`;
     const rivalsHTML = v.rivalGyms
-      .map((gym) => `<li data-id="${gym.id}">${gym.name} — reputation ${Math.round(gym.reputation)}</li>`)
+      .map(
+        (gym) =>
+          `<li class="rival-gym-item" data-id="${gym.id}">` +
+          `<span class="rival-name">${gym.name}</span>` +
+          `<span class="rival-reputation">Reputation ${Math.round(gym.reputation)}</span>` +
+          `<span class="rival-activity">Activite ${Math.round(gym.activity)}</span>` +
+          `</li>`
+      )
       .join('');
     return (
       `<section class="gym">` +
-      `<header>Niveau ${v.equipLevel} (${v.roster.size}/${v.roster.capacity} places)</header>` +
-      `<ul class="catalog">${catalogHTML}</ul>` +
-      `<ul class="rivals">${rivalsHTML}</ul>` +
+      `<header class="gym-header">Niveau ${v.equipLevel} <span class="gym-sub">${v.roster.size}/${v.roster.capacity} places</span></header>` +
+      upgradeHTML +
+      `<h3 class="section-title">Equipement possede</h3>` +
+      `<ul class="equipment-owned">${ownedHTML}</ul>` +
+      `<h3 class="section-title">Catalogue</h3>` +
+      `<ul class="equipment-catalog">${catalogHTML}</ul>` +
+      `<h3 class="section-title">Gyms rivaux</h3>` +
+      `<ul class="rival-gym-list">${rivalsHTML}</ul>` +
       `</section>`
     );
   }

@@ -166,18 +166,110 @@ export class CombatRenderer extends BaseRenderer {
     };
   }
 
+  _fighterGaugesHTML(label, live) {
+    const health = Math.max(0, Math.min(100, Math.round(live.health)));
+    const stamina = Math.max(0, Math.min(100, Math.round(live.stamina)));
+    return (
+      `<div class="fighter-gauges" data-corner="${label}">` +
+      `<div class="corner-label">Coin ${label}</div>` +
+      `<div class="gauge-row" data-kind="health">` +
+      `<span class="gauge-label">Vie</span>` +
+      `<div class="gauge-bar"><div class="gauge-fill gauge-health" style="width:${health}%"></div></div>` +
+      `<span class="gauge-value">${health}</span>` +
+      `</div>` +
+      `<div class="gauge-row" data-kind="stamina">` +
+      `<span class="gauge-label">Stamina</span>` +
+      `<div class="gauge-bar"><div class="gauge-fill gauge-stamina" style="width:${stamina}%"></div></div>` +
+      `<span class="gauge-value">${stamina}</span>` +
+      `</div>` +
+      `</div>`
+    );
+  }
+
   toHTML() {
     const v = this.viewModel;
-    if (v.screen === 'RESULT' && v.resultBanner) {
-      return `<section class="combat result-banner">${v.resultBanner.headline}</section>`;
+
+    if (v.screen === 'IDLE') {
+      return `<section class="combat" data-screen="IDLE"><p class="combat-idle">Aucun combat en cours.</p></section>`;
     }
-    const gauge = (label, live) =>
-      `<div class="gauge" data-fighter="${label}">Vie ${Math.round(live.health)} / Stamina ${Math.round(live.stamina)}</div>`;
+
+    if (v.screen === 'RESULT' && v.resultBanner) {
+      return (
+        `<section class="combat" data-screen="RESULT">` +
+        `<div class="result-banner reveal">` +
+        `<div class="result-method">${v.resultBanner.method}</div>` +
+        `<div class="result-headline">${v.resultBanner.headline}</div>` +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    if (v.screen === 'WEIGH_IN') {
+      return (
+        `<section class="combat" data-screen="WEIGH_IN">` +
+        `<div class="weighin-card">` +
+        `<h3 class="section-title">Pesee</h3>` +
+        `<p>Choisissez un profil de coupe de poids pour chaque coin.</p>` +
+        `<div class="weighin-profiles">` +
+        `<button class="btn btn-outline" data-action="weigh-in" data-fighter="A" data-profile="NATUREL">Naturel</button>` +
+        `<button class="btn btn-outline" data-action="weigh-in" data-fighter="A" data-profile="MODERE">Modere</button>` +
+        `<button class="btn btn-outline" data-action="weigh-in" data-fighter="A" data-profile="INTENSIF">Intensif</button>` +
+        `<button class="btn btn-outline" data-action="weigh-in" data-fighter="A" data-profile="EXTREME">Extreme</button>` +
+        `</div>` +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    if (v.screen === 'GAMEPLAN') {
+      return (
+        `<section class="combat" data-screen="GAMEPLAN">` +
+        `<div class="gameplan-selector">` +
+        `<h3 class="section-title">Gameplan</h3>` +
+        `<div class="gameplan-row"><span>Cible</span>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="target" data-value="HEAD">Tete</button>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="target" data-value="BODY">Corps</button>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="target" data-value="LEGS">Jambes</button>` +
+        `</div>` +
+        `<div class="gameplan-row"><span>Distance</span>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="distance" data-value="STRIKING">Frappe</button>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="distance" data-value="CLINCH">Clinch</button>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="distance" data-value="GROUND">Sol</button>` +
+        `</div>` +
+        `<div class="gameplan-row"><span>Tempo</span>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="tempo" data-value="CONSERVATIVE">Prudent</button>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="tempo" data-value="BALANCED">Equilibre</button>` +
+        `<button class="btn btn-outline" data-action="gameplan" data-field="tempo" data-value="AGGRESSIVE">Agressif</button>` +
+        `</div>` +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    if (v.screen === 'CORNER_PAUSE') {
+      return (
+        `<section class="combat" data-screen="CORNER_PAUSE">` +
+        `<div class="corner-pause-banner">Pause de coin — ajustez le gameplan du coin A avant le round ${v.currentRound + 1}.</div>` +
+        this._fighterGaugesHTML('A', v.live.A) +
+        this._fighterGaugesHTML('B', v.live.B) +
+        `<button class="btn btn-gold" data-action="advance">Round suivant</button>` +
+        `</section>`
+      );
+    }
+
+    // ROUND / RESOLVING
+    const roundLogHTML = v.lastRoundLog
+      ? `<ul class="round-log">` +
+        `<li>Degats A : ${v.lastRoundLog.damageDealt.A} — Degats B : ${v.lastRoundLog.damageDealt.B}</li>` +
+        `</ul>`
+      : '';
+
     return (
       `<section class="combat" data-screen="${v.screen}">` +
-      `<header>Round ${v.currentRound}/${v.maxRounds}</header>` +
-      gauge('A', v.live.A) +
-      gauge('B', v.live.B) +
+      `<header class="round-header">Round ${v.currentRound}/${v.maxRounds}</header>` +
+      this._fighterGaugesHTML('A', v.live.A) +
+      this._fighterGaugesHTML('B', v.live.B) +
+      roundLogHTML +
       `</section>`
     );
   }

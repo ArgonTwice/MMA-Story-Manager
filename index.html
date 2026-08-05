@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MMA Gym Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ================= START SCREEN ================= -->
+      <section id="startScreen" class="screen">
+        <div class="start-panel">
+          <h1 class="brand">MMA GYM MANAGER</h1>
+          <p class="tagline">Batissez votre dynastie, un combat a la fois.</p>
+
+          <div class="start-actions">
+            <div class="new-game-form">
+              <h2 class="section-title">Nouvelle Partie</h2>
+              <input id="newGymName" type="text" placeholder="Nom de la salle" autocomplete="off" />
+              <input id="newGymCountry" type="text" placeholder="Pays" autocomplete="off" />
+              <button id="btnNewGame" class="btn btn-gold">Commencer</button>
+            </div>
+
+            <div class="load-game-panel">
+              <h2 class="section-title">Charger une Partie</h2>
+              <button id="btnShowSlots" class="btn btn-outline">Voir les sauvegardes</button>
+              <ul id="slotList" class="slot-list"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= GAME SHELL ================= -->
+      <div id="gameShell" class="hidden">
+        <header id="hud"></header>
+
+        <nav id="tabbar">
+          <button class="tab-btn active" data-tab="dash">Tableau de bord</button>
+          <button class="tab-btn" data-tab="roster">Effectif</button>
+          <button class="tab-btn" data-tab="fight">Combat</button>
+          <button class="tab-btn" data-tab="gym">Salle</button>
+          <button class="tab-btn" data-tab="social">Reseaux</button>
+          <button id="btnAdvanceWeek" class="btn btn-gold tab-action">Semaine Suivante</button>
+        </nav>
+
+        <main id="panels">
+          <section id="p-dash" class="panel active"></section>
+          <section id="p-roster" class="panel"></section>
+          <section id="p-fight" class="panel"></section>
+          <section id="p-gym" class="panel"></section>
+          <section id="p-social" class="panel"></section>
+        </main>
+      </div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
