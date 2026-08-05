@@ -63,6 +63,8 @@ const SKILL_KEYS = Object.freeze(['boxe', 'jambes', 'sol', 'soumission', 'cardio
 const STYLE_KEYS = Object.keys(BALANCE.COMBAT.STYLE_BONUSES).filter((key) => key !== 'DEFAULT');
 /** Training country-bonus origins this tool generates fighters into (see BALANCE.TRAINING.COUNTRY_BONUSES), minus the catch-all DEFAULT. */
 const ORIGIN_KEYS = Object.keys(BALANCE.TRAINING.COUNTRY_BONUSES).filter((key) => key !== 'DEFAULT');
+/** Valid gameplan tempo choices (see BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS) — CONSERVATIVE/BALANCED/AGGRESSIVE. */
+const TEMPO_KEYS = Object.freeze(Object.keys(BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS));
 /**
  * No canonical weight-class list exists in data/balance.js yet (Fighter
  * doesn't validate identity.weightClass) — this is local flavor for the
@@ -142,8 +144,13 @@ function generateSkills(rng, styleKey) {
  * every style bonus that isn't already HEAD/STRIKING (e.g. Muay Thai's
  * LEGS/BODY targeting, or Lutte/Jiu-Jitsu Bresilien's GROUND distance) and
  * make "Dominance des Styles" measure gameplan defaults, not style design.
+ *
+ * Tempo is picked at random (uniformly across CONSERVATIVE/BALANCED/
+ * AGGRESSIVE) rather than hardcoded — a fixed BALANCED tempo would leave
+ * the "aggressiveness" telemetry (tempoMetrics) with nothing to compare,
+ * since only one bucket would ever collect data.
  */
-function gameplanForStyle(styleKey) {
+function gameplanForStyle(styleKey, rng) {
   const styleBonus = BALANCE.COMBAT.STYLE_BONUSES[styleKey] ?? BALANCE.COMBAT.STYLE_BONUSES.DEFAULT;
   const distance = styleBonus.distance ?? 'STRIKING';
 
@@ -154,7 +161,7 @@ function gameplanForStyle(styleKey) {
     );
   }
 
-  return { target, distance, tempo: 'BALANCED' };
+  return { target, distance, tempo: pick(rng, TEMPO_KEYS) };
 }
 
 /**
@@ -212,6 +219,15 @@ function generateFighter(rng, nextFighterId) {
   });
 }
 
+/** Generates a fighter, adds it to the roster, and records it in the run's population/diversity stats (initial fill and every retirement replacement funnel through here). */
+function spawnFighter(playerState, stats, rng, nextFighterId) {
+  const fighter = generateFighter(rng, nextFighterId);
+  playerState.addFighter(fighter);
+  stats.fighters.totalGenerated += 1;
+  stats.fighterCountsByStyle[fighter.identity.style] += 1;
+  return fighter;
+}
+
 /** Bumps equipLevel (facility level) just enough for the roster to fit, capped at the real facility level ceiling. */
 function ensureRosterCapacity(playerState, desiredSize) {
   const maxLevel = BALANCE.ECONOMY.FACILITY_UPGRADE.MAX_LEVEL;
@@ -245,6 +261,33 @@ function createStyleMatchupMatrix() {
   return matrix;
 }
 
+/** Mirrors CombatEngine's _createEmptyActionMetric() shape — see engine/CombatEngine.js's actionMetrics doc comment. */
+function emptyActionMetricBucket() {
+  return { attempts: 0, successes: 0, totalDamage: 0, totalScorePoints: 0, totalControlRounds: 0 };
+}
+
+/** Same 6 buckets CombatEngine's _resolveActionBucket() ever produces. */
+const ACTION_BUCKET_KEYS = Object.freeze([
+  'HEAD_STRIKE',
+  'BODY_STRIKE',
+  'LEG_STRIKE',
+  'CLINCH',
+  'TAKEDOWN',
+  'SUBMISSION_ATTEMPT',
+]);
+
+function createActionMetricsAccumulator() {
+  const buckets = {};
+  for (const key of ACTION_BUCKET_KEYS) buckets[key] = emptyActionMetricBucket();
+  return buckets;
+}
+
+function createTempoMetricsAccumulator() {
+  const buckets = {};
+  for (const key of TEMPO_KEYS) buckets[key] = { rounds: 0, totalDamage: 0, totalScorePoints: 0 };
+  return buckets;
+}
+
 function emptyCombatMetricsAccumulator() {
   return {
     fightsWithMetrics: 0,
@@ -264,7 +307,19 @@ function emptyCombatMetricsAccumulator() {
     decisionFights: 0,
     groundDominantDecisionFights: 0,
     groundDominantWins: 0,
+    actionMetrics: createActionMetricsAccumulator(),
+    tempoMetrics: createTempoMetricsAccumulator(),
   };
+}
+
+/** style -> { [FINISH_METHODS value]: winCount } — how each style's wins break down by method. */
+function createStyleWinMethodsAccumulator() {
+  const byStyle = {};
+  for (const style of STYLE_KEYS) {
+    byStyle[style] = {};
+    for (const method of Object.values(FINISH_METHODS)) byStyle[style][method] = 0;
+  }
+  return byStyle;
 }
 
 function createStatsAccumulator() {
@@ -272,7 +327,13 @@ function createStatsAccumulator() {
   for (const key of Object.keys(BALANCE.PERSONALITY.ARCHETYPES)) archetypes[key] = emptyArchetypeBucket();
 
   const styles = {};
-  for (const key of STYLE_KEYS) styles[key] = emptyStyleBucket();
+  const styleIdentity = {};
+  const fighterCountsByStyle = {};
+  for (const key of STYLE_KEYS) {
+    styles[key] = emptyStyleBucket();
+    styleIdentity[key] = { totalScore: 0, samples: 0 };
+    fighterCountsByStyle[key] = 0;
+  }
 
   return {
     economy: {
@@ -287,6 +348,9 @@ function createStatsAccumulator() {
     archetypes,
     styles,
     styleMatchups: createStyleMatchupMatrix(),
+    styleWinMethods: createStyleWinMethodsAccumulator(),
+    styleIdentity,
+    fighterCountsByStyle,
     combat: emptyCombatMetricsAccumulator(),
     health: {
       totalInjuries: 0,
@@ -365,6 +429,23 @@ function recordCombatMetrics(stats, result) {
     combat.countersTriggered += m.countersTriggered;
     combat.judgePointsFromDamage += m.judgePointsFromDamage;
     combat.judgePointsFromGroundControl += m.judgePointsFromGroundControl;
+
+    for (const bucketKey of ACTION_BUCKET_KEYS) {
+      const src = m.actionMetrics[bucketKey];
+      const dst = combat.actionMetrics[bucketKey];
+      dst.attempts += src.attempts;
+      dst.successes += src.successes;
+      dst.totalDamage += src.totalDamage;
+      dst.totalScorePoints += src.totalScorePoints;
+      dst.totalControlRounds += src.totalControlRounds;
+    }
+    for (const tempoKey of TEMPO_KEYS) {
+      const src = m.tempoMetrics[tempoKey];
+      const dst = combat.tempoMetrics[tempoKey];
+      dst.rounds += src.rounds;
+      dst.totalDamage += src.totalDamage;
+      dst.totalScorePoints += src.totalScorePoints;
+    }
   }
 
   const groundControlA = result.combatMetrics.A.judgePointsFromGroundControl;
@@ -377,6 +458,24 @@ function recordCombatMetrics(stats, result) {
       const groundDominantKey = groundControlA > groundControlB ? 'A' : 'B';
       if (result.winner === groundDominantKey) combat.groundDominantWins += 1;
     }
+  }
+}
+
+/** Credits the winning corner's style with a win by this fight's finish method (Win Condition Report). Draws credit nobody. */
+function recordStyleWinMethod(stats, fighterA, fighterB, result) {
+  if (result.winner === null) return;
+  const winnerStyle = result.winner === 'A' ? fighterA.identity.style : fighterB.identity.style;
+  stats.styleWinMethods[winnerStyle][result.method] += 1;
+}
+
+/** Folds both corners' one-time styleIdentityScores (see CombatEngine's _computeStyleIdentityScore) into the per-style running average. */
+function recordStyleIdentity(stats, fighterA, fighterB, result) {
+  for (const [fighter, key] of [[fighterA, 'A'], [fighterB, 'B']]) {
+    const score = result.styleIdentityScores[key];
+    if (score === null) continue; // Freestyle/DEFAULT has no distance affinity to score against
+    const bucket = stats.styleIdentity[fighter.identity.style];
+    bucket.totalScore += score;
+    bucket.samples += 1;
   }
 }
 
@@ -394,8 +493,8 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
     const fighterA = available[i];
     const fighterB = available[i + 1];
     combatEngine.setupMatch(fighterA, fighterB, orgId, false);
-    combatEngine.setGameplan('A', gameplanForStyle(fighterA.identity.style));
-    combatEngine.setGameplan('B', gameplanForStyle(fighterB.identity.style));
+    combatEngine.setGameplan('A', gameplanForStyle(fighterA.identity.style, rng));
+    combatEngine.setGameplan('B', gameplanForStyle(fighterB.identity.style, rng));
     const result = combatEngine.simulateFullMatch();
     fightsBooked += 1;
 
@@ -403,6 +502,8 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
     stats.fights.byMethod[result.method] = (stats.fights.byMethod[result.method] ?? 0) + 1;
     recordStyleMatchup(stats, fighterA.identity.style, fighterB.identity.style, result);
     recordCombatMetrics(stats, result);
+    recordStyleWinMethod(stats, fighterA, fighterB, result);
+    recordStyleIdentity(stats, fighterA, fighterB, result);
 
     const isDraw = result.winner === null;
     for (const [key, fighter] of [['A', fighterA], ['B', fighterB]]) {
@@ -452,8 +553,7 @@ function processRetirements({ summary, playerState, rng, stats, nextFighterId })
     stats.fighters.totalRetired += 1;
 
     playerState.removeFighter(fighterId);
-    playerState.addFighter(generateFighter(rng, nextFighterId));
-    stats.fighters.totalGenerated += 1;
+    spawnFighter(playerState, stats, rng, nextFighterId);
   }
 }
 
@@ -552,18 +652,16 @@ export function runSimulation(options = {}) {
   gameState.newGame({ gymName: 'Simulation Headless', country: 'SIM' });
   const { playerState, worldState } = gameState;
 
+  const stats = createStatsAccumulator();
   const nextFighterId = createFighterIdSequencer();
   const actualRosterSize = ensureRosterCapacity(playerState, rosterSize);
   for (let i = 0; i < actualRosterSize; i += 1) {
-    playerState.addFighter(generateFighter(rng, nextFighterId));
+    spawnFighter(playerState, stats, rng, nextFighterId);
   }
 
   const combatEngine = new CombatEngine({ playerState, worldState, rng });
   const engines = createReactiveEngines();
   attachReactiveEngines(engines, playerState, worldState);
-
-  const stats = createStatsAccumulator();
-  stats.fighters.totalGenerated += actualRosterSize;
 
   let narrativeBeatsThisWeek = 0;
   const unsubscribeNarrative = EventBus.subscribe(NARRATIVE_ENGINE_EVENTS.PUBLISHED, (beat) => {
@@ -732,7 +830,44 @@ function finalizeCombatMetrics(combat) {
     groundDominantDecisionFights: combat.groundDominantDecisionFights,
     groundDominantWinRate:
       combat.groundDominantDecisionFights > 0 ? combat.groundDominantWins / combat.groundDominantDecisionFights : null,
+    actionMetrics: finalizeActionMetrics(combat.actionMetrics),
+    tempoMetrics: finalizeTempoMetrics(combat.tempoMetrics),
   };
+}
+
+/**
+ * Turns raw actionMetrics sums into per-attempt rates — "EV" here means
+ * average judge-score points generated per attempt, the one currency both
+ * damage-based and control-based actions are ultimately converted into (see
+ * CombatEngine's _computeScoreBreakdown). SUBMISSION_ATTEMPT is a deliberate
+ * subset of TAKEDOWN's rounds (both fire on every GROUND round) — don't sum
+ * bucket totals together expecting them to add up to a round count.
+ */
+function finalizeActionMetrics(actionMetrics) {
+  const result = {};
+  for (const [bucketKey, bucket] of Object.entries(actionMetrics)) {
+    result[bucketKey] = {
+      attempts: bucket.attempts,
+      successRate: bucket.attempts > 0 ? bucket.successes / bucket.attempts : null,
+      avgDamage: bucket.attempts > 0 ? bucket.totalDamage / bucket.attempts : null,
+      avgScorePoints: bucket.attempts > 0 ? bucket.totalScorePoints / bucket.attempts : null,
+      controlRate: bucket.attempts > 0 ? bucket.totalControlRounds / bucket.attempts : null,
+    };
+  }
+  return result;
+}
+
+/** Tempo ("aggressiveness") payoff: average damage/score per round for each tempo choice — see the tempoMetrics doc comment in CombatEngine. */
+function finalizeTempoMetrics(tempoMetrics) {
+  const result = {};
+  for (const [tempoKey, bucket] of Object.entries(tempoMetrics)) {
+    result[tempoKey] = {
+      rounds: bucket.rounds,
+      avgDamage: bucket.rounds > 0 ? bucket.totalDamage / bucket.rounds : null,
+      avgScorePoints: bucket.rounds > 0 ? bucket.totalScorePoints / bucket.rounds : null,
+    };
+  }
+  return result;
 }
 
 function finalizeStyleMatchups(matrix) {
@@ -745,6 +880,85 @@ function finalizeStyleMatchups(matrix) {
     }
   }
   return result;
+}
+
+/** Win Condition Report: for each style, its wins broken down by finish method. */
+function finalizeStyleWinMethods(styleWinMethods, styles) {
+  const result = {};
+  for (const [style, methods] of Object.entries(styleWinMethods)) {
+    const totalWins = styles[style].wins;
+    const byMethod = {};
+    for (const [method, count] of Object.entries(methods)) {
+      byMethod[method] = { count, share: totalWins > 0 ? count / totalWins : null };
+    }
+    result[style] = { totalWins, byMethod };
+  }
+  return result;
+}
+
+/** Style Identity Score per style: average fidelity (0-100) across every fighter-appearance sampled — see CombatEngine's _computeStyleIdentityScore. */
+function finalizeStyleIdentity(styleIdentity) {
+  const result = {};
+  for (const [style, bucket] of Object.entries(styleIdentity)) {
+    result[style] = bucket.samples > 0 ? bucket.totalScore / bucket.samples : null;
+  }
+  return result;
+}
+
+/**
+ * Normalized Shannon entropy (0-100) of a set of non-negative counts: 100
+ * means every bucket carries an equal share (maximal diversity), 0 means a
+ * single bucket accounts for everything. Used both as the standalone
+ * DIVERSITY INDEX and as one input to the Meta Health Index.
+ * @param {number[]} counts
+ * @returns {number|null}
+ */
+function computeDiversityIndex(counts) {
+  const total = counts.reduce((sum, v) => sum + v, 0);
+  const bucketCount = counts.length;
+  if (total <= 0 || bucketCount <= 1) return total > 0 ? 100 : null;
+
+  const entropy = counts.reduce((sum, count) => {
+    if (count <= 0) return sum;
+    const share = count / total;
+    return sum - share * Math.log(share);
+  }, 0);
+  const maxEntropy = Math.log(bucketCount);
+  return Math.round((entropy / maxEntropy) * 100);
+}
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * How far, on average, each style's winrate sits from a perfectly balanced
+ * 50% — 100 means every style hovers at exactly 50%, 0 means every style
+ * sits at the extreme (100% or 0%).
+ */
+function computeBalanceScore(styles) {
+  const rates = Object.values(styles)
+    .map((bucket) => winRate(bucket))
+    .filter((rate) => rate !== null);
+  if (rates.length === 0) return null;
+
+  const avgDeviation = average(rates.map((rate) => Math.abs(rate - 0.5)));
+  return Math.round(clamp01(1 - avgDeviation * 2) * 100);
+}
+
+/**
+ * Meta Health Index (0-100): an equally-weighted average of four already-
+ * independently-reported sub-scores — diversity (style representation
+ * evenness), balance (how close every style's winrate sits to 50%),
+ * financial health (the inverse of the insolvency rate), and fun (the
+ * inverse of the dull-week rate). Deliberately simple and auditable (equal
+ * weights, every component shown on its own in the report) rather than a
+ * tuned/opaque formula — this is a diagnostic tool, not a scoring gate.
+ */
+function computeMetaHealthIndex({ diversityScore, balanceScore, financialHealthScore, funScore }) {
+  const components = [diversityScore, balanceScore, financialHealthScore, funScore].filter((v) => v !== null);
+  if (components.length === 0) return null;
+  return Math.round(average(components));
 }
 
 function finalizeStats(stats, config, durationMs) {
@@ -779,6 +993,35 @@ function finalizeStats(stats, config, durationMs) {
   );
 
   const econ = stats.economy;
+  const insolvencyRate = econ.weeksSimulated > 0 ? econ.insolvencyWeeks / econ.weeksSimulated : null;
+  const dullWeekRate = stats.fun.totalWeeks > 0 ? stats.fun.dullWeeks / stats.fun.totalWeeks : null;
+
+  const totalFightersGenerated = Object.values(stats.fighterCountsByStyle).reduce((sum, v) => sum + v, 0);
+  const diversity = {
+    byStyle: Object.fromEntries(
+      Object.entries(stats.fighterCountsByStyle).map(([style, count]) => [
+        style,
+        { count, share: totalFightersGenerated > 0 ? count / totalFightersGenerated : null },
+      ])
+    ),
+    diversityIndex: computeDiversityIndex(Object.values(stats.fighterCountsByStyle)),
+  };
+
+  const balanceScore = computeBalanceScore(styles);
+  const financialHealthScore = insolvencyRate !== null ? Math.round(clamp01(1 - insolvencyRate) * 100) : null;
+  const funScore = dullWeekRate !== null ? Math.round(clamp01(1 - dullWeekRate) * 100) : null;
+  const metaHealth = {
+    diversityScore: diversity.diversityIndex,
+    balanceScore,
+    financialHealthScore,
+    funScore,
+    overallIndex: computeMetaHealthIndex({
+      diversityScore: diversity.diversityIndex,
+      balanceScore,
+      financialHealthScore,
+      funScore,
+    }),
+  };
 
   return {
     config,
@@ -791,11 +1034,14 @@ function finalizeStats(stats, config, durationMs) {
       avgWeeklyIncome: econ.weeksSimulated > 0 ? econ.totalIncome / econ.weeksSimulated : null,
       avgWeeklyExpenses: econ.weeksSimulated > 0 ? econ.totalExpenses / econ.weeksSimulated : null,
       insolvencyWeeks: econ.insolvencyWeeks,
-      insolvencyRate: econ.weeksSimulated > 0 ? econ.insolvencyWeeks / econ.weeksSimulated : null,
+      insolvencyRate,
     },
     archetypes,
     styles,
     styleMatchups: finalizeStyleMatchups(stats.styleMatchups),
+    styleWinMethods: finalizeStyleWinMethods(stats.styleWinMethods, styles),
+    styleIdentity: finalizeStyleIdentity(stats.styleIdentity),
+    diversity,
     combat: finalizeCombatMetrics(stats.combat),
     health: {
       totalInjuries: stats.health.totalInjuries,
@@ -807,9 +1053,10 @@ function finalizeStats(stats, config, durationMs) {
     fun: {
       totalWeeks: stats.fun.totalWeeks,
       dullWeeks: stats.fun.dullWeeks,
-      dullWeekRate: stats.fun.totalWeeks > 0 ? stats.fun.dullWeeks / stats.fun.totalWeeks : null,
+      dullWeekRate,
     },
     narrative: stats.narrative,
+    metaHealth,
     weeklyMetrics: stats.weeklyMetrics,
     seasonalMetrics: stats.seasonalMetrics,
   };

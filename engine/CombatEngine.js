@@ -214,6 +214,12 @@ export class CombatEngine {
       currentRound: 0,
       fighters: { A: fighterA, B: fighterB },
       corners: { red: redCornerKey, blue: OTHER_FIGHTER_KEY[redCornerKey] },
+      // Skills are fixed for the duration of a fight, so this is a one-time
+      // snapshot rather than something _recordFighterCombatMetrics updates.
+      styleIdentityScores: {
+        A: this._computeStyleIdentityScore(fighterA),
+        B: this._computeStyleIdentityScore(fighterB),
+      },
       gameplans: { A: { ...DEFAULT_GAMEPLAN }, B: { ...DEFAULT_GAMEPLAN } },
       weightCut: { A: null, B: null },
       live: {
@@ -665,14 +671,18 @@ export class CombatEngine {
       perksUnlocked,
       injuries,
       damageTally: { A: { ...c.damageTally.A }, B: { ...c.damageTally.B } },
-      combatMetrics: { A: { ...c.combatMetrics.A }, B: { ...c.combatMetrics.B } },
+      combatMetrics: { A: this._cloneCombatMetrics(c.combatMetrics.A), B: this._cloneCombatMetrics(c.combatMetrics.B) },
+      styleIdentityScores: { ...c.styleIdentityScores },
       scorecards: c.scorecards.map((s) => ({ round: s.round, judgeCards: s.judgeCards })),
     };
 
     this._transition(COMBAT_STATES.FINISHED);
     if (this.runtimeState) {
       this.runtimeState.isSimulationRunning = false;
-      this.runtimeState.lastCombatMetrics = { A: { ...c.combatMetrics.A }, B: { ...c.combatMetrics.B } };
+      this.runtimeState.lastCombatMetrics = {
+        A: this._cloneCombatMetrics(c.combatMetrics.A),
+        B: this._cloneCombatMetrics(c.combatMetrics.B),
+      };
     }
 
     EventBus.publish(COMBAT_EVENTS.FINISHED, { ...c.result });
@@ -702,6 +712,44 @@ export class CombatEngine {
 
   _getStyleBonus(fighter) {
     return BALANCE.COMBAT.STYLE_BONUSES[fighter.identity.style] ?? BALANCE.COMBAT.STYLE_BONUSES.DEFAULT;
+  }
+
+  /**
+   * Style Identity Score (0-100): how closely this fighter's own skill
+   * distribution matches the skill profile their style's preferred distance
+   * actually rewards (BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS) — a
+   * fidelity measure of the *fighter*, not of any gameplan choice made
+   * during the match (skills don't change mid-fight, so this is computed
+   * once at setupMatch() from whatever the fighter's skills are that day).
+   *
+   * Implemented as histogram intersection between the fighter's own
+   * skills, normalized to sum to 1, and the style's ideal weights (which
+   * already sum to 1 by construction — see DISTANCE_SKILL_WEIGHTS' own
+   * comment): 100 means the fighter's skill investment perfectly mirrors
+   * their style's ideal, 0 means every skill point is invested in exactly
+   * what that style's distance doesn't reward.
+   *
+   * @param {Fighter} fighter
+   * @returns {number|null} 0-100, or null for a style with no distance
+   *   affinity to score against (Freestyle/DEFAULT).
+   */
+  _computeStyleIdentityScore(fighter) {
+    const styleBonus = this._getStyleBonus(fighter);
+    const idealWeights = styleBonus.distance
+      ? BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS[styleBonus.distance]
+      : null;
+    if (!idealWeights) return null;
+
+    const skills = fighter.attributes.skills;
+    const totalSkill = Object.values(skills).reduce((sum, value) => sum + value, 0);
+    if (totalSkill <= 0) return 0;
+
+    let overlap = 0;
+    for (const skillKey of Object.keys(idealWeights)) {
+      const actualShare = skills[skillKey] / totalSkill;
+      overlap += Math.min(actualShare, idealWeights[skillKey]);
+    }
+    return Math.round(clamp(overlap, 0, 1) * 100);
   }
 
   /**
@@ -841,6 +889,7 @@ export class CombatEngine {
     return {
       target: plan.target,
       distance: plan.distance,
+      tempo: plan.tempo,
       rawDamage,
       staminaCost,
       koChanceMultiplier: targetEffects.koChanceMultiplier * perkKoMultiplier,
@@ -976,6 +1025,35 @@ export class CombatEngine {
   }
 
   /**
+   * @returns {Object} A fresh, all-zero action-metrics bucket (see
+   *   ACTION_BUCKET_KEYS / _resolveActionBucket).
+   */
+  _createEmptyActionMetric() {
+    return { attempts: 0, successes: 0, totalDamage: 0, totalScorePoints: 0, totalControlRounds: 0 };
+  }
+
+  /**
+   * Deep-ish copy of one fighter's combatMetrics (actionMetrics/tempoMetrics
+   * are nested objects, so the plain-object-spread pattern used elsewhere in
+   * this file for flatter shapes like damageTally isn't enough here) —
+   * returned/published results must never hand out a live reference into
+   * this.context, matching every other getter in this file.
+   * @param {Object} metrics - One combatMetrics.A/.B entry.
+   * @returns {Object}
+   */
+  _cloneCombatMetrics(metrics) {
+    return {
+      ...metrics,
+      actionMetrics: Object.fromEntries(
+        Object.entries(metrics.actionMetrics).map(([bucketKey, bucket]) => [bucketKey, { ...bucket }])
+      ),
+      tempoMetrics: Object.fromEntries(
+        Object.entries(metrics.tempoMetrics).map(([tempoKey, bucket]) => [tempoKey, { ...bucket }])
+      ),
+    };
+  }
+
+  /**
    * @returns {Object} A fresh, all-zero combat-metrics accumulator for one
    *   fighter (see _recordFighterCombatMetrics), reset at the start of
    *   every match (INTRO phase).
@@ -999,7 +1077,75 @@ export class CombatEngine {
       countersTriggered: 0,
       judgePointsFromDamage: 0,
       judgePointsFromGroundControl: 0,
+      /**
+       * EV-per-action-type telemetry. Buckets are the finest-grained
+       * distinction CombatEngine actually resolves (gameplan target x
+       * distance) — it does not simulate individual punch types (there is
+       * no discrete "Jab" vs "Cross"), so HEAD_STRIKE covers every
+       * STRIKING+HEAD round regardless of which real-world punch it would
+       * represent. SUBMISSION_ATTEMPT is deliberately a *subset* of
+       * TAKEDOWN's rounds (every GROUND round both attempts a takedown and,
+       * within it, a submission) — summing every bucket's totals together
+       * therefore double-counts GROUND rounds by design; read each bucket
+       * on its own.
+       */
+      actionMetrics: {
+        HEAD_STRIKE: this._createEmptyActionMetric(),
+        BODY_STRIKE: this._createEmptyActionMetric(),
+        LEG_STRIKE: this._createEmptyActionMetric(),
+        CLINCH: this._createEmptyActionMetric(),
+        TAKEDOWN: this._createEmptyActionMetric(),
+        SUBMISSION_ATTEMPT: this._createEmptyActionMetric(),
+      },
+      /**
+       * Tempo ("aggressiveness") telemetry: how much damage/score each
+       * tempo choice actually produced. Tempo is a multiplier on damage
+       * (see BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS.outputMultiplier), not
+       * an independent additive judging criterion — there is no separate
+       * "aggression" term in _computeScoreBreakdown — so this measures
+       * tempo's real payoff, not a third scoring axis alongside damage/
+       * ground-control.
+       */
+      tempoMetrics: {
+        CONSERVATIVE: { rounds: 0, totalDamage: 0, totalScorePoints: 0 },
+        BALANCED: { rounds: 0, totalDamage: 0, totalScorePoints: 0 },
+        AGGRESSIVE: { rounds: 0, totalDamage: 0, totalScorePoints: 0 },
+      },
     };
+  }
+
+  /**
+   * The action-type bucket this round's offense belongs to — see the
+   * actionMetrics doc comment in _createEmptyCombatMetrics for what each
+   * bucket does (and doesn't) represent.
+   * @param {Object} offense
+   * @returns {string}
+   */
+  _resolveActionBucket(offense) {
+    if (offense.distance === 'STRIKING') {
+      if (offense.target === 'HEAD') return 'HEAD_STRIKE';
+      if (offense.target === 'BODY') return 'BODY_STRIKE';
+      return 'LEG_STRIKE';
+    }
+    if (offense.distance === 'CLINCH') return 'CLINCH';
+    return 'TAKEDOWN'; // GROUND
+  }
+
+  /**
+   * @param {Object} bucket - One actionMetrics[...] entry.
+   * @param {number} damage
+   * @param {number} scorePoints
+   * @param {boolean} success - Whether this attempt counts as a "success"
+   *   (always true for buckets with no discrete pass/fail roll — see
+   *   _createEmptyCombatMetrics — only SUBMISSION_ATTEMPT ever passes false).
+   * @param {boolean} wonControl
+   */
+  _recordActionMetric(bucket, damage, scorePoints, success, wonControl) {
+    bucket.attempts += 1;
+    if (success) bucket.successes += 1;
+    bucket.totalDamage += damage;
+    bucket.totalScorePoints += scorePoints;
+    if (wonControl) bucket.totalControlRounds += 1;
   }
 
   /**
@@ -1050,8 +1196,29 @@ export class CombatEngine {
     }
 
     const breakdown = this._computeScoreBreakdown(offense);
+    const totalScorePoints = breakdown.damagePoints + breakdown.groundControlPoints;
     metrics.judgePointsFromDamage += breakdown.damagePoints;
     metrics.judgePointsFromGroundControl += breakdown.groundControlPoints;
+
+    const wonControl = offense.distance !== 'STRIKING';
+    const primaryBucket = metrics.actionMetrics[this._resolveActionBucket(offense)];
+    this._recordActionMetric(primaryBucket, offense.rawDamage, totalScorePoints, true, wonControl);
+    if (offense.submissionAttempted) {
+      this._recordActionMetric(
+        metrics.actionMetrics.SUBMISSION_ATTEMPT,
+        offense.rawDamage,
+        totalScorePoints,
+        offense.submissionSuccess,
+        wonControl
+      );
+    }
+
+    const tempoBucket = metrics.tempoMetrics[offense.tempo];
+    if (tempoBucket) {
+      tempoBucket.rounds += 1;
+      tempoBucket.totalDamage += offense.rawDamage;
+      tempoBucket.totalScorePoints += totalScorePoints;
+    }
   }
 
   /**

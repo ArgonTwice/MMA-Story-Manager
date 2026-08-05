@@ -242,6 +242,145 @@ function renderCombatTelemetrySection(result) {
   ].join('\n');
 }
 
+const ACTION_LABELS = Object.freeze({
+  HEAD_STRIKE: 'Frappes Tete (Debout)',
+  BODY_STRIKE: 'Frappes Corps (Debout)',
+  LEG_STRIKE: 'Coups de Jambes (Debout)',
+  CLINCH: 'Clinch',
+  TAKEDOWN: 'Takedown / Controle Sol',
+  SUBMISSION_ATTEMPT: 'Tentative de Soumission',
+});
+
+function renderMetaHealthHeader() {
+  return '\n=== META HEALTH DASHBOARD ===';
+}
+
+function renderWinConditionSubsection(result) {
+  const lines = [renderSectionTitle('\u{1F4CA} WIN CONDITION REPORT (par style)')];
+  const headers = ['Style', 'Victoires', 'KO %', 'TKO %', 'Sub %', 'Decision %', 'Arret Medical %'];
+  const rows = Object.entries(result.styleWinMethods).map(([style, entry]) => {
+    const m = entry.byMethod;
+    const decisionCount = (m.UNANIMOUS_DECISION?.count ?? 0) + (m.SPLIT_DECISION?.count ?? 0) + (m.MAJORITY_DECISION?.count ?? 0);
+    const decisionRate = entry.totalWins > 0 ? decisionCount / entry.totalWins : null;
+    return [
+      style,
+      formatNumber(entry.totalWins),
+      formatPercent(m.KO?.share ?? null, 0),
+      formatPercent(m.TKO?.share ?? null, 0),
+      formatPercent(m.SUBMISSION?.share ?? null, 0),
+      formatPercent(decisionRate, 0),
+      formatPercent(m.DOCTOR_STOPPAGE?.share ?? null, 0),
+    ];
+  });
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderActionEVSubsection(result) {
+  const lines = [renderSectionTitle('⚖️ EXPECTED VALUE (EV) DES ACTIONS')];
+  const headers = ['Action', 'Tentatives', 'Taux reussite', 'Degats moy.', 'EV (pts juge/round)', 'Controle gagne'];
+  const rows = Object.entries(result.combat.actionMetrics).map(([key, m]) => [
+    ACTION_LABELS[key] ?? key,
+    formatNumber(m.attempts),
+    formatPercent(m.successRate, 0),
+    formatDecimal(m.avgDamage),
+    formatDecimal(m.avgScorePoints),
+    formatPercent(m.controlRate, 0),
+  ]);
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  lines.push("Agressivite (paiement reel par choix de tempo, meme action sinon) :");
+  const tempoHeaders = ['Tempo', 'Rounds', 'Degats moy./round', 'Score juge moy./round'];
+  const tempoRows = Object.entries(result.combat.tempoMetrics).map(([tempo, t]) => [
+    tempo,
+    formatNumber(t.rounds),
+    formatDecimal(t.avgDamage),
+    formatDecimal(t.avgScorePoints),
+  ]);
+  lines.push(renderTable(tempoHeaders, tempoRows));
+  return lines.join('\n');
+}
+
+function renderMetaJudgeBiasSubsection(result) {
+  const c = result.combat;
+  const totalJudgePoints = c.judgePointsFromDamage + c.judgePointsFromGroundControl;
+  const controlShare = totalJudgePoints > 0 ? c.judgePointsFromGroundControl / totalJudgePoints : null;
+  const damageShare = totalJudgePoints > 0 ? c.judgePointsFromDamage / totalJudgePoints : null;
+
+  const aggressive = c.tempoMetrics.AGGRESSIVE;
+  const conservative = c.tempoMetrics.CONSERVATIVE;
+  const aggressivePayoff =
+    aggressive.avgScorePoints !== null && conservative.avgScorePoints
+      ? aggressive.avgScorePoints / conservative.avgScorePoints - 1
+      : null;
+
+  const lines = [renderSectionTitle('\u{1F468}‍⚖️ JUDGE BIAS REPORT (poids reel)')];
+  lines.push(`Poids reel — Controle (sol/clinch) : ${formatPercent(controlShare, 1)}`);
+  lines.push(`Poids reel — Degats                : ${formatPercent(damageShare, 1)}`);
+  lines.push(
+    `Agressivite (score/round en tempo AGGRESSIVE vs CONSERVATIVE) : ` +
+      (aggressivePayoff === null ? 'N/A' : `${aggressivePayoff >= 0 ? '+' : ''}${(aggressivePayoff * 100).toFixed(1)}%`)
+  );
+  lines.push('');
+  lines.push(
+    'Note : Controle et Degats sont les deux SEULS termes additifs de la formule de score des juges' +
+      ' (CombatEngine#_computeScoreBreakdown) ; l\'Agressivite n\'est pas un troisieme critere additif — c\'est un' +
+      ' multiplicateur sur les Degats (BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS), mesure ici separement, pas dans' +
+      ' le meme total a 100%.'
+  );
+  return lines.join('\n');
+}
+
+function renderStyleIdentitySubsection(result) {
+  const lines = [renderSectionTitle('\u{1F94A} STYLE IDENTITY SCORE (fidelite / 100)')];
+  const headers = ['Style', 'Score de fidelite'];
+  const rows = Object.entries(result.styleIdentity).map(([style, score]) => [
+    style,
+    score === null ? 'N/A (pas d\'affinite de distance)' : formatDecimal(score, 0),
+  ]);
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderDiversitySubsection(result) {
+  const d = result.diversity;
+  const lines = [renderSectionTitle('\u{1F310} DIVERSITY INDEX')];
+  lines.push(`Indice de diversite (entropie normalisee, 0-100) : ${formatNumber(d.diversityIndex)}`);
+  lines.push('');
+  const headers = ['Style', 'Combattants generes', 'Part de la population'];
+  const rows = Object.entries(d.byStyle).map(([style, entry]) => [
+    style,
+    formatNumber(entry.count),
+    formatPercent(entry.share, 1),
+  ]);
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderMetaHealthIndexSubsection(result) {
+  const m = result.metaHealth;
+  const lines = [renderSectionTitle('\u{1F4AF} META HEALTH INDEX')];
+  lines.push(`Diversite (representation des styles) : ${formatNumber(m.diversityScore)} / 100`);
+  lines.push(`Equilibre (winrate proche de 50%)      : ${formatNumber(m.balanceScore)} / 100`);
+  lines.push(`Sante financiere (inverse du taux de faillite) : ${formatNumber(m.financialHealthScore)} / 100`);
+  lines.push(`Fun (inverse du taux de semaines creuses)      : ${formatNumber(m.funScore)} / 100`);
+  lines.push('');
+  lines.push(`>>> META HEALTH INDEX : ${formatNumber(m.overallIndex)} / 100 <<<`);
+  return lines.join('\n');
+}
+
+function renderMetaHealthDashboard(result) {
+  return [
+    renderMetaHealthHeader(),
+    renderWinConditionSubsection(result),
+    renderActionEVSubsection(result),
+    renderMetaJudgeBiasSubsection(result),
+    renderStyleIdentitySubsection(result),
+    renderDiversitySubsection(result),
+    renderMetaHealthIndexSubsection(result),
+  ].join('\n');
+}
+
 function renderFightsSection(result) {
   const lines = [renderSectionTitle('COMBATS')];
   lines.push(`Total de combats simules : ${formatNumber(result.fights.total)}`);
@@ -278,6 +417,24 @@ function renderNotesSection(result) {
       " l'adversaire) : CombatEngine ne resout aucun effet de contre-attaque (pas de degats/bonus) sur cette" +
       ' opportunite a ce jour.'
   );
+  lines.push(
+    '* Les actions de l\'EV (Frappes Tete/Corps/Jambes, Clinch, Takedown, Tentative de Soumission) correspondent aux' +
+      ' seules combinaisons cible x distance que CombatEngine resout reellement — il ne simule pas de coups' +
+      ' individuels (pas de distinction Jab/Cross/Uppercut) ; "Tentative de Soumission" est un sous-ensemble des' +
+      " rounds Takedown (un round GROUND declenche toujours les deux a la fois), donc sommer tous les buckets" +
+      ' surcompte les rounds GROUND — chaque bucket se lit independamment.'
+  );
+  lines.push(
+    '* Le Style Identity Score mesure la fidelite des COMPETENCES du combattant a son style (recouvrement entre' +
+      ' sa repartition de skills et les poids ideaux de la distance de son style), pas si le simulateur "joue' +
+      ' juste" — l\'IA de coach de cet outil choisit deja toujours le gameplan optimal pour le style, donc mesurer' +
+      ' ca donnerait trivialement 100% partout.'
+  );
+  lines.push(
+    '* Le Diversity Index et le Meta Health Index sont des formules simples et transparentes (entropie de Shannon' +
+      ' normalisee ; moyenne non ponderee de 4 sous-scores affiches individuellement), pas des scores calibres' +
+      ' sur un playtest reel — a interpreter comme un tableau de bord de diagnostic, pas une note certifiee.'
+  );
   return lines.join('\n');
 }
 
@@ -295,6 +452,7 @@ export function formatReport(result) {
     renderFunDetectorSection(result),
     renderFightsSection(result),
     renderCombatTelemetrySection(result),
+    renderMetaHealthDashboard(result),
     renderNotesSection(result),
     '',
   ].join('\n');

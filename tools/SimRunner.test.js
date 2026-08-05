@@ -142,6 +142,61 @@ test('the style matchup matrix mirrors correctly (row-vs-col wins equal col-vs-r
   assert.equal(totalRecordedOutcomes, result.fights.total * 2);
 });
 
+test('Win Condition Report: each style\'s win-method breakdown sums back to that style\'s own win count', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+
+  for (const [style, entry] of Object.entries(result.styleWinMethods)) {
+    assert.equal(entry.totalWins, result.styles[style].wins);
+    const summedFromMethods = Object.values(entry.byMethod).reduce((sum, m) => sum + m.count, 0);
+    assert.equal(summedFromMethods, entry.totalWins);
+    for (const { count, share } of Object.values(entry.byMethod)) {
+      assert.ok(share === null || (share >= 0 && share <= 1));
+      if (entry.totalWins > 0) assert.ok(Math.abs(share - count / entry.totalWins) < 1e-9);
+    }
+  }
+});
+
+test('actionMetrics/tempoMetrics rates stay within valid bounds, and tempo rounds sum to the same total as distance rounds', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const c = result.combat;
+
+  for (const bucket of Object.values(c.actionMetrics)) {
+    for (const rate of [bucket.successRate, bucket.controlRate]) {
+      assert.ok(rate === null || (rate >= 0 && rate <= 1));
+    }
+    assert.ok(bucket.avgDamage === null || bucket.avgDamage >= 0);
+  }
+
+  const tempoRoundsTotal = Object.values(c.tempoMetrics).reduce((sum, t) => sum + t.rounds, 0);
+  assert.equal(tempoRoundsTotal, c.totalRounds, 'every round has exactly one tempo, same as it has exactly one distance');
+});
+
+test('styleIdentity scores stay within [0, 100], and diversity shares sum to 1 across all generated fighters', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+
+  for (const score of Object.values(result.styleIdentity)) {
+    assert.ok(score === null || (score >= 0 && score <= 100));
+  }
+
+  const shareSum = Object.values(result.diversity.byStyle).reduce((sum, s) => sum + (s.share ?? 0), 0);
+  assert.ok(Math.abs(shareSum - 1) < 1e-9);
+  const countSum = Object.values(result.diversity.byStyle).reduce((sum, s) => sum + s.count, 0);
+  assert.equal(countSum, result.fighters.totalGenerated);
+});
+
+test('Meta Health Index is the rounded average of its four component scores, all within [0, 100]', () => {
+  const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
+  const m = result.metaHealth;
+
+  for (const score of [m.diversityScore, m.balanceScore, m.financialHealthScore, m.funScore, m.overallIndex]) {
+    assert.ok(score === null || (score >= 0 && score <= 100));
+  }
+
+  const components = [m.diversityScore, m.balanceScore, m.financialHealthScore, m.funScore].filter((v) => v !== null);
+  const expected = components.length > 0 ? Math.round(components.reduce((a, b) => a + b, 0) / components.length) : null;
+  assert.equal(m.overallIndex, expected);
+});
+
 test('runSimulation rejects an invalid seasons argument instead of silently misbehaving', () => {
   assert.throws(() => runSimulation({ seasons: 0 }), TypeError);
   assert.throws(() => runSimulation({ seasons: -5 }), TypeError);

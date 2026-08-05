@@ -289,3 +289,77 @@ test('combatMetrics telemetry is also mirrored onto runtimeState.lastCombatMetri
 
   assert.deepEqual(runtimeState.lastCombatMetrics, result.combatMetrics);
 });
+
+test('actionMetrics: a LEGS-targeted striker logs every round under LEG_STRIKE, and cloned results never alias engine-internal state', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(5) });
+  const a = makeFighter('Leg Kicker', 40);
+  const b = makeFighter('Turtle', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'LEGS', distance: 'STRIKING', tempo: 'BALANCED' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'BALANCED' });
+  const result = engine.simulateFullMatch();
+
+  const legBucket = result.combatMetrics.A.actionMetrics.LEG_STRIKE;
+  assert.equal(legBucket.attempts, result.round);
+  assert.equal(legBucket.successes, legBucket.attempts, 'strikes have no discrete pass/fail roll, so success always matches attempts');
+  assert.ok(legBucket.totalDamage > 0);
+  assert.equal(legBucket.totalControlRounds, 0, 'STRIKING never wins ground/control time');
+  assert.equal(result.combatMetrics.A.actionMetrics.HEAD_STRIKE.attempts, 0);
+  assert.equal(result.combatMetrics.A.actionMetrics.SUBMISSION_ATTEMPT.attempts, 0);
+
+  // Mutating the returned result must never leak back into the engine's own
+  // running state (see _cloneCombatMetrics) — mirrors this file's existing
+  // expectations for damageTally/purses/etc being independent snapshots.
+  result.combatMetrics.A.actionMetrics.LEG_STRIKE.attempts = 999999;
+  result.combatMetrics.A.tempoMetrics.BALANCED.rounds = 999999;
+  assert.notEqual(engine.context.combatMetrics.A.actionMetrics.LEG_STRIKE.attempts, 999999);
+  assert.notEqual(engine.context.combatMetrics.A.tempoMetrics.BALANCED.rounds, 999999);
+});
+
+test('tempoMetrics: an AGGRESSIVE fighter accumulates all their rounds under AGGRESSIVE, matching their standing damage', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(7) });
+  const a = makeFighter('Aggressive A', 40);
+  const b = makeFighter('Conservative B', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  const tempoA = result.combatMetrics.A.tempoMetrics;
+  assert.equal(tempoA.AGGRESSIVE.rounds, result.round);
+  assert.equal(tempoA.CONSERVATIVE.rounds, 0);
+  assert.equal(tempoA.BALANCED.rounds, 0);
+  assert.equal(tempoA.AGGRESSIVE.totalDamage, result.combatMetrics.A.standingDamageDealt);
+});
+
+test('styleIdentityScores: a fighter whose skills perfectly favor their style scores far higher than one whose skills favor the opposite distance', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const groundSpecialist = makeFighter('Ground Specialist', 10, {
+    identity: { style: 'Lutte' },
+    attributes: { skills: { boxe: 0, jambes: 0, sol: 100, soumission: 100, cardio: 50, intelligence: 30 } },
+  });
+  const strikerInDisguise = makeFighter('Miscast Striker', 10, {
+    identity: { style: 'Lutte' },
+    attributes: { skills: { boxe: 100, jambes: 100, sol: 0, soumission: 0, cardio: 50, intelligence: 30 } },
+  });
+
+  engine.setupMatch(groundSpecialist, strikerInDisguise, 'WFC', false);
+  const result = engine.simulateFullMatch();
+
+  assert.ok(result.styleIdentityScores.A > result.styleIdentityScores.B);
+  assert.ok(result.styleIdentityScores.A > 50);
+  assert.ok(result.styleIdentityScores.B <= 20);
+});
+
+test('styleIdentityScores is null for a style with no distance affinity (Freestyle)', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const a = makeFighter('Freestyler', 40, { identity: { style: 'Freestyle' } });
+  const b = makeFighter('Opponent', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  const result = engine.simulateFullMatch();
+
+  assert.equal(result.styleIdentityScores.A, null);
+});
