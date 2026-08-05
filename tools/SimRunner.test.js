@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import EventBus from '../core/EventBus.js';
+import BALANCE from '../data/balance.js';
 import { runSimulation } from './SimRunner.js';
 import { formatReport } from './BalanceReporter.js';
 
@@ -129,14 +130,21 @@ test('Test A3.4c prediction comparison reports exactly 4 predictions, all scored
     assert.ok(report.includes(label), `expected the prediction checklist to include "${label}"`);
   }
 
-  const verdictCount = (report.match(/DANS LA CIBLE/g) ?? []).length + (report.match(/HORS CIBLE/g) ?? []).length;
+  // Scoped to this subsection only — Phase 3.1 v1's Weekly Planning section
+  // (below Version History in the report) reuses the same DANS LA CIBLE/
+  // HORS CIBLE vocabulary for its own, unrelated targets.
+  const sectionStart = report.indexOf('TEST A3.4c — COMPARATIF DES PREDICTIONS');
+  const sectionEnd = report.indexOf('NOTES METHODOLOGIQUES');
+  const section = report.slice(sectionStart, sectionEnd);
+
+  const verdictCount = (section.match(/DANS LA CIBLE/g) ?? []).length + (section.match(/HORS CIBLE/g) ?? []).length;
   assert.equal(verdictCount, 4, 'expected exactly 4 DANS LA CIBLE/HORS CIBLE verdicts (all 4 predictions have real thresholds)');
 
-  assert.ok(!report.includes('NaN'), 'the prediction checklist should never render NaN');
+  assert.ok(!section.includes('NaN'), 'the prediction checklist should never render NaN');
 
-  const bilanMatch = report.match(/Bilan : (\d) \/ 4 predictions confirmees\./);
+  const bilanMatch = section.match(/Bilan : (\d) \/ 4 predictions confirmees\./);
   assert.ok(bilanMatch, 'expected a "Bilan : n / 4 predictions confirmees." summary line');
-  const passCount = (report.match(/DANS LA CIBLE/g) ?? []).length;
+  const passCount = (section.match(/DANS LA CIBLE/g) ?? []).length;
   assert.equal(Number(bilanMatch[1]), passCount);
 });
 
@@ -304,6 +312,37 @@ test('grappling aggregate combines exactly the GROUND-affinity styles and matche
   assert.equal(g.losses, expectedLosses);
   assert.equal(g.draws, expectedDraws);
   assert.ok(g.winRate === null || (g.winRate >= 0 && g.winRate <= 1));
+});
+
+test('Phase 3.1 v1: weekly-planning telemetry (activity usage, Average Readiness, per-style overheat) is internally consistent', () => {
+  const result = runSimulation({ seasons: 200, rosterSize: 8, seed: 99 });
+  const wp = result.weeklyPlanning;
+
+  const activityKeys = Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES);
+  assert.deepEqual(new Set(Object.keys(wp.activityUsage)), new Set(activityKeys));
+  const totalUsage = activityKeys.reduce((sum, key) => sum + wp.activityUsage[key].count, 0);
+  assert.equal(totalUsage, wp.totalSlotsResolved);
+  for (const key of activityKeys) {
+    assert.ok(Math.abs(wp.activityUsage[key].share - wp.activityUsage[key].count / wp.totalSlotsResolved) < 1e-9);
+  }
+  assert.ok(wp.maxActivityShare >= 0 && wp.maxActivityShare <= 1);
+
+  assert.ok(wp.averageReadinessOnFightDay === null || (wp.averageReadinessOnFightDay >= BALANCE.READINESS.MIN && wp.averageReadinessOnFightDay <= BALANCE.READINESS.MAX));
+
+  const byStyleFighterWeeks = Object.values(wp.byStyle).reduce((sum, s) => sum + s.fighterWeeks, 0);
+  const byStyleOverheatWeeks = Object.values(wp.byStyle).reduce((sum, s) => sum + s.overheatWeeks, 0);
+  assert.ok(byStyleFighterWeeks > 0, 'sanity: fighter-weeks should accumulate over 200 seasons');
+  assert.ok(byStyleOverheatWeeks <= byStyleFighterWeeks);
+  assert.ok(Math.abs(wp.overallOverheatRate - byStyleOverheatWeeks / byStyleFighterWeeks) < 1e-9);
+
+  assert.ok(wp.decisionQualityIndex === null || (wp.decisionQualityIndex >= 0 && wp.decisionQualityIndex <= 100));
+
+  const report = formatReport(result);
+  assert.ok(report.includes('PLANNING HEBDOMADAIRE & READINESS'));
+  assert.ok(report.includes('TRAINING DIVERSITY INDEX'));
+  assert.ok(report.includes('AVERAGE READINESS'));
+  assert.ok(report.includes('DECISION QUALITY INDEX'));
+  assert.ok(!report.includes('NaN'), 'the weekly-planning section should never render NaN');
 });
 
 test('runSimulation rejects an invalid seasons argument instead of silently misbehaving', () => {

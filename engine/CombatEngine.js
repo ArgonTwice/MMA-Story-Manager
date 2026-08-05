@@ -456,11 +456,23 @@ export class CombatEngine {
         BALANCE.FORM.MIN,
         BALANCE.FORM.MAX
       );
-      live.stamina = clamp(
-        BALANCE.COMBAT.STAMINA.MAX * (1 + profile.staminaModifier),
+
+      // Phase 3.1 v1: Readiness (derived from Fatigue/Moral/tactical-prep/
+      // this week's Charge — see Fighter#getReadiness) is read once here,
+      // at weigh-in, and snapshotted into live state for the rest of the
+      // match, exactly like forme/stamina above. The pending tactical-prep
+      // bonus (if any) is consumed now, since it applied to THIS fight.
+      const readiness = fighter.getReadiness();
+      fighter.clearTacticalPrep();
+      const readinessMods = this._computeReadinessCombatModifiers(readiness);
+      live.readiness = readiness;
+      live.readinessMomentumBonus = readinessMods.momentumBonus;
+
+      live.staminaMax = Math.max(
         0,
-        BALANCE.COMBAT.STAMINA.MAX
+        BALANCE.COMBAT.STAMINA.MAX * (1 + profile.staminaModifier) * (1 + readinessMods.staminaMaxMultiplier)
       );
+      live.stamina = live.staminaMax;
 
       if (cut.missedWeight) {
         cut.purseForfeitPercent = BALANCE.WEIGH_IN.MISSED_WEIGHT_PURSE_PENALTY_PERCENT;
@@ -510,8 +522,8 @@ export class CombatEngine {
     this._applyDamage('B', offenseA);
     this._applyDamage('A', offenseB);
 
-    c.live.A.stamina = clamp(c.live.A.stamina - offenseA.staminaCost, 0, BALANCE.COMBAT.STAMINA.MAX);
-    c.live.B.stamina = clamp(c.live.B.stamina - offenseB.staminaCost, 0, BALANCE.COMBAT.STAMINA.MAX);
+    c.live.A.stamina = clamp(c.live.A.stamina - offenseA.staminaCost, 0, c.live.A.staminaMax);
+    c.live.B.stamina = clamp(c.live.B.stamina - offenseB.staminaCost, 0, c.live.B.staminaMax);
 
     const finish = this._checkFinishConditions(round, offenseA, offenseB);
     if (finish) {
@@ -551,11 +563,7 @@ export class CombatEngine {
     const c = this.context;
     for (const key of ['A', 'B']) {
       const live = c.live[key];
-      live.stamina = clamp(
-        live.stamina + BALANCE.COMBAT.STAMINA.REGEN_PER_ROUND_REST,
-        0,
-        BALANCE.COMBAT.STAMINA.MAX
-      );
+      live.stamina = clamp(live.stamina + BALANCE.COMBAT.STAMINA.REGEN_PER_ROUND_REST, 0, live.staminaMax);
     }
 
     this._transition(COMBAT_STATES.ROUND_START);
@@ -584,6 +592,8 @@ export class CombatEngine {
     // a match-end value, unlike the round-by-round sums above it.
     c.combatMetrics.A.finalTakedownDefenseBonus = c.live.A.takedownDefenseBonus;
     c.combatMetrics.B.finalTakedownDefenseBonus = c.live.B.takedownDefenseBonus;
+    c.combatMetrics.A.readiness = c.live.A.readiness;
+    c.combatMetrics.B.readiness = c.live.B.readiness;
 
     const titleOnTheLine = c.isTitle;
     const titleWinnerKey = titleOnTheLine && !isDraw ? finish.winnerKey : null;
@@ -712,6 +722,12 @@ export class CombatEngine {
     return {
       health: BALANCE.COMBAT.HEALTH.MAX,
       stamina: BALANCE.COMBAT.STAMINA.MAX,
+      // Phase 3.1 v1: overwritten at weigh-in from Fighter#getReadiness() —
+      // these defaults only matter if something reads live state before
+      // weigh-in runs. See _processWeighIn / _computeReadinessCombatModifiers.
+      staminaMax: BALANCE.COMBAT.STAMINA.MAX,
+      readiness: BALANCE.READINESS.MAX,
+      readinessMomentumBonus: 0,
       forme: fighter.attributes.forme,
       tkoStreak: 0,
       // Test A3 ("Risque Decisionnel & Sprawl") fight-local state — reset
@@ -795,6 +811,36 @@ export class CombatEngine {
     return 1;
   }
 
+  /**
+   * Phase 3.1 v1: piecewise-linear interpolation over BALANCE.READINESS.CURVE
+   * — the 5 spec-given calibration points, flat-extrapolated outside
+   * [10, 100] (see that array's own doc comment for why). Called once per
+   * fighter at weigh-in (see _processWeighIn); the result is snapshotted
+   * into live state for the rest of the match, not recomputed per round.
+   * @param {number} readiness
+   * @returns {{ staminaMaxMultiplier: number, momentumBonus: number }}
+   */
+  _computeReadinessCombatModifiers(readiness) {
+    const points = BALANCE.READINESS.CURVE;
+    if (readiness <= points[0].readiness) return { ...points[0] };
+    if (readiness >= points[points.length - 1].readiness) return { ...points[points.length - 1] };
+
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const lower = points[i];
+      const upper = points[i + 1];
+      if (readiness < lower.readiness || readiness > upper.readiness) continue;
+
+      const t = (readiness - lower.readiness) / (upper.readiness - lower.readiness);
+      return {
+        staminaMaxMultiplier: lower.staminaMaxMultiplier + t * (upper.staminaMaxMultiplier - lower.staminaMaxMultiplier),
+        momentumBonus: lower.momentumBonus + t * (upper.momentumBonus - lower.momentumBonus),
+      };
+    }
+
+    // Unreachable given the bounds checks above; kept for defensive clarity.
+    return { staminaMaxMultiplier: 0, momentumBonus: 0 };
+  }
+
   _rollVarianceMultiplier() {
     const v = BALANCE.COMBAT.VARIANCE;
     let multiplier = v.MIN_ROLL_MULTIPLIER + this.rng() * (v.MAX_ROLL_MULTIPLIER - v.MIN_ROLL_MULTIPLIER);
@@ -869,7 +915,11 @@ export class CombatEngine {
 
     const tempoMods = BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS[plan.tempo];
     const formMultiplier = attackerLive.forme / BALANCE.FORM.MAX;
-    const momentumMultiplier = attackerLive.momentum / BALANCE.MOMENTUM.MAX;
+    // Phase 3.1 v1: readinessMomentumBonus is the CURVE's continuous nudge
+    // (see _computeReadinessCombatModifiers), snapshotted at weigh-in —
+    // additive rather than multiplicative, since a multiplicative bonus
+    // would be inert for a fighter who starts the match at full momentum.
+    const momentumMultiplier = clamp(attackerLive.momentum / BALANCE.MOMENTUM.MAX + attackerLive.readinessMomentumBonus, 0, 2);
     const moraleMultiplier = this._computeMoraleMultiplier(attacker.attributes.moral);
     const staminaMultiplier =
       attackerLive.stamina <= BALANCE.COMBAT.STAMINA.LOW_STAMINA_THRESHOLD
@@ -1235,6 +1285,8 @@ export class CombatEngine {
       sprawlStacksEarned: 0,
       /** Snapshot of live.takedownDefenseBonus at match end (set once, in _processPostMatchRewards) — not summed round-by-round like the others above. */
       finalTakedownDefenseBonus: 0,
+      /** Phase 3.1 v1: snapshot of live.readiness, set once at weigh-in via _processPostMatchRewards — this fighter's Readiness for THIS fight, not a round-by-round sum. */
+      readiness: null,
       /**
        * EV-per-action-type telemetry. Buckets are the finest-grained
        * distinction CombatEngine actually resolves (gameplan target x
@@ -1586,7 +1638,7 @@ export class CombatEngine {
     const inj = BALANCE.INJURIES;
     const live = c.live[key];
 
-    const staminaFraction = live.stamina / BALANCE.COMBAT.STAMINA.MAX;
+    const staminaFraction = live.stamina / live.staminaMax;
     const fatigueMultiplier = 1 + (1 - staminaFraction) * (inj.FATIGUE_RISK_MULTIPLIER_MAX - 1);
     const chance = inj.BASE_CHANCE_PER_FIGHT * fatigueMultiplier;
 

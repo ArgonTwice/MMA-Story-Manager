@@ -9,7 +9,10 @@ import assert from 'node:assert/strict';
 import EventBus from '../core/EventBus.js';
 import Fighter from '../models/Fighter.js';
 import PlayerState, { PLAYER_EVENTS } from '../state/PlayerState.js';
-import { CombatEngine, createSeededRng } from './CombatEngine.js';
+import { CombatEngine, createSeededRng, FINISH_METHODS } from './CombatEngine.js';
+
+/** Any non-decision method — what SocialEngine's rival-trash-talk logic actually keys on (see engine/SocialEngine.js). */
+const DECISION_METHODS = new Set([FINISH_METHODS.UNANIMOUS_DECISION, FINISH_METHODS.SPLIT_DECISION, FINISH_METHODS.MAJORITY_DECISION]);
 import { SocialEngine } from './SocialEngine.js';
 
 function makeFighter(name, value) {
@@ -58,7 +61,11 @@ test('a loss by finish additionally posts rival trash talk', () => {
   const result = engine.simulateFullMatch();
   social.detach();
 
-  assert.equal(result.method, 'KO');
+  // SocialEngine's rival-trash-talk logic keys on "any non-decision finish"
+  // (see engine/SocialEngine.js), not specifically KO — seed=1 no longer
+  // produces a KO for these fighters after Phase 3.1 v1's Readiness gauge
+  // shifted round-by-round stamina/momentum math, but it's still a finish.
+  assert.ok(!DECISION_METHODS.has(result.method), `expected a finish (non-decision) method, got ${result.method}`);
   assert.equal(player.socialFeed.length, 4);
   assert.ok(player.socialFeed.some((p) => p.authorType === 'RIVAL'));
 });

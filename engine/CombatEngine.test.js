@@ -411,9 +411,8 @@ test('A3.1: a failed/defended takedown burns extra stamina and loses momentum fo
   engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
   engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
 
-  const staminaBefore = engine.context.live.A.stamina;
   const momentumBefore = engine.context.live.A.momentum;
-  const { log } = stepUntilRoundSimulated(engine); // round 1
+  const { log } = stepUntilRoundSimulated(engine); // round 1 (weigh-in has resolved by now, setting live.A.staminaMax)
 
   assert.equal(engine.context.combatMetrics.A.takedownAttempts, 1);
   assert.equal(engine.context.combatMetrics.A.takedownSuccess, 0, 'seed=1 with this skill gap is confirmed to whiff round 1');
@@ -421,7 +420,11 @@ test('A3.1: a failed/defended takedown burns extra stamina and loses momentum fo
 
   const risk = BALANCE.COMBAT.TAKEDOWN_RISK;
   const expectedStaminaCost = BALANCE.COMBAT.STAMINA.COST_PER_TAKEDOWN_ATTEMPT * 0.7 /* CONSERVATIVE staminaCostMultiplier */ + risk.FAILURE_STAMINA_PENALTY;
-  assert.ok(Math.abs(staminaBefore - engine.context.live.A.stamina - expectedStaminaCost) < 1e-9);
+  // Baseline is live.A.staminaMax (Phase 3.1 v1: weigh-in sets live.stamina
+  // to a Readiness-derived staminaMax, not always BALANCE.COMBAT.STAMINA.MAX)
+  // rather than a pre-weigh-in snapshot, since stepUntilRoundSimulated's
+  // helper has no clean intermediate point between weigh-in and round 1.
+  assert.ok(Math.abs(engine.context.live.A.staminaMax - engine.context.live.A.stamina - expectedStaminaCost) < 1e-9);
   assert.equal(momentumBefore - engine.context.live.A.momentum, risk.FAILURE_MOMENTUM_PENALTY);
 });
 
@@ -481,4 +484,81 @@ test('final result payload carries A3 telemetry: takedownDefended is real data, 
     result.combatMetrics.A.momentumLost,
     (result.combatMetrics.A.takedownAttempts - result.combatMetrics.A.takedownSuccess) * BALANCE.COMBAT.TAKEDOWN_RISK.FAILURE_MOMENTUM_PENALTY
   );
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3.1 v1: Readiness gauge (staminaMax/momentum curve at weigh-in)
+// ---------------------------------------------------------------------------
+
+test('a pristine fighter (0 Fatigue, 100 Moral) reaches Readiness 100 (clamped) and gets the top calibration point\'s +5% Stamina Max at weigh-in', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const fresh = makeFighter('Fresh', 50, { attributes: { fatigue: 0, moral: 100 } });
+  const foil = makeFighter('Foil', 50, { attributes: { fatigue: 0, moral: 65 } });
+
+  engine.setupMatch(fresh, foil, 'WFC', false);
+  engine.executeNextStep(); // INIT -> WEIGH_IN
+  engine.executeNextStep(); // WEIGH_IN -> INTRO (weigh-in body actually runs here)
+
+  assert.equal(engine.context.live.A.readiness, BALANCE.READINESS.MAX);
+  const top = BALANCE.READINESS.CURVE[BALANCE.READINESS.CURVE.length - 1];
+  // No explicit weight-cut choice made -> defaults to the NATUREL profile,
+  // which itself carries its own small staminaModifier (+1%) — see
+  // BALANCE.WEIGH_IN.PROFILES.NATUREL — multiplied together with the
+  // Readiness curve's own multiplier, not overridden by it.
+  const naturel = BALANCE.WEIGH_IN.PROFILES.NATUREL;
+  const expectedStaminaMax = BALANCE.COMBAT.STAMINA.MAX * (1 + naturel.staminaModifier) * (1 + top.staminaMaxMultiplier);
+  assert.ok(Math.abs(engine.context.live.A.staminaMax - expectedStaminaMax) < 1e-9);
+  assert.equal(engine.context.live.A.readinessMomentumBonus, top.momentumBonus);
+});
+
+test('a heavily-fatigued, demoralized fighter reads a low Readiness and the curve\'s lowest calibration point\'s stamina/momentum malus', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const exhausted = makeFighter('Exhausted', 50, { attributes: { fatigue: 100, moral: 0 } });
+  const foil = makeFighter('Foil', 50, { attributes: { fatigue: 0, moral: 65 } });
+
+  engine.setupMatch(exhausted, foil, 'WFC', false);
+  engine.executeNextStep();
+  engine.executeNextStep();
+
+  assert.equal(engine.context.live.A.readiness, BALANCE.READINESS.MIN);
+  const bottom = BALANCE.READINESS.CURVE[0];
+  const naturel = BALANCE.WEIGH_IN.PROFILES.NATUREL;
+  const expectedStaminaMax = BALANCE.COMBAT.STAMINA.MAX * (1 + naturel.staminaModifier) * (1 + bottom.staminaMaxMultiplier);
+  assert.ok(Math.abs(engine.context.live.A.staminaMax - expectedStaminaMax) < 1e-9);
+  assert.equal(engine.context.live.A.readinessMomentumBonus, bottom.momentumBonus);
+  assert.ok(engine.context.live.A.staminaMax < engine.context.live.B.staminaMax, 'the exhausted fighter should start with meaningfully less stamina capacity than a normal-Moral, zero-Fatigue foil');
+});
+
+test('a pending tactical-prep bonus is consumed (cleared) at weigh-in, and contributes READINESS.TACTICAL_BONUS_POINTS beforehand', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const prepared = makeFighter('Prepared', 50, { attributes: { fatigue: 20, moral: 65 } });
+  const foil = makeFighter('Foil', 50, { attributes: { fatigue: 20, moral: 65 } });
+  prepared.preparation.tacticalBonusPending = true;
+
+  const readinessWithoutBonus = new Fighter({
+    identity: prepared.identity,
+    attributes: { ...prepared.attributes },
+  }).getReadiness();
+
+  engine.setupMatch(prepared, foil, 'WFC', false);
+  engine.executeNextStep();
+  engine.executeNextStep();
+
+  assert.ok(
+    Math.abs(engine.context.live.A.readiness - Math.min(BALANCE.READINESS.MAX, readinessWithoutBonus + BALANCE.READINESS.TACTICAL_BONUS_POINTS)) < 1e-9
+  );
+  assert.equal(prepared.preparation.tacticalBonusPending, false, 'consumed by this fight\'s weigh-in');
+});
+
+test('the final result payload snapshots each corner\'s weigh-in Readiness onto combatMetrics.readiness', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const a = makeFighter('A', 50, { attributes: { fatigue: 10, moral: 65 } });
+  const b = makeFighter('B', 50, { attributes: { fatigue: 60, moral: 65 } });
+
+  engine.setupMatch(a, b, 'WFC', false);
+  const result = engine.simulateFullMatch();
+
+  assert.ok(typeof result.combatMetrics.A.readiness === 'number');
+  assert.ok(typeof result.combatMetrics.B.readiness === 'number');
+  assert.ok(result.combatMetrics.A.readiness > result.combatMetrics.B.readiness, 'the less-fatigued fighter should read a higher Readiness');
 });

@@ -115,6 +115,14 @@ function clampForm(value) {
   return Math.min(BALANCE.FORM.MAX, Math.max(BALANCE.FORM.MIN, value));
 }
 
+function clampFatigue(value) {
+  return Math.min(BALANCE.FATIGUE.MAX, Math.max(BALANCE.FATIGUE.MIN, value));
+}
+
+function clampReadiness(value) {
+  return Math.min(BALANCE.READINESS.MAX, Math.max(BALANCE.READINESS.MIN, value));
+}
+
 function clampPsychology(value) {
   return Math.min(BALANCE.PSYCHOLOGY.MAX, Math.max(BALANCE.PSYCHOLOGY.MIN, value));
 }
@@ -156,6 +164,8 @@ export class Fighter {
       },
       forme: clampForm(config.attributes?.forme ?? BALANCE.FORM.STARTING_VALUE),
       moral: clampMorale(config.attributes?.moral ?? BALANCE.MORALE.STARTING_VALUE),
+      /** Phase 3.1 v1: weekly-persisted physical load, spent/recovered by WEEKLY_PLANNING activities. See getReadiness(). */
+      fatigue: clampFatigue(config.attributes?.fatigue ?? BALANCE.FATIGUE.STARTING_VALUE),
     };
 
     const archetype = config.psychology?.personality?.archetype ?? BALANCE.PERSONALITY.DEFAULT_ARCHETYPE;
@@ -222,6 +232,35 @@ export class Fighter {
       focus: config.training?.focus ?? null,
       intensity: config.training?.intensity ?? 'NORMAL',
     };
+
+    /**
+     * Phase 3.1 v1: this week's 3-slot weekly plan, consumed by
+     * engine/WeeklyPlanningEngine.js#processWeeklyPlan. Each entry is one of
+     * Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES), or null (empty slot,
+     * no-op). Independent of the legacy training.focus/intensity field
+     * above — TrainingEngine.js and this field are two separate weekly
+     * resolution paths that are never both driven for the same fighter in
+     * the same run (see tools/SimRunner.js).
+     */
+    this.weeklyPlan = {
+      slots: config.weeklyPlan?.slots
+        ? [...config.weeklyPlan.slots]
+        : new Array(BALANCE.WEEKLY_PLANNING.SLOTS_PER_WEEK).fill(null),
+    };
+
+    /**
+     * Phase 3.1 v1: inputs to getReadiness() that aren't the raw Fatigue
+     * gauge itself. tacticalBonusPending is set by a resolved VIDEO_PREP
+     * slot and consumed (cleared) at this fighter's next weigh-in (see
+     * clearTacticalPrep() / CombatEngine#_processWeighIn). weeklyCharge is
+     * a plain snapshot of this week's total Charge (see
+     * WEEKLY_PLANNING.ACTIVITIES[*].charge), overwritten every week by
+     * processWeeklyPlan — not a consume-once flag like tacticalBonusPending.
+     */
+    this.preparation = {
+      tacticalBonusPending: config.preparation?.tacticalBonusPending ?? false,
+      weeklyCharge: config.preparation?.weeklyCharge ?? 0,
+    };
   }
 
   // ---- derived stats ------------------------------------------------------
@@ -255,6 +294,26 @@ export class Fighter {
 
     const rating = base * performanceMultiplier * formMultiplier;
     return Math.round(Math.min(BALANCE.PROGRESSION.SKILL_MAX, rating) * 10) / 10;
+  }
+
+  /**
+   * Phase 3.1 v1: the single combat-readiness gauge CombatEngine reads
+   * instead of Fatigue directly (see BALANCE.READINESS's doc comment for
+   * the formula's rationale and which coefficients are this
+   * implementation's own chosen defaults vs. spec-given).
+   *
+   * Readiness = 100 - Fatigue + MoralModifier + TacticalBonus - InjuryRisk,
+   * clamped to [READINESS.MIN, READINESS.MAX].
+   *
+   * @returns {number}
+   */
+  getReadiness() {
+    const r = BALANCE.READINESS;
+    const moralModifier = (this.attributes.moral - BALANCE.MORALE.NEUTRAL_VALUE) * r.MORAL_MODIFIER_SCALE;
+    const tacticalBonus = this.preparation.tacticalBonusPending ? r.TACTICAL_BONUS_POINTS : 0;
+    const injuryRisk = this.preparation.weeklyCharge * r.INJURY_RISK_PER_CHARGE_POINT;
+    const raw = 100 - this.attributes.fatigue + moralModifier + tacticalBonus - injuryRisk;
+    return clampReadiness(raw);
   }
 
   /**
@@ -475,6 +534,13 @@ export class Fighter {
   }
 
   /**
+   * @param {number} delta
+   */
+  adjustFatigue(delta) {
+    this.attributes.fatigue = clampFatigue(this.attributes.fatigue + delta);
+  }
+
+  /**
    * Advances the fighter's age, e.g. on their in-world birthday
    * (see engine/ProgressionEngine.js). Physical decline itself is handled
    * weekly by engine/TrainingEngine.js based on the resulting age.
@@ -514,6 +580,39 @@ export class Fighter {
     return { ...this.training };
   }
 
+  /**
+   * Sets one slot of this week's weekly plan (Phase 3.1 v1), consumed by
+   * engine/WeeklyPlanningEngine.js#processWeeklyPlan.
+   *
+   * @param {number} index - 0-based, must be < BALANCE.WEEKLY_PLANNING.SLOTS_PER_WEEK.
+   * @param {string|null} activityKey - One of Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES), or null to clear the slot.
+   * @returns {string[]} The resulting slots array.
+   */
+  setWeeklyPlanSlot(index, activityKey) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.weeklyPlan.slots.length) {
+      throw new TypeError(`Fighter.setWeeklyPlanSlot: invalid slot index "${index}".`);
+    }
+    if (activityKey !== null && !(activityKey in BALANCE.WEEKLY_PLANNING.ACTIVITIES)) {
+      throw new TypeError(`Fighter.setWeeklyPlanSlot: invalid activity "${activityKey}".`);
+    }
+    this.weeklyPlan.slots[index] = activityKey;
+    return [...this.weeklyPlan.slots];
+  }
+
+  /**
+   * Consumes a pending VIDEO_PREP tactical bonus (Phase 3.1 v1), called by
+   * CombatEngine at weigh-in right after reading getReadiness() for this
+   * fight — the bonus applied to this match, so it shouldn't still count
+   * toward next week's Readiness.
+   *
+   * @returns {boolean} True if a bonus was pending and just got cleared.
+   */
+  clearTacticalPrep() {
+    const wasPending = this.preparation.tacticalBonusPending;
+    this.preparation.tacticalBonusPending = false;
+    return wasPending;
+  }
+
   // ---- serialization --------------------------------------------------------
 
   /**
@@ -526,6 +625,7 @@ export class Fighter {
         skills: { ...this.attributes.skills },
         forme: this.attributes.forme,
         moral: this.attributes.moral,
+        fatigue: this.attributes.fatigue,
       },
       psychology: {
         ...this.psychology,
@@ -547,6 +647,8 @@ export class Fighter {
       },
       perks: [...this.perks],
       training: { ...this.training },
+      weeklyPlan: { slots: [...this.weeklyPlan.slots] },
+      preparation: { ...this.preparation },
     };
   }
 

@@ -26,6 +26,9 @@
  *   BALANCE.GYM          - facilities, capacity, upgrades
  *   BALANCE.FORM         - fighter physical condition ("forme") bounds/decay
  *   BALANCE.MOMENTUM     - fight-local rhythm/confidence meter (reset every match)
+ *   BALANCE.FATIGUE      - weekly-persisted physical load (Phase 3.1 v1)
+ *   BALANCE.READINESS    - the CombatEngine-facing gauge derived from Fatigue/Moral/prep/injury-risk
+ *   BALANCE.WEEKLY_PLANNING - the 3-slot weekly activity picker feeding Fatigue/skills/prep
  *   BALANCE.PSYCHOLOGY   - personality-driven stat bounds/starting values
  *   BALANCE.CALENDAR     - day/week/season/year length definitions
  *   BALANCE.WORLD        - world-state bookkeeping limits (history caps...)
@@ -72,7 +75,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.6.3',
+  VERSION: '1.7.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -378,6 +381,86 @@ const BALANCE = {
     MAX: 100,
     /** Every fighter starts a match at full momentum; it only ever drops in the current model (see COMBAT.TAKEDOWN_RISK.FAILURE_MOMENTUM_PENALTY). */
     STARTING_VALUE: 100,
+  },
+
+  // ---------------------------------------------------------------------
+  // FATIGUE — Phase 3.1 v1, weekly-persisted physical load (0-100%), reset
+  // only by rest. Distinct from COMBAT.STAMINA (a fight-local pool that
+  // resets every match) and FORM (long-run condition drifting from other
+  // events) — Fatigue is the raw input the WEEKLY_PLANNING activities below
+  // spend/recover every week. CombatEngine never reads Fatigue directly; it
+  // only reads the derived READINESS gauge (see Fighter#getReadiness),
+  // which folds Fatigue together with Moral/Tactical-prep/Injury-risk.
+  // ---------------------------------------------------------------------
+  FATIGUE: {
+    MIN: 0,
+    MAX: 100,
+    STARTING_VALUE: 0,
+  },
+
+  // ---------------------------------------------------------------------
+  // READINESS — Phase 3.1 v1, the single gauge CombatEngine reads instead
+  // of Fatigue directly. Readiness = 100 - Fatigue + MoralModifier +
+  // TacticalBonus - InjuryRisk, clamped to [MIN, MAX] (see
+  // Fighter#getReadiness). MORAL_MODIFIER_SCALE/TACTICAL_BONUS_POINTS/
+  // INJURY_RISK_PER_CHARGE_POINT are this implementation's own chosen
+  // coefficients — the spec described the formula's *shape* (four additive
+  // terms) but only gave exact numbers for Fatigue's role and the 5 curve
+  // calibration points below, not for these three sub-terms.
+  // ---------------------------------------------------------------------
+  READINESS: {
+    MIN: 0,
+    MAX: 100,
+    /** Readiness points gained/lost per point of Moral above/below MORALE.NEUTRAL_VALUE (50). At Moral=100 -> +10, at Moral=0 -> -10. */
+    MORAL_MODIFIER_SCALE: 0.2,
+    /** Flat Readiness bonus while a VIDEO_PREP tactical bonus is pending (consumed at the fighter's next weigh-in — see Fighter#clearTacticalPrep). Matches VIDEO_PREP's own "+5%" framing below. */
+    TACTICAL_BONUS_POINTS: 5,
+    /** Readiness penalty per point of this week's total Charge (see WEEKLY_PLANNING.ACTIVITIES[*].charge) — a heavy training week leaves a fighter sorer/more exposed even before any injury is actually rolled. */
+    INJURY_RISK_PER_CHARGE_POINT: 1,
+    /**
+     * Piecewise-linear curve mapping Readiness -> combat multipliers, at
+     * exactly the 5 calibration points the spec gives. Flat-extrapolated
+     * outside [10, 100] (readiness <=10 uses the 10-point row's values,
+     * >=100 uses the 100-point row's) rather than extrapolated further past
+     * the given anchors, since no additional points were specified. See
+     * CombatEngine#_computeReadinessCombatModifiers.
+     */
+    CURVE: [
+      { readiness: 10, staminaMaxMultiplier: -0.1, momentumBonus: -0.08 },
+      { readiness: 30, staminaMaxMultiplier: -0.04, momentumBonus: -0.03 },
+      { readiness: 50, staminaMaxMultiplier: 0, momentumBonus: 0 },
+      { readiness: 80, staminaMaxMultiplier: 0.03, momentumBonus: 0.01 },
+      { readiness: 100, staminaMaxMultiplier: 0.05, momentumBonus: 0.03 },
+    ],
+  },
+
+  // ---------------------------------------------------------------------
+  // WEEKLY_PLANNING — Phase 3.1 v1, the 3-slot weekly activity picker (see
+  // Fighter#setWeeklyPlanSlot / engine/WeeklyPlanningEngine.js). Every
+  // activity's `charge` feeds READINESS.INJURY_RISK_PER_CHARGE_POINT above;
+  // `fatigueCost`/`fatigueDelta` are scaled by that fighter's own
+  // PERSONALITY fatigueMultiplier (engine/PersonalityEngine.js's
+  // computeCombinedModifiers — the exact "wear a training/fight session
+  // leaves" dimension that field already documents, reused here rather than
+  // duplicated) for every activity except PHYSIO_REST's recovery, which
+  // isn't wear. TECHNIQUE/SPARRING both train the fighter's current
+  // weakest skill (mirroring tools/SimRunner.js's existing coach-AI
+  // heuristic) — the spec's v1 activities are generic "stat" gains, no
+  // longer split into separate Striking/Grappling activities like the
+  // pre-v1 draft. reputationGain/hypeGain/moneyGain/injuryChance are this
+  // implementation's own chosen defaults (order-of-magnitude matched to
+  // GYM.REPUTATION_EVENTS/HYPE.EVENTS and ECONOMY's weekly cashflow) since
+  // the spec named these effects but didn't give exact figures.
+  // ---------------------------------------------------------------------
+  WEEKLY_PLANNING: {
+    SLOTS_PER_WEEK: 3,
+    ACTIVITIES: {
+      TECHNIQUE: { charge: 1, skillGain: 0.008, fatigueCost: 5 },
+      SPARRING: { charge: 3, skillGain: 0.02, fatigueCost: 18, injuryChance: 0.015 },
+      VIDEO_PREP: { charge: 1, tacticalBonus: 0.05, fatigueCost: 5 },
+      MEDIA_SPONSORS: { charge: 1, fatigueCost: 8, reputationGain: 1, hypeGain: 3, moneyGain: 250 },
+      PHYSIO_REST: { charge: 0, fatigueDelta: -25 },
+    },
   },
 
   // ---------------------------------------------------------------------

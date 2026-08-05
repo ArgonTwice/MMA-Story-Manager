@@ -143,7 +143,9 @@ function renderHealthSection(result) {
   const lines = [renderSectionTitle('METRIQUES DE SANTE')];
   lines.push(
     `Blessures totales : ${formatNumber(h.totalInjuries)} ` +
-      `(Combat: ${formatNumber(h.bySource.COMBAT ?? 0)}, Entrainement: ${formatNumber(h.bySource.TRAINING ?? 0)}, Sparring: ${formatNumber(h.bySource.SPARRING ?? 0)})`
+      `(Combat: ${formatNumber(h.bySource.COMBAT ?? 0)}, Entrainement: ${formatNumber(h.bySource.TRAINING ?? 0)}, ` +
+      `Sparring (evenement narratif): ${formatNumber(h.bySource.SPARRING ?? 0)}, ` +
+      `Sparring (creneau hebdo, Phase 3.1 v1): ${formatNumber(h.bySource.SPARRING_SESSION ?? 0)})`
   );
   lines.push('');
 
@@ -476,6 +478,89 @@ function renderMetaHealthDashboard(result) {
     renderStyleIdentitySubsection(result),
     renderDiversitySubsection(result),
     renderMetaHealthIndexSubsection(result),
+  ].join('\n');
+}
+
+const WEEKLY_PLANNING_ACTIVITY_LABELS = Object.freeze({
+  TECHNIQUE: 'Technique',
+  SPARRING: 'Sparring',
+  VIDEO_PREP: 'Preparation Video',
+  MEDIA_SPONSORS: 'Medias & Sponsors',
+  PHYSIO_REST: 'Physio & Repos',
+});
+
+/** Training Diversity Index target: no single activity should account for more than half of all resolved slots. */
+const TRAINING_DIVERSITY_MAX_SHARE = 0.5;
+/** Average Readiness on fight day target band (Phase 3.1 v1 spec). */
+const AVERAGE_READINESS_TARGET = Object.freeze({ MIN: 75, MAX: 85 });
+
+function renderWeeklyPlanningHeader() {
+  return '\n=== PLANNING HEBDOMADAIRE & READINESS (Phase 3.1 v1) ===';
+}
+
+function renderTrainingDiversitySubsection(result) {
+  const wp = result.weeklyPlanning;
+  const lines = [renderSectionTitle('\u{1F4CA} TRAINING DIVERSITY INDEX')];
+  const headers = ['Activite', 'Slots utilises', 'Part'];
+  const rows = Object.entries(wp.activityUsage).map(([key, a]) => [
+    WEEKLY_PLANNING_ACTIVITY_LABELS[key] ?? key,
+    formatNumber(a.count),
+    formatPercent(a.share, 1),
+  ]);
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  const maxSharePass = wp.maxActivityShare !== null && wp.maxActivityShare <= TRAINING_DIVERSITY_MAX_SHARE;
+  lines.push(
+    `Part maximale d'une activite : ${formatPercent(wp.maxActivityShare, 1)} ` +
+      `(cible : <= ${formatPercent(TRAINING_DIVERSITY_MAX_SHARE, 0)}) : ${maxSharePass ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
+  );
+  return lines.join('\n');
+}
+
+function renderAverageReadinessSubsection(result) {
+  const wp = result.weeklyPlanning;
+  const lines = [renderSectionTitle('\u{1F4AA} AVERAGE READINESS (le jour du combat)')];
+  const readiness = wp.averageReadinessOnFightDay;
+  const inTarget = readiness !== null && readiness >= AVERAGE_READINESS_TARGET.MIN && readiness <= AVERAGE_READINESS_TARGET.MAX;
+  lines.push(
+    `Readiness moyenne des combattants le jour du combat : ${formatDecimal(readiness, 1)} ` +
+      `(cible : ${AVERAGE_READINESS_TARGET.MIN}-${AVERAGE_READINESS_TARGET.MAX}) : ${readiness === null ? 'N/A' : inTarget ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
+  );
+  return lines.join('\n');
+}
+
+function renderDecisionQualitySubsection(result) {
+  const wp = result.weeklyPlanning;
+  const lines = [renderSectionTitle('\u{1F3AF} DECISION QUALITY INDEX (viabilite des strategies de planning)')];
+  const headers = ['Strategie de planning', 'Semaines-combattant', 'Semaines en surmenage massif', 'Taux de surmenage'];
+  const rows = Object.entries(wp.byStyle).map(([style, s]) => [
+    style,
+    formatNumber(s.fighterWeeks),
+    formatNumber(s.overheatWeeks),
+    formatPercent(s.overheatRate, 1),
+  ]);
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  lines.push(`Taux de surmenage massif global : ${formatPercent(wp.overallOverheatRate, 1)}`);
+  lines.push(`Taux d'insolvabilite du gymnase : ${formatPercent(result.economy.insolvencyRate, 2)}`);
+  lines.push('');
+  lines.push(`>>> DECISION QUALITY INDEX : ${wp.decisionQualityIndex === null ? 'N/A' : `${formatNumber(wp.decisionQualityIndex)} / 100`} <<<`);
+  lines.push(
+    '(Index = moyenne de deux sous-scores non officiels definis par cette implementation : sante financiere du' +
+      ' gymnase (inverse du taux d\'insolvabilite) et absence de surmenage massif (inverse du taux de semaines-' +
+      ' combattant a >= 90% de Fatigue) — le spec ne donnait qu\'un objectif qualitatif ("plusieurs strategies' +
+      ' restent viables sans faillite ni surmenage massif"), pas de formule ; voir tools/SimRunner.js\'s' +
+      ' finalizeWeeklyPlanning pour le detail.)'
+  );
+  return lines.join('\n');
+}
+
+function renderWeeklyPlanningSection(result) {
+  return [
+    renderWeeklyPlanningHeader(),
+    renderTrainingDiversitySubsection(result),
+    renderAverageReadinessSubsection(result),
+    renderDecisionQualitySubsection(result),
   ].join('\n');
 }
 
@@ -824,6 +909,17 @@ function renderNotesSection(result) {
       ' A3.4b : 0.55, A3.4c : 0.59) — voir le tableau recapitulatif complet (v0.30 a v0.34c) ci-dessus pour la' +
       ' trajectoire entiere.'
   );
+  lines.push(
+    '* Phase 3.1 v1 (Planning, Charge & Readiness) : CombatEngine ne lit plus jamais la Fatigue directement, ' +
+      'seulement la Readiness derivee (Fighter#getReadiness = 100 - Fatigue + ModificateurMoral + BonusTactique -' +
+      ' RisqueBlessure). Le spec donnait la forme de cette formule et les 5 points de calibration de la courbe' +
+      ' continue Readiness -> Stamina Max/Momentum, mais pas les coefficients des 3 sous-termes (Moral/Tactique/' +
+      ' Blessure) ni les gains reputation/argent/risque de blessure des activites — ce sont les valeurs par' +
+      ' defaut choisies par cette implementation (voir data/balance.js#READINESS et #WEEKLY_PLANNING pour le' +
+      ' detail et la justification de chacune). Le Decision Quality Index et les 4 "strategies de planning"' +
+      ' (AGGRESSIVE/CONSERVATIVE/BALANCED/MEDIA_FOCUSED) sont egalement une operationnalisation de cette' +
+      ' implementation, pas une formule officielle du jeu (voir tools/SimRunner.js).'
+  );
   return lines.join('\n');
 }
 
@@ -842,6 +938,7 @@ export function formatReport(result) {
     renderFightsSection(result),
     renderCombatTelemetrySection(result),
     renderMetaHealthDashboard(result),
+    renderWeeklyPlanningSection(result),
     renderVersionHistorySection(result),
     renderNotesSection(result),
     '',

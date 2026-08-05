@@ -41,6 +41,7 @@ import Fighter from '../models/Fighter.js';
 import { GameState } from '../state/GameState.js';
 import { CombatEngine, createSeededRng, FINISH_METHODS } from '../engine/CombatEngine.js';
 import { advanceWeek } from '../engine/ProgressionEngine.js';
+import { processWeeklyPlan } from '../engine/WeeklyPlanningEngine.js';
 import { generatePersonality } from '../engine/FighterGenerator.js';
 import { PersonalityEngine } from '../engine/PersonalityEngine.js';
 import { RelationshipEngine } from '../engine/RelationshipEngine.js';
@@ -372,8 +373,26 @@ function createStatsAccumulator() {
     fighters: { totalGenerated: 0, totalRetired: 0 },
     fun: { totalWeeks: 0, dullWeeks: 0 },
     narrative: { totalBeats: 0, byTone: {} },
+    weeklyPlanning: createWeeklyPlanningAccumulator(),
     weeklyMetrics: [],
     seasonalMetrics: [],
+  };
+}
+
+/** Phase 3.1 v1 telemetry accumulator: Training Diversity Index, Average Readiness on fight day, and per-planning-style "Decision Quality" (fatigue-overheat exposure) inputs. */
+function createWeeklyPlanningAccumulator() {
+  const activityUsageCount = {};
+  for (const key of Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES)) activityUsageCount[key] = 0;
+
+  const byStyle = {};
+  for (const key of PLANNING_STYLE_KEYS) byStyle[key] = { fighterWeeks: 0, overheatWeeks: 0 };
+
+  return {
+    activityUsageCount,
+    totalSlotsResolved: 0,
+    readinessOnFightDaySum: 0,
+    readinessOnFightDaySamples: 0,
+    byStyle,
   };
 }
 
@@ -519,6 +538,14 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
     recordStyleWinMethod(stats, fighterA, fighterB, result);
     recordStyleIdentity(stats, fighterA, fighterB, result);
 
+    // Phase 3.1 v1: Average Readiness "le jour du combat" — combatMetrics'
+    // readiness field is a weigh-in-time snapshot (see CombatEngine's
+    // _processWeighIn/_processPostMatchRewards), so it's only meaningful
+    // for fights that actually happened, recorded here rather than in
+    // recordWeeklyPlanningTelemetry (which runs every week, fight or not).
+    stats.weeklyPlanning.readinessOnFightDaySum += result.combatMetrics.A.readiness + result.combatMetrics.B.readiness;
+    stats.weeklyPlanning.readinessOnFightDaySamples += 2;
+
     const isDraw = result.winner === null;
     for (const [key, fighter] of [['A', fighterA], ['B', fighterB]]) {
       const outcome = isDraw ? 'draws' : result.winner === key ? 'wins' : 'losses';
@@ -531,22 +558,109 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
   return fightsBooked;
 }
 
-/** Sets this week's training plan for every non-injured fighter: focus their weakest skill, rest when form is too low to train safely. */
-function assignTrainingPlans(playerState, worldState, rng) {
-  const restFormeFloor = BALANCE.TRAINING.OVERTRAINING.FORME_THRESHOLD_PERCENT * BALANCE.FORM.MAX;
+/**
+ * Phase 3.1 v1's weekly-planning coach AI. Replaces the legacy
+ * assignTrainingPlans/TrainingEngine path for this headless simulator (see
+ * this file's own header comment on the "coach AI" concept, and
+ * engine/WeeklyPlanningEngine.js's doc comment on why the two weekly
+ * resolution paths are never both driven for the same fighter/run).
+ *
+ * Every fighter is deterministically assigned one of PLANNING_STYLE_KEYS
+ * from a hash of their (stable) id — not persisted on the Fighter model,
+ * since this is purely a SimRunner-side simulation concept, mirroring how
+ * this file already treats "coach AI" as its own layer — so the same
+ * fighter keeps the same style for their whole simulated career, letting
+ * BalanceReporter's Training Diversity/Decision Quality telemetry break
+ * results down by style. Coach-AI weighting constants (not gameplay
+ * balance) deliberately live here rather than in data/balance.js,
+ * mirroring SIM_DEFAULTS.HARD_TRAINING_CHANCE's existing precedent above.
+ */
+const PLANNING_STYLE_KEYS = Object.freeze(['AGGRESSIVE', 'CONSERVATIVE', 'BALANCED', 'MEDIA_FOCUSED']);
+
+const PLANNING_STYLE_WEIGHTS = Object.freeze({
+  AGGRESSIVE: { TECHNIQUE: 3, SPARRING: 5, VIDEO_PREP: 1, MEDIA_SPONSORS: 1, PHYSIO_REST: 1 },
+  CONSERVATIVE: { TECHNIQUE: 2, SPARRING: 0, VIDEO_PREP: 2, MEDIA_SPONSORS: 1, PHYSIO_REST: 4 },
+  BALANCED: { TECHNIQUE: 3, SPARRING: 2, VIDEO_PREP: 2, MEDIA_SPONSORS: 1, PHYSIO_REST: 2 },
+  MEDIA_FOCUSED: { TECHNIQUE: 1, SPARRING: 1, VIDEO_PREP: 1, MEDIA_SPONSORS: 4, PHYSIO_REST: 2 },
+});
+
+/** Fatigue level at/above which the coach forces PHYSIO_REST for a slot regardless of the style's weighted pick — a safety net on top of each style's own weighting, tighter for cautious styles. */
+const PLANNING_STYLE_FORCED_REST_THRESHOLD = Object.freeze({
+  AGGRESSIVE: 85,
+  CONSERVATIVE: 55,
+  BALANCED: 65,
+  MEDIA_FOCUSED: 65,
+});
+
+/** Deterministic FNV-1a style hash, same shape as ProgressionEngine.js's own (module-private there) — kept as a small local copy rather than imported, matching this codebase's Engine-modules-never-import-each-other convention. */
+function hashToUint32(value) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function getPlanningStyle(fighter) {
+  return PLANNING_STYLE_KEYS[hashToUint32(fighter.identity.id) % PLANNING_STYLE_KEYS.length];
+}
+
+function weightedPick(rng, weights) {
+  const entries = Object.entries(weights);
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  let roll = rng() * total;
+  for (const [key, weight] of entries) {
+    if (roll < weight) return key;
+    roll -= weight;
+  }
+  return entries[entries.length - 1][0];
+}
+
+/** Sets this week's 3-slot weekly plan for every fighter: PHYSIO_REST-only while injured or over their style's forced-rest Fatigue threshold, otherwise a style-weighted pick per slot. */
+function assignWeeklyPlan(playerState, worldState, rng) {
+  const slotCount = BALANCE.WEEKLY_PLANNING.SLOTS_PER_WEEK;
 
   for (const fighter of playerState.roster) {
-    if (fighter.isInjured(worldState.currentDay)) {
-      fighter.setTrainingPlan({ focus: null, intensity: 'REST' });
-      continue;
+    const style = getPlanningStyle(fighter);
+    const injured = fighter.isInjured(worldState.currentDay);
+
+    for (let slot = 0; slot < slotCount; slot += 1) {
+      const activityKey =
+        injured || fighter.attributes.fatigue >= PLANNING_STYLE_FORCED_REST_THRESHOLD[style]
+          ? 'PHYSIO_REST'
+          : weightedPick(rng, PLANNING_STYLE_WEIGHTS[style]);
+      fighter.setWeeklyPlanSlot(slot, activityKey);
     }
+  }
+}
 
-    const skills = fighter.attributes.skills;
-    const weakest = SKILL_KEYS.reduce((min, key) => (skills[key] < skills[min] ? key : min), SKILL_KEYS[0]);
-    const intensity =
-      fighter.attributes.forme < restFormeFloor ? 'REST' : rng() < SIM_DEFAULTS.HARD_TRAINING_CHANCE ? 'HARD' : 'NORMAL';
+/** Fatigue level at/above which a fighter-week counts as "surmenage massif" for the Decision Quality Index below — this implementation's own chosen definition (Version 1 of the spec dropped the earlier draft's fixed ">70%" framing in favor of a qualitative "sans... surmenage massif" goal). */
+const MASSIVE_OVERHEAT_FATIGUE_THRESHOLD = 90;
 
-    fighter.setTrainingPlan({ focus: weakest, intensity });
+/**
+ * Folds one week's processWeeklyPlan() report into the run-wide Phase 3.1 v1
+ * telemetry: which activities got used (Training Diversity Index) and, per
+ * planning style, whether that fighter ended the week at/over the massive-
+ * overheat Fatigue threshold (Decision Quality Index — see
+ * tools/BalanceReporter.js). Average Readiness on fight day is recorded
+ * separately, in bookWeeklyFights, since it's only meaningful the week a
+ * fight actually happens.
+ */
+function recordWeeklyPlanningTelemetry(stats, playerState, weeklyPlanReport) {
+  const wp = stats.weeklyPlanning;
+
+  for (const entry of weeklyPlanReport.activityLog) {
+    wp.activityUsageCount[entry.activity] += 1;
+    wp.totalSlotsResolved += 1;
+  }
+
+  for (const fighter of playerState.roster) {
+    const style = getPlanningStyle(fighter);
+    wp.byStyle[style].fighterWeeks += 1;
+    if (fighter.attributes.fatigue >= MASSIVE_OVERHEAT_FATIGUE_THRESHOLD) {
+      wp.byStyle[style].overheatWeeks += 1;
+    }
   }
 }
 
@@ -691,11 +805,14 @@ export function runSimulation(options = {}) {
     for (let weekIndex = 0; weekIndex < totalWeeks; weekIndex += 1) {
       narrativeBeatsThisWeek = 0;
 
-      assignTrainingPlans(playerState, worldState, rng);
+      assignWeeklyPlan(playerState, worldState, rng);
+      const weeklyPlanReport = processWeeklyPlan(playerState, worldState, { rng });
+      recordWeeklyPlanningTelemetry(stats, playerState, weeklyPlanReport);
 
       const summary = advanceWeek(gameState, { rng });
 
       for (const injury of summary.trainingReport.injuries) recordInjury(stats, injury, 'TRAINING');
+      for (const injury of weeklyPlanReport.injuries) recordInjury(stats, injury, 'SPARRING_SESSION');
       for (const event of summary.narrativeReport.triggered) {
         if (event.category === 'SPARRING_INJURY') {
           recordInjury(stats, { severity: event.severity }, 'SPARRING');
@@ -846,6 +963,56 @@ function finalizeCombatMetrics(combat) {
       combat.groundDominantDecisionFights > 0 ? combat.groundDominantWins / combat.groundDominantDecisionFights : null,
     actionMetrics: finalizeActionMetrics(combat.actionMetrics),
     tempoMetrics: finalizeTempoMetrics(combat.tempoMetrics),
+  };
+}
+
+/**
+ * Phase 3.1 v1 telemetry: Training Diversity Index (per-activity usage
+ * share — "verifier qu'aucun choix ne depasse 50%"), Average Readiness on
+ * fight day, and a Decision Quality Index blending gym-wide solvency with
+ * how often each planning style ran a fighter into massive Fatigue
+ * overheat (MASSIVE_OVERHEAT_FATIGUE_THRESHOLD) — this implementation's own
+ * operationalization of the spec's qualitative "plusieurs strategies...
+ * viables sans faillite ni surmenage massif" goal, documented here rather
+ * than asserted as an official game-design formula.
+ */
+function finalizeWeeklyPlanning(wp, insolvencyRate) {
+  const activityUsage = {};
+  for (const [key, count] of Object.entries(wp.activityUsageCount)) {
+    activityUsage[key] = { count, share: wp.totalSlotsResolved > 0 ? count / wp.totalSlotsResolved : null };
+  }
+  const maxActivityShare = Math.max(...Object.values(activityUsage).map((a) => a.share ?? 0));
+
+  const byStyle = {};
+  let totalFighterWeeks = 0;
+  let totalOverheatWeeks = 0;
+  for (const [style, bucket] of Object.entries(wp.byStyle)) {
+    byStyle[style] = {
+      fighterWeeks: bucket.fighterWeeks,
+      overheatWeeks: bucket.overheatWeeks,
+      overheatRate: bucket.fighterWeeks > 0 ? bucket.overheatWeeks / bucket.fighterWeeks : null,
+    };
+    totalFighterWeeks += bucket.fighterWeeks;
+    totalOverheatWeeks += bucket.overheatWeeks;
+  }
+  const overallOverheatRate = totalFighterWeeks > 0 ? totalOverheatWeeks / totalFighterWeeks : null;
+
+  const solvencyScore = insolvencyRate !== null ? clamp01(1 - insolvencyRate) * 100 : null;
+  const noMassiveOverheatScore = overallOverheatRate !== null ? clamp01(1 - overallOverheatRate) * 100 : null;
+  const decisionQualityIndex =
+    solvencyScore !== null && noMassiveOverheatScore !== null
+      ? Math.round((solvencyScore + noMassiveOverheatScore) / 2)
+      : null;
+
+  return {
+    activityUsage,
+    totalSlotsResolved: wp.totalSlotsResolved,
+    maxActivityShare,
+    averageReadinessOnFightDay:
+      wp.readinessOnFightDaySamples > 0 ? wp.readinessOnFightDaySum / wp.readinessOnFightDaySamples : null,
+    byStyle,
+    overallOverheatRate,
+    decisionQualityIndex,
   };
 }
 
@@ -1106,6 +1273,7 @@ function finalizeStats(stats, config, durationMs) {
     },
     narrative: stats.narrative,
     metaHealth,
+    weeklyPlanning: finalizeWeeklyPlanning(stats.weeklyPlanning, insolvencyRate),
     weeklyMetrics: stats.weeklyMetrics,
     seasonalMetrics: stats.seasonalMetrics,
   };
