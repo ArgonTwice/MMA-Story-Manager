@@ -552,17 +552,32 @@ const VERSION_HISTORY = Object.freeze([
     metaHealthIndex: 90,
     submissionAttemptRatio: 8.61,
   }),
+  Object.freeze({
+    version: 'v0.34a',
+    label: 'Test A3.4a',
+    change:
+      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.4 -> 0.5 (seule variable modifiee vs Test A3 — A3.1/A3.2/A3.3' +
+      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique).',
+    grapplingWinRate: 0.455,
+    freestyleWinRate: 0.503,
+    groundDominantDecisionWinRate: 0.435,
+    evRatio: 0.85,
+    balanceScore: 95,
+    funScore: 69,
+    metaHealthIndex: 91,
+    submissionAttemptRatio: 8.97,
+  }),
 ]);
 
 /** Builds this run's own row from the live `result`, to append after VERSION_HISTORY's recorded past entries. */
 function buildCurrentVersionEntry(result) {
   const { ratio } = computeRoundEVRatio(result);
   return {
-    version: 'v0.34a',
-    label: 'Test A3.4a',
+    version: 'v0.34b',
+    label: 'Test A3.4b',
     change:
-      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.4 -> 0.5 (seule variable modifiee vs Test A3 — A3.1/A3.2/A3.3' +
-      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique).',
+      'ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE : 0.5 -> 0.55 (seule variable modifiee vs Test A3.4a — A3.1/A3.2/A3.3' +
+      ' de COMBAT.TAKEDOWN_RISK restent intacts, methodologie A/B atomique). Validee par Mistral.',
     grapplingWinRate: result.grappling.winRate,
     freestyleWinRate: result.styles.Freestyle?.winRate ?? null,
     groundDominantDecisionWinRate: result.combat.groundDominantWinRate,
@@ -627,100 +642,82 @@ function renderVersionHistorySection(result) {
     `  Meta Health Index : ${formatNumber(current.metaHealthIndex)}/100 (${formatSignedInt(current.metaHealthIndex - baseline.metaHealthIndex)} vs baseline ${baseline.version})`
   );
   lines.push(
-    `  Submission Attempt Ratio (Reward/Risk, monitore, pas de cible chiffree) : ` +
+    `  Submission Attempt Ratio (Reward/Risk) : ` +
       `${current.submissionAttemptRatio === null ? 'N/A' : `x${current.submissionAttemptRatio.toFixed(2)}`} ` +
       `(vs x${previous.submissionAttemptRatio?.toFixed(2) ?? 'N/A'} en ${previous.version})`
   );
   lines.push('');
-  lines.push(renderTestA34aPredictionSubsection(result));
+  lines.push(renderTestA34bPredictionSubsection(result));
   return lines.join('\n');
 }
 
 /**
- * Test A3's 4 explicit predictions (ranges, not pass/fail thresholds like
- * A2's conditions — the task framed these as a forecast to check the
- * implementation against, not acceptance criteria). Fun Detector's
- * prediction is relative ("+2 a +3 points vs v0.32"), so it's evaluated
- * against v0.32's frozen funScore (69) rather than an absolute band.
+ * Test A3.4b's 4 predictions (Mistral) — unlike A3.4a's Submission Attempt
+ * Ratio row (no numeric target given, only "monitor it"), every row here
+ * carries a real, if sometimes one-sided, threshold: Grappling is a range,
+ * Freestyle/Meta Health are lower bounds only, the ratio is an upper bound
+ * only ("< x10"). All 4 are therefore scored DANS LA CIBLE/HORS CIBLE.
  */
-const TEST_A3_4A_PREDICTIONS = Object.freeze({
-  GRAPPLING_WINRATE_MIN: 0.5,
-  GRAPPLING_WINRATE_MAX: 0.53,
+const TEST_A3_4B_PREDICTIONS = Object.freeze({
+  GRAPPLING_WINRATE_MIN: 0.48,
+  GRAPPLING_WINRATE_MAX: 0.5,
   FREESTYLE_WINRATE_MIN: 0.49,
-  FREESTYLE_WINRATE_MAX: 0.51,
+  SUBMISSION_RATIO_MAX: 10,
   META_HEALTH_MIN: 90,
-  META_HEALTH_MAX: 91,
 });
 
-/**
- * Test A3.4a's 3 range predictions (ChatGPT), plus a 4th row that only
- * *monitors* the Submission Attempt Ratio against v0.33's x8.61 — the task
- * gave no target band for it, just an instruction to watch it, so it's
- * reported with its own delta rather than forced into a fabricated
- * PASS/FAIL judgment.
- */
-function evaluateTestA34aPredictions(result) {
-  const p = TEST_A3_4A_PREDICTIONS;
-  const v033 = VERSION_HISTORY[VERSION_HISTORY.length - 1];
+function evaluateTestA34bPredictions(result) {
+  const p = TEST_A3_4B_PREDICTIONS;
 
   const grapplingWinRate = result.grappling.winRate;
   const grapplingPass = grapplingWinRate !== null && grapplingWinRate >= p.GRAPPLING_WINRATE_MIN && grapplingWinRate <= p.GRAPPLING_WINRATE_MAX;
 
   const freestyleWinRate = result.styles.Freestyle?.winRate ?? null;
-  const freestylePass = freestyleWinRate !== null && freestyleWinRate >= p.FREESTYLE_WINRATE_MIN && freestyleWinRate <= p.FREESTYLE_WINRATE_MAX;
-
-  const metaHealthIndex = result.metaHealth.overallIndex;
-  const metaHealthPass = metaHealthIndex !== null && metaHealthIndex >= p.META_HEALTH_MIN && metaHealthIndex <= p.META_HEALTH_MAX;
+  const freestylePass = freestyleWinRate !== null && freestyleWinRate > p.FREESTYLE_WINRATE_MIN;
 
   const submissionRatio = computeRiskRewardIndex(result).find((r) => r.key === 'SUBMISSION_ATTEMPT')?.ratio ?? null;
-  const submissionRatioDelta = submissionRatio === null ? null : submissionRatio - v033.submissionAttemptRatio;
+  const submissionRatioPass = submissionRatio !== null && submissionRatio < p.SUBMISSION_RATIO_MAX;
+
+  const metaHealthIndex = result.metaHealth.overallIndex;
+  const metaHealthPass = metaHealthIndex !== null && metaHealthIndex >= p.META_HEALTH_MIN;
 
   return [
     {
       label: '1. Winrate Grappling',
       actual: grapplingWinRate === null ? 'N/A' : formatPercent(grapplingWinRate, 1),
-      target: `${formatPercent(p.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(p.GRAPPLING_WINRATE_MAX, 0)}`,
-      status: grapplingPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
-      countsTowardBilan: true,
+      target: `~${formatPercent(p.GRAPPLING_WINRATE_MIN, 0)} - ${formatPercent(p.GRAPPLING_WINRATE_MAX, 0)} (Mistral)`,
       pass: grapplingPass,
     },
     {
       label: '2. Winrate Freestyle',
       actual: freestyleWinRate === null ? 'N/A' : formatPercent(freestyleWinRate, 1),
-      target: `${formatPercent(p.FREESTYLE_WINRATE_MIN, 0)} - ${formatPercent(p.FREESTYLE_WINRATE_MAX, 0)}`,
-      status: freestylePass ? 'DANS LA CIBLE' : 'HORS CIBLE',
-      countsTowardBilan: true,
+      target: `> ${formatPercent(p.FREESTYLE_WINRATE_MIN, 0)}`,
       pass: freestylePass,
     },
     {
-      label: '3. Meta Health Index',
-      actual: metaHealthIndex === null ? 'N/A' : `${formatNumber(metaHealthIndex)}/100`,
-      target: `${p.META_HEALTH_MIN} - ${p.META_HEALTH_MAX}/100`,
-      status: metaHealthPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
-      countsTowardBilan: true,
-      pass: metaHealthPass,
+      label: '3. Submission Attempt Ratio',
+      actual: submissionRatio === null ? 'N/A' : `x${submissionRatio.toFixed(2)}`,
+      target: `< x${p.SUBMISSION_RATIO_MAX}`,
+      pass: submissionRatioPass,
     },
     {
-      label: '4. Submission Attempt Ratio (monitore)',
-      actual: submissionRatio === null ? 'N/A' : `x${submissionRatio.toFixed(2)} (${formatSignedInt(submissionRatioDelta)} vs v0.33)`,
-      target: `pas de cible chiffree — reference v0.33 : x${v033.submissionAttemptRatio.toFixed(2)}`,
-      status: 'SUIVI',
-      countsTowardBilan: false,
-      pass: false,
+      label: '4. Meta Health Index',
+      actual: metaHealthIndex === null ? 'N/A' : `${formatNumber(metaHealthIndex)}/100`,
+      target: `>= ${p.META_HEALTH_MIN}/100`,
+      pass: metaHealthPass,
     },
   ];
 }
 
-function renderTestA34aPredictionSubsection(result) {
-  const conditions = evaluateTestA34aPredictions(result);
-  const lines = [renderSectionTitle('🎯 TEST A3.4a — COMPARATIF DES PREDICTIONS')];
+function renderTestA34bPredictionSubsection(result) {
+  const conditions = evaluateTestA34bPredictions(result);
+  const lines = [renderSectionTitle('🎯 TEST A3.4b — COMPARATIF DES PREDICTIONS (Mistral)')];
   const headers = ['Prediction', 'Mesure', 'Cible', 'Statut'];
-  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.status]);
+  const rows = conditions.map((c) => [c.label, c.actual, c.target, c.pass ? 'DANS LA CIBLE' : 'HORS CIBLE']);
   lines.push(renderTable(headers, rows));
   lines.push('');
-  const scored = conditions.filter((c) => c.countsTowardBilan);
-  const passed = scored.filter((c) => c.pass).length;
-  lines.push(`Bilan : ${passed} / ${scored.length} predictions confirmees (le Submission Attempt Ratio est monitore, pas evalue).`);
+  const passed = conditions.filter((c) => c.pass).length;
+  lines.push(`Bilan : ${passed} / ${conditions.length} predictions confirmees.`);
   return lines.join('\n');
 }
 
@@ -796,8 +793,15 @@ function renderNotesSection(result) {
   lines.push(
     '* Test A3.4a : une seule variable modifiee vs Test A3 (methodologie A/B atomique) —' +
       ' ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE 0.4 -> 0.5, A3.1/A3.2/A3.3 (COMBAT.TAKEDOWN_RISK) intacts. Le' +
-      ' Submission Attempt Ratio est reporte en comparaison avec v0.33 (x8.61) mais volontairement non evalue' +
-      ' PASS/FAIL — la tache demandait de le "monitorer", pas de fixer une cible chiffree.'
+      ' Submission Attempt Ratio etait reporte en comparaison avec v0.33 (x8.61) mais volontairement non evalue' +
+      ' PASS/FAIL — la tache demandait de le "monitorer", pas de fixer une cible chiffree a l\'epoque.'
+  );
+  lines.push(
+    '* Test A3.4b : une seule variable modifiee vs Test A3.4a (methodologie A/B atomique) —' +
+      ' ACCURACY.TAKEDOWN_BASE_SUCCESS_CHANCE 0.5 -> 0.55, A3.1/A3.2/A3.3 intacts. Contrairement a A3.4a, le' +
+      ' Submission Attempt Ratio recoit ici une vraie cible ("< x10") et est donc evalue PASS/FAIL comme les 3' +
+      ' autres predictions ; Freestyle (> 49%) et Meta Health (>= 90/100) sont des bornes inferieures seules' +
+      ' (pas de plafond fourni), Grappling reste le seul intervalle ferme.'
   );
   return lines.join('\n');
 }

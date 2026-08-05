@@ -85,7 +85,7 @@ test('formatReport renders every required section as plain text without throwing
   }
 });
 
-test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.32/v0.33 entries are internally consistent', () => {
+test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.33/v0.34a entries are internally consistent', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 
@@ -94,45 +94,46 @@ test('Version History Tracker: the current run\'s row reflects live results, and
   assert.ok(report.includes('v0.32'));
   assert.ok(report.includes('v0.33'));
   assert.ok(report.includes('v0.34a'));
+  assert.ok(report.includes('v0.34b'));
   assert.ok(report.includes('Baseline'));
   assert.ok(report.includes('Test A1'));
   assert.ok(report.includes('Test A2'));
   assert.ok(report.includes('Test A3'));
   assert.ok(report.includes('Test A3.4a'));
-  assert.ok(report.includes('TEST A3.4a — COMPARATIF DES PREDICTIONS'));
+  assert.ok(report.includes('Test A3.4b'));
+  assert.ok(report.includes('TEST A3.4b — COMPARATIF DES PREDICTIONS'));
 
   // Fun Detector's delta is reported against the immediately preceding
-  // entry (v0.33, funScore=69); Meta Health Index's delta is reported
+  // entry (v0.34a, funScore=69); Meta Health Index's delta is reported
   // against the fixed baseline (v0.30, metaHealthIndex=86) — see
   // renderVersionHistorySection.
   const funDelta = result.metaHealth.funScore - 69;
   const metaDelta = result.metaHealth.overallIndex - 86;
   const formatSigned = (n) => (n > 0 ? `+${n}` : `${n}`);
-  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.33`));
+  assert.ok(report.includes(`${formatSigned(funDelta)} vs v0.34a`));
   assert.ok(report.includes(`${formatSigned(metaDelta)} vs baseline v0.30`));
 });
 
-test('Test A3.4a prediction comparison reports 3 scored predictions (DANS LA CIBLE/HORS CIBLE) plus 1 monitored (SUIVI), with a matching "Bilan : n / 3" summary', () => {
+test('Test A3.4b prediction comparison reports exactly 4 predictions, all scored DANS LA CIBLE/HORS CIBLE, with a matching "Bilan : n / 4" summary', () => {
   const result = runSimulation({ seasons: 60, rosterSize: 8, seed: 99 });
   const report = formatReport(result);
 
   for (const label of [
     '1. Winrate Grappling',
     '2. Winrate Freestyle',
-    '3. Meta Health Index',
-    '4. Submission Attempt Ratio (monitore)',
+    '3. Submission Attempt Ratio',
+    '4. Meta Health Index',
   ]) {
     assert.ok(report.includes(label), `expected the prediction checklist to include "${label}"`);
   }
 
   const verdictCount = (report.match(/DANS LA CIBLE/g) ?? []).length + (report.match(/HORS CIBLE/g) ?? []).length;
-  assert.equal(verdictCount, 3, 'expected exactly 3 DANS LA CIBLE/HORS CIBLE verdicts (the ratio row is monitored, not scored)');
-  assert.ok(report.includes('SUIVI'), 'the monitored Submission Attempt Ratio row should be marked SUIVI, not forced into PASS/FAIL');
+  assert.equal(verdictCount, 4, 'expected exactly 4 DANS LA CIBLE/HORS CIBLE verdicts (all 4 predictions have real thresholds)');
 
   assert.ok(!report.includes('NaN'), 'the prediction checklist should never render NaN');
 
-  const bilanMatch = report.match(/Bilan : (\d) \/ 3 predictions confirmees/);
-  assert.ok(bilanMatch, 'expected a "Bilan : n / 3 predictions confirmees" summary line');
+  const bilanMatch = report.match(/Bilan : (\d) \/ 4 predictions confirmees\./);
+  assert.ok(bilanMatch, 'expected a "Bilan : n / 4 predictions confirmees." summary line');
   const passCount = (report.match(/DANS LA CIBLE/g) ?? []).length;
   assert.equal(Number(bilanMatch[1]), passCount);
 });
