@@ -234,6 +234,8 @@ export class Fighter {
       hallOfFameStatus: config.career?.hallOfFameStatus ?? 'none',
       /** Phase 4.6: one row per (year, orgId) this fighter fought in — see recordFightResult()'s seasonContext param. Empty until this fighter's first tracked fight. */
       seasonHistory: config.career?.seasonHistory ? config.career.seasonHistory.map((row) => ({ ...row })) : [],
+      /** Phase V2.6 ("Story Analyzer"): permanent record of every end-of-season Gala trophy this fighter has ever won — see addTrophy()/engine/StoryAnalyzer.js. */
+      trophies: config.career?.trophies ? config.career.trophies.map((trophy) => ({ ...trophy })) : [],
     };
 
     /** Business relationships. */
@@ -559,6 +561,20 @@ export class Fighter {
   }
 
   /**
+   * Phase V2.6 ("Story Analyzer & Gala de Fin de Saison"): permanently
+   * records an end-of-season trophy this fighter won, so it keeps showing
+   * up in their profile's Palmares in every future season, not just the
+   * one it was awarded — see engine/StoryAnalyzer.js.
+   * @param {Object} trophy
+   * @param {string} trophy.category - One of engine/StoryAnalyzer.js's TROPHY_CATEGORIES.
+   * @param {string} trophy.label - Display label, e.g. "Upset de l'Annee".
+   * @param {number} trophy.year - The WorldState.year it was awarded for.
+   */
+  addTrophy(trophy) {
+    this.career.trophies.push({ ...trophy });
+  }
+
+  /**
    * Phase 4.2 ("Surnoms Emergents"): re-checks every rule in
    * data/nicknames.js#NICKNAME_RULES against this fighter's current career
    * counters, and adopts the highest-priority matching rule's label. Since
@@ -794,7 +810,12 @@ export class Fighter {
           traits: [...this.psychology.personality.traits],
         },
       },
-      career: { ...this.career, titles: [...this.career.titles], seasonHistory: this.career.seasonHistory.map((row) => ({ ...row })) },
+      career: {
+        ...this.career,
+        titles: [...this.career.titles],
+        seasonHistory: this.career.seasonHistory.map((row) => ({ ...row })),
+        trophies: this.career.trophies.map((trophy) => ({ ...trophy })),
+      },
       contracts: {
         currentContract: this.contracts.currentContract,
         blacklist: [...this.contracts.blacklist],

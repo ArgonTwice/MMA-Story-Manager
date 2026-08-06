@@ -348,6 +348,18 @@ test('career.seasonHistory round-trips through toJSON/fromJSON', () => {
   assert.deepEqual(rebuilt.career.seasonHistory, [{ year: 1, orgId: 'WFC', wins: 1, losses: 0, draws: 0, koWins: 1, subWins: 0 }]);
 });
 
+test('a new fighter starts with an empty career.trophies, and addTrophy() appends a copy that round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  assert.deepEqual(fighter.career.trophies, []);
+
+  fighter.addTrophy({ category: 'FINISHER_KING', label: "Roi de la Finition", year: 1 });
+  assert.equal(fighter.career.trophies.length, 1);
+  assert.deepEqual(fighter.career.trophies[0], { category: 'FINISHER_KING', label: "Roi de la Finition", year: 1 });
+
+  const rebuilt = Fighter.fromJSON(fighter.toJSON());
+  assert.deepEqual(rebuilt.career.trophies, [{ category: 'FINISHER_KING', label: "Roi de la Finition", year: 1 }]);
+});
+
 test('getDistanceRating uses BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS to weight the six skills, matching getOverallRating\'s own weighted-sum pattern', () => {
   const fighter = makeFighter({
     attributes: { skills: { boxe: 80, jambes: 60, sol: 20, soumission: 10, cardio: 50, intelligence: 40 } },

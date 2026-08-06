@@ -282,6 +282,22 @@ export class PlayerState {
     return true;
   }
 
+  /**
+   * Phase V2.6 ("Story Analyzer & Gala de Fin de Saison"): permanently
+   * records an end-of-season trophy a coach won (e.g. "Coach de l'Annee") —
+   * coach records have no fixed schema (see addCoach), so `awards` is
+   * created on first use, mirroring Fighter#addTrophy()'s own pattern.
+   * @param {string} coachId
+   * @param {Object} trophy
+   * @returns {boolean} True if the coach was found and the trophy recorded.
+   */
+  awardCoachTrophy(coachId, trophy) {
+    const coach = this.coaches.find((c) => c.id === coachId);
+    if (!coach) return false;
+    coach.awards = coach.awards ? [...coach.awards, { ...trophy }] : [{ ...trophy }];
+    return true;
+  }
+
   // ---- academy draft ------------------------------------------------------------
 
   /**
@@ -336,7 +352,9 @@ export class PlayerState {
       equipLevel: this.equipLevel,
       equipment: [...this.equipment],
       roster: this.roster.map((fighter) => fighter.toJSON()),
-      coaches: this.coaches.map((coach) => ({ ...coach })),
+      coaches: this.coaches.map((coach) =>
+        coach.awards ? { ...coach, awards: coach.awards.map((award) => ({ ...award })) } : { ...coach }
+      ),
       socialFeed: this.socialFeed.map((entry) => ({ ...entry })),
       lastAcademyDraftYear: this.lastAcademyDraftYear,
     };

@@ -364,6 +364,20 @@ input[type='text'] {
   margin: 0 0 10px;
 }
 
+.trophy-card {
+  cursor: pointer;
+  border-color: var(--gold);
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.1), var(--bg-panel));
+}
+
+.trophy-card:active {
+  transform: scale(0.98);
+}
+
+.trophy-card .card-title {
+  color: var(--gold-bright);
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -220,6 +220,15 @@ export class CombatEngine {
         A: this._computeStyleIdentityScore(fighterA),
         B: this._computeStyleIdentityScore(fighterB),
       },
+      // Phase V2.6 ("Story Analyzer"): a true PRE-fight snapshot (before
+      // recordFightResult/adjustMorale below can drift moral/forme, which
+      // Fighter#getOverallRating() factors in) — see engine/StoryAnalyzer.js's
+      // "Upset of the Year" trophy, which needs the rating gap as it stood
+      // walking in, not after the result already moved it.
+      preFightRatings: {
+        A: fighterA.getOverallRating(),
+        B: fighterB.getOverallRating(),
+      },
       gameplans: { A: { ...DEFAULT_GAMEPLAN }, B: { ...DEFAULT_GAMEPLAN } },
       weightCut: { A: null, B: null },
       live: {
@@ -701,6 +710,7 @@ export class CombatEngine {
       // already reflects this result.
       ages: { A: c.fighters.A.identity.age, B: c.fighters.B.identity.age },
       winStreaks: { A: c.fighters.A.career.currentWinStreak, B: c.fighters.B.career.currentWinStreak },
+      preFightRatings: { ...c.preFightRatings },
       purses,
       reputationDeltas,
       hypeDeltas,

@@ -34,6 +34,7 @@ import { HistoryEngine } from '../engine/HistoryEngine.js';
 import { SocialEngine } from '../engine/SocialEngine.js';
 
 import { generateAcademyPool, isAcademyDraftAvailable } from '../engine/AcademyEngine.js';
+import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from '../engine/StoryAnalyzer.js';
 
 import { GymHub } from '../ui/GymHub.js';
 import { WeeklyFlowController, WEEKLY_FLOW_PHASES } from '../ui/WeeklyFlowController.js';
@@ -67,6 +68,14 @@ const TARGET_LABELS = Object.freeze({ HEAD: 'Tete', BODY: 'Corps', LEGS: 'Jambes
 const DISTANCE_LABELS = Object.freeze({ STRIKING: 'Frappe', CLINCH: 'Clinch', GROUND: 'Sol' });
 const TEMPO_LABELS = Object.freeze({ CONSERVATIVE: 'Prudent', BALANCED: 'Equilibre', AGGRESSIVE: 'Agressif' });
 const WEIGHT_CUT_LABELS = Object.freeze({ NATUREL: 'Naturel', MODERE: 'Modere', INTENSIF: 'Intensif', EXTREME: 'Extreme' });
+
+const TROPHY_ICONS = Object.freeze({
+  [TROPHY_CATEGORIES.RIVALRY_OF_THE_YEAR]: '\u{2694}\u{FE0F}',
+  [TROPHY_CATEGORIES.UPSET_OF_THE_YEAR]: '\u{1F4A5}',
+  [TROPHY_CATEGORIES.FINISHER_KING]: '\u{1F451}',
+  [TROPHY_CATEGORIES.COACH_OF_THE_YEAR]: '\u{1F393}',
+  [TROPHY_CATEGORIES.GYM_OF_THE_YEAR]: '\u{1F3DF}\u{FE0F}',
+});
 const SKILL_LABELS = Object.freeze({
   boxe: 'Boxe',
   jambes: 'Jambes',
@@ -202,6 +211,8 @@ class WebApp {
     this.fightResultsThisYear = [];
     this.yearStartMoney = 0;
     this.yearStartDay = 1;
+    /** { [fighterId]: getOverallRating() } snapshot taken at the start of the current year — see _captureRosterRatings()/engine/StoryAnalyzer.js's Coach of the Year trophy. */
+    this.yearStartRosterRatings = {};
     this._yearChangedUnsub = null;
     this._yearChangedPending = false;
     this.lastWeekEconomy = null;
@@ -335,6 +346,7 @@ class WebApp {
 
     this.yearStartMoney = this.gameState.playerState.money;
     this.yearStartDay = this.gameState.worldState.currentDay;
+    this.yearStartRosterRatings = this._captureRosterRatings();
     this.weeklyResultsThisYear = [];
     this.fightResultsThisYear = [];
     this.lastWeekEconomy = null;
@@ -422,7 +434,10 @@ class WebApp {
       panel.appendChild(
         el('div', { class: 'card' }, [
           el('div', { class: 'card-title', text: 'Staff Legacy' }),
-          ...snapshot.gym.coaches.map((coach) => el('p', { text: `\u{1F393} ${coach.name} — ${coach.specialty ?? 'generaliste'} (skill ${coach.skill})` })),
+          ...this.gameState.playerState.coaches.map((coach) => {
+            const awardsTag = coach.awards?.length > 0 ? ` \u{1F3C6}x${coach.awards.length}` : '';
+            return el('p', { text: `\u{1F393} ${coach.name} — ${coach.specialty ?? 'generaliste'} (skill ${coach.skill})${awardsTag}` });
+          }),
         ])
       );
     }
@@ -790,6 +805,11 @@ class WebApp {
       if (holds) rows.push(el('div', { class: 'trophy-row', text: `\u{1F947} Record du monde : ${recordLabels[key] ?? key}` }));
     }
 
+    for (const trophy of fighter.career.trophies) {
+      const icon = TROPHY_ICONS[trophy.category] ?? '\u{1F3C6}';
+      rows.push(el('div', { class: 'trophy-row', text: `${icon} ${trophy.label} (${trophy.year})` }));
+    }
+
     return rows;
   }
 
@@ -893,6 +913,10 @@ class WebApp {
     );
   }
 
+  _captureRosterRatings() {
+    return Object.fromEntries(this.gameState.playerState.roster.map((fighter) => [fighter.identity.id, fighter.getOverallRating()]));
+  }
+
   _startNewWeek() {
     this.weeklyFlow = new WeeklyFlowController({ gameState: this.gameState, rng: this.rng });
     this.weekStartSnapshot = Object.fromEntries(
@@ -962,7 +986,19 @@ class WebApp {
 
     if (this._yearChangedPending) {
       this._yearChangedPending = false;
-      this._showSeasonSummary({ afterYearChange: true });
+      const analysis = analyzeSeason({
+        playerState: this.gameState.playerState,
+        worldState: this.gameState.worldState,
+        year: this.gameState.worldState.year - 1,
+        fightResultsThisYear: this.fightResultsThisYear,
+        yearStartRosterRatings: this.yearStartRosterRatings,
+      });
+      this._persistTrophies(analysis);
+      if (hasAnyTrophy(analysis)) {
+        this._showGala(analysis);
+      } else {
+        this._showSeasonSummary({ afterYearChange: true });
+      }
     }
   }
 
@@ -1270,6 +1306,119 @@ class WebApp {
         ])
       );
     }
+  }
+
+  // ---- GALA DE FIN DE SAISON (Story Analyzer trophies) -----------------------------
+
+  /** Permanently records each trophy onto its winning fighter/coach's own profile — see Fighter#addTrophy/PlayerState#awardCoachTrophy. Gym of the Year has no fighter/coach owner, so it's shown in the Gala only. */
+  _persistTrophies(analysis) {
+    const { playerState } = this.gameState;
+    const asRecord = (trophy) => ({ category: trophy.category, label: trophy.label, year: analysis.year });
+
+    if (analysis.rivalryOfTheYear) {
+      const trophy = asRecord(analysis.rivalryOfTheYear);
+      playerState.getFighter(analysis.rivalryOfTheYear.fighterAId)?.addTrophy(trophy);
+      playerState.getFighter(analysis.rivalryOfTheYear.fighterBId)?.addTrophy(trophy);
+    }
+    if (analysis.upsetOfTheYear) {
+      playerState.getFighter(analysis.upsetOfTheYear.fighterId)?.addTrophy(asRecord(analysis.upsetOfTheYear));
+    }
+    if (analysis.finisherKing) {
+      playerState.getFighter(analysis.finisherKing.fighterId)?.addTrophy(asRecord(analysis.finisherKing));
+    }
+    if (analysis.coachOfTheYear) {
+      playerState.awardCoachTrophy(analysis.coachOfTheYear.coachId, asRecord(analysis.coachOfTheYear));
+    }
+  }
+
+  _showGala(analysis) {
+    const trophies = [analysis.rivalryOfTheYear, analysis.upsetOfTheYear, analysis.finisherKing, analysis.coachOfTheYear, analysis.gymOfTheYear].filter(
+      Boolean
+    );
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `\u{1F3C6} Gala de fin de saison — Annee ${analysis.year}` }),
+      el('p', { text: 'Tapez sur un trophee pour en savoir plus.' }),
+      ...trophies.map((trophy) => this._buildGalaTrophyCard(analysis, trophy)),
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: 'Continuer',
+        onclick: () => {
+          this._hideModal();
+          this._showSeasonSummary({ afterYearChange: true });
+        },
+      }),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _buildGalaTrophyCard(analysis, trophy) {
+    const icon = TROPHY_ICONS[trophy.category] ?? '\u{1F3C6}';
+    return el('div', { class: 'card trophy-card', onclick: () => this._showGalaTrophyDetail(analysis, trophy) }, [
+      el('div', { class: 'card-title', text: `${icon} ${trophy.label}` }),
+      el('div', { class: 'fighter-meta', text: this._trophyWinnerLabel(trophy) }),
+    ]);
+  }
+
+  _trophyWinnerLabel(trophy) {
+    switch (trophy.category) {
+      case TROPHY_CATEGORIES.RIVALRY_OF_THE_YEAR:
+        return `${trophy.fighterAName} vs ${trophy.fighterBName}`;
+      case TROPHY_CATEGORIES.UPSET_OF_THE_YEAR:
+        return trophy.fighterName;
+      case TROPHY_CATEGORIES.FINISHER_KING:
+        return `${trophy.fighterName} — ${trophy.finishes} finition(s)`;
+      case TROPHY_CATEGORIES.COACH_OF_THE_YEAR:
+        return trophy.coachName;
+      case TROPHY_CATEGORIES.GYM_OF_THE_YEAR:
+        return trophy.gymName;
+      default:
+        return '';
+    }
+  }
+
+  _trophyDetailText(trophy) {
+    switch (trophy.category) {
+      case TROPHY_CATEGORIES.RIVALRY_OF_THE_YEAR:
+        return (
+          `${trophy.fighterAName} vs ${trophy.fighterBName}\n` +
+          `Tension : ${trophy.tension}\n` +
+          `Methode : ${METHOD_LABELS[trophy.method] ?? trophy.method}\n` +
+          (trophy.winnerName ? `Vainqueur : ${trophy.winnerName}` : 'Match nul')
+        );
+      case TROPHY_CATEGORIES.UPSET_OF_THE_YEAR:
+        return (
+          `${trophy.fighterName} bat ${trophy.opponentName}\n` +
+          `Ecart de niveau : ${trophy.ratingGap} points\n` +
+          `Methode : ${METHOD_LABELS[trophy.method] ?? trophy.method}`
+        );
+      case TROPHY_CATEGORIES.FINISHER_KING:
+        return `${trophy.fighterName}\n${trophy.koWins} KO/TKO — ${trophy.subWins} soumission(s)\nTotal : ${trophy.finishes} finition(s) cette saison`;
+      case TROPHY_CATEGORIES.COACH_OF_THE_YEAR:
+        return (
+          `${trophy.coachName}\n` +
+          `Progression d'equipe : ${trophy.teamProgression >= 0 ? '+' : ''}${trophy.teamProgression} points ` +
+          `(${trophy.fightersTracked} combattant(s) suivi(s))`
+        );
+      case TROPHY_CATEGORIES.GYM_OF_THE_YEAR:
+        return (
+          `${trophy.gymName}${trophy.isPlayerGym ? ' (votre salle)' : ' (salle rivale)'}\n` +
+          `Reputation : ${trophy.reputation}\n` +
+          `Victoires de votre salle cette saison : ${trophy.playerWinsThisYear}`
+        );
+      default:
+        return '';
+    }
+  }
+
+  _showGalaTrophyDetail(analysis, trophy) {
+    const icon = TROPHY_ICONS[trophy.category] ?? '\u{1F3C6}';
+    const card = el('div', {}, [
+      el('h2', { class: 'section-title', text: `${icon} ${trophy.label}` }),
+      el('p', { style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: this._trophyDetailText(trophy) }),
+      el('button', { class: 'btn btn-gold btn-block', text: 'Retour au Gala', onclick: () => this._showGala(analysis) }),
+    ]);
+    this._showModal(card);
   }
 
   _showSeasonSummary({ afterYearChange = false } = {}) {

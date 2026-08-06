@@ -173,6 +173,29 @@ test('a finished match with no worldState attached leaves career.seasonHistory e
   assert.deepEqual(b.career.seasonHistory, []);
 });
 
+test('result.preFightRatings is a true PRE-fight snapshot: it matches getOverallRating() at setup time and does not drift with post-fight morale changes', () => {
+  const strong = makeFighter('Snapshot Winner', 90);
+  const weak = makeFighter('Snapshot Loser', 15);
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(strong, weak, 'WFC', false);
+  const ratingABeforeFight = strong.getOverallRating();
+  const ratingBBeforeFight = weak.getOverallRating();
+
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  const result = engine.simulateFullMatch();
+
+  assert.equal(result.preFightRatings.A, ratingABeforeFight);
+  assert.equal(result.preFightRatings.B, ratingBBeforeFight);
+
+  // Prove preFightRatings is a frozen snapshot, not a live re-read of
+  // getOverallRating(): force a large, deterministic morale swing after
+  // the fact and confirm the recorded snapshot does NOT follow it.
+  strong.adjustMorale(-999);
+  assert.notEqual(strong.getOverallRating(), result.preFightRatings.A);
+});
+
 test('missing weight on a title fight forfeits the title and applies a fight-local form penalty', () => {
   const alwaysMissWeight = () => 0.001; // beats every WEIGH_IN.PROFILES[*].missChance
   const engine = new CombatEngine({ rng: alwaysMissWeight });
