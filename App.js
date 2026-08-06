@@ -28,6 +28,7 @@ import { RelationshipEngine } from './engine/RelationshipEngine.js';
 import { StoryEngine } from './engine/StoryEngine.js';
 import { NarrativeEngine } from './engine/NarrativeEngine.js';
 import { WorldMemory } from './engine/WorldMemory.js';
+import { HistoryEngine } from './engine/HistoryEngine.js';
 import { advanceWeek } from './engine/ProgressionEngine.js';
 import DashboardRenderer from './render/DashboardRenderer.js';
 import RosterRenderer from './render/RosterRenderer.js';
@@ -62,6 +63,7 @@ export class App {
    * @param {Object} [options.storyEngine] - Defaults to a fresh StoryEngine instance.
    * @param {Object} [options.narrativeEngine] - Defaults to a fresh NarrativeEngine instance.
    * @param {Object} [options.worldMemory] - Defaults to a fresh WorldMemory instance.
+   * @param {Object} [options.historyEngine] - Defaults to a fresh HistoryEngine instance.
    * @param {Object} [options.mounts] - Optional DOM-like mount elements per
    *   renderer: { dashboard, roster, combat, gym, social }.
    */
@@ -74,6 +76,7 @@ export class App {
     this.storyEngine = options.storyEngine ?? new StoryEngine();
     this.narrativeEngine = options.narrativeEngine ?? new NarrativeEngine();
     this.worldMemory = options.worldMemory ?? new WorldMemory();
+    this.historyEngine = options.historyEngine ?? new HistoryEngine();
     this.mounts = options.mounts ?? {};
 
     this.screen = APP_SCREENS.START_SCREEN;
@@ -276,6 +279,7 @@ export class App {
     this.storyEngine.attach(playerState, worldState);
     this.narrativeEngine.attach(playerState, worldState);
     this.worldMemory.attach(worldState);
+    this.historyEngine.attach(worldState);
   }
 
   /** Unsubscribes every always-on reactive engine from EventBus. */
@@ -286,6 +290,7 @@ export class App {
     this.storyEngine.detach();
     this.narrativeEngine.detach();
     this.worldMemory.detach();
+    this.historyEngine.detach();
   }
 
   _mountRenderers() {

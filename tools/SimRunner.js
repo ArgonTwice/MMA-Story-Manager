@@ -52,7 +52,7 @@ import { NarrativeEngine, NARRATIVE_ENGINE_EVENTS } from '../engine/NarrativeEng
 import { WorldMemory } from '../engine/WorldMemory.js';
 import { SocialEngine } from '../engine/SocialEngine.js';
 import { HistoryEngine } from '../engine/HistoryEngine.js';
-import { processRetirement, LEGACY_ENGINE_OUTCOMES } from '../engine/LegacyEngine.js';
+import { LEGACY_ENGINE_OUTCOMES } from '../engine/LegacyEngine.js';
 
 /** Not exported by CombatEngine.js (its own copy is module-private) — same set, mirrored the way engine/SocialEngine.js already does from FINISH_METHODS. */
 const DECISION_METHODS = Object.freeze([
@@ -786,27 +786,30 @@ function recordRosterAttachmentSample(stats, fighterId, measuredOnDay) {
   }
 }
 
-/** Removes every fighter who hit forced retirement this week (per ProgressionEngine's birthday pass), recording career stats, running Phase 4.2's Legacy Engine, and replacing them so roster size stays constant. */
+/**
+ * Folds every retirement ProgressionEngine#advanceWeek already fully
+ * resolved this week (Legacy Engine reconversion + roster removal — see
+ * engine/ProgressionEngine.js#processBirthdaysAndRetirements, the single
+ * source of truth for retirement handling since Phase 4.3, shared with the
+ * real game) into this run's own telemetry, then spawns a replacement so
+ * the headless roster size stays constant — the one piece of this that
+ * stays SimRunner-specific, since the real game has no auto-recruitment
+ * mechanic for advanceWeek to call on its own.
+ */
 function processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId }) {
-  for (const { fighterId } of summary.birthdays) {
-    const fighter = playerState.getFighter(fighterId);
-    if (!fighter || !fighter.isForcedRetirement()) continue;
-
-    const bucket = stats.archetypes[fighter.psychology.personality.archetype];
+  for (const retirement of summary.retirements) {
+    const bucket = stats.archetypes[retirement.archetype];
     bucket.retirements.push({
-      age: fighter.identity.age,
-      wins: fighter.career.wins,
-      losses: fighter.career.losses,
-      draws: fighter.career.draws,
-      titles: fighter.career.titles.length,
+      age: retirement.age,
+      wins: retirement.wins,
+      losses: retirement.losses,
+      draws: retirement.draws,
+      titles: retirement.titles,
     });
     stats.fighters.totalRetired += 1;
-    recordRosterAttachmentSample(stats, fighterId, worldState.currentDay);
+    recordRosterAttachmentSample(stats, retirement.fighterId, worldState.currentDay);
+    recordLegacyTelemetry(stats, retirement.reconversion);
 
-    const reconversion = processRetirement(fighter, { playerState, worldState, rng });
-    recordLegacyTelemetry(stats, reconversion);
-
-    playerState.removeFighter(fighterId);
     spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
   }
 }

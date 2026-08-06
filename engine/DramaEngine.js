@@ -117,13 +117,20 @@ const EFFECT_APPLIERS = Object.freeze({
 });
 
 /**
- * Resolves (picks, applies) exactly one drama event against one randomly
- * featured roster fighter, or null if the roster is empty or no event is
- * currently eligible (e.g. every fighter injured and every remaining
- * event requires NOT_INJURED).
- * @returns {Object|null}
+ * Selects (fighter, event) via the same two weighted rolls resolveOneEvent
+ * always used, WITHOUT picking or applying a choice — the seam Phase 4.3's
+ * ui/WeeklyFlowController.js needs to show a human player the real choice
+ * list before anything is applied, instead of the headless bot-AI's
+ * immediate auto-pick (see applyEventChoice/pickChoice below). Returns null
+ * under the exact same conditions resolveOneEvent used to return null (empty
+ * roster, or no currently-eligible event).
+ *
+ * @param {Object} playerState
+ * @param {Object} worldState
+ * @param {() => number} rng
+ * @returns {{ event: Object, fighter: Object, personalityModifiers: Object, playerState: Object, worldState: Object }|null}
  */
-function resolveOneEvent(playerState, worldState, rng) {
+export function selectEligibleDramaEvent(playerState, worldState, rng) {
   const fighter = pickRandomFighter(rng, playerState.roster);
   if (!fighter) return null;
 
@@ -139,8 +146,26 @@ function resolveOneEvent(playerState, worldState, rng) {
   if (weighted.length === 0) return null;
 
   const picked = weightedPick(rng, weighted, (entry) => entry.weight);
-  const event = picked.event;
-  const choice = pickChoice(rng, event, personalityModifiers);
+  return { event: picked.event, fighter, personalityModifiers, playerState, worldState };
+}
+
+/**
+ * Applies one specific choice (by id) of a previously-selected event (see
+ * selectEligibleDramaEvent), publishing the exact same
+ * DRAMA_ENGINE_EVENTS.RESOLVED report shape resolveOneEvent always has —
+ * shared by both the headless auto-pick path (resolveOneEvent below) and an
+ * interactive caller applying a human-picked choice.
+ *
+ * @param {Object} selection - A selectEligibleDramaEvent() result.
+ * @param {string} choiceId - One of selection.event.choices[*].id.
+ * @returns {Object} The resolution report.
+ */
+export function applyDramaEventChoice(selection, choiceId) {
+  const { event, fighter, playerState, worldState } = selection;
+  const choice = event.choices.find((c) => c.id === choiceId);
+  if (!choice) {
+    throw new TypeError(`DramaEngine.applyDramaEventChoice: unknown choice "${choiceId}" for event "${event.id}".`);
+  }
 
   for (const effect of choice.effects) {
     const applier = EFFECT_APPLIERS[effect.type];
@@ -156,6 +181,24 @@ function resolveOneEvent(playerState, worldState, rng) {
   };
   EventBus.publish(DRAMA_ENGINE_EVENTS.RESOLVED, report);
   return report;
+}
+
+/**
+ * Resolves (picks, applies) exactly one drama event against one randomly
+ * featured roster fighter, or null if the roster is empty or no event is
+ * currently eligible (e.g. every fighter injured and every remaining
+ * event requires NOT_INJURED). Same rng call count/order as before this
+ * was split into selectEligibleDramaEvent/applyDramaEventChoice (fighter
+ * pick, event pick, choice pick — in that order), so processWeeklyDrama's
+ * statistics are unchanged by this refactor.
+ * @returns {Object|null}
+ */
+function resolveOneEvent(playerState, worldState, rng) {
+  const selection = selectEligibleDramaEvent(playerState, worldState, rng);
+  if (!selection) return null;
+
+  const choice = pickChoice(rng, selection.event, selection.personalityModifiers);
+  return applyDramaEventChoice(selection, choice.id);
 }
 
 /**

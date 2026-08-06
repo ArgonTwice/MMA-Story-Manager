@@ -20,6 +20,7 @@ import { processWeeklyTraining } from './TrainingEngine.js';
 import { processWeeklyExpenses } from './EconomyEngine.js';
 import { evaluateWeeklyEvents } from './EventEngine.js';
 import { generatePersonality } from './FighterGenerator.js';
+import { processRetirement } from './LegacyEngine.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -62,31 +63,76 @@ function getWeekOfYear(currentDay) {
 /**
  * Ages every roster fighter whose in-world birthday falls in the week that
  * was just entered. Skill decline itself is TrainingEngine's job (it reads
- * the fighter's current age every week) — this only bumps the age number
- * and records a narrative event for anyone who just hit forced retirement.
+ * the fighter's current age every week) — this only bumps the age number.
+ * Anyone who just hit forced retirement is fully resolved right here: a
+ * FORCED_RETIREMENT global event, Phase 4.2's Legacy Engine (Hall of Fame
+ * induction check + reconversion — see engine/LegacyEngine.js#processRetirement),
+ * and removal from the roster. Prior to Phase 4.3 this only published the
+ * event and left the fighter on the roster forever — a real gap, since it
+ * meant retirement/Hall of Fame/reconversion only ever actually happened in
+ * tools/SimRunner.js's own bespoke headless loop, never in a real game
+ * session. tools/SimRunner.js now reads the `retirements` this returns
+ * instead of independently detecting/reprocessing the same retirements
+ * itself (see its own processRetirements, which only adds the headless-only
+ * concern of spawning a replacement fighter).
  *
- * @returns {Object[]} One entry per fighter aged this week.
+ * Replenishing the roster after a departure is deliberately NOT this
+ * function's job — the real game has no scouting/recruitment system yet for
+ * it to call, unlike tools/SimRunner.js's own headless-only coach-AI, which
+ * spawns a synthetic replacement purely to keep its balance-testing roster
+ * size constant across a run.
+ *
+ * @param {Object} playerState
+ * @param {Object} worldState
+ * @param {() => number} rng
+ * @returns {{ birthdays: Object[], retirements: Object[] }}
  */
-function processBirthdays(playerState, worldState) {
+function processBirthdaysAndRetirements(playerState, worldState, rng) {
   const weekOfYear = getWeekOfYear(worldState.currentDay);
   const birthdays = [];
+  const retirements = [];
 
-  for (const fighter of playerState.roster) {
+  // Snapshot first: removeFighter (below) splices playerState.roster, which
+  // would otherwise shift indices out from under a live for..of over it.
+  const rosterSnapshot = [...playerState.roster];
+
+  for (const fighter of rosterSnapshot) {
     if (getFighterBirthWeek(fighter) !== weekOfYear) continue;
 
     const newAge = fighter.incrementAge();
     birthdays.push({ fighterId: fighter.identity.id, newAge });
 
-    if (fighter.isForcedRetirement()) {
-      worldState.addGlobalEvent({
-        type: 'FORCED_RETIREMENT',
-        fighterId: fighter.identity.id,
-        age: newAge,
-      });
-    }
+    if (!fighter.isForcedRetirement()) continue;
+
+    const reconversion = processRetirement(fighter, { playerState, worldState, rng });
+    worldState.addGlobalEvent({
+      type: 'FORCED_RETIREMENT',
+      fighterId: fighter.identity.id,
+      name: fighter.identity.name,
+      age: newAge,
+      // Phase 4.3: carries the Legacy Engine outcome on the SAME global
+      // event rather than publishing a second one — ui/WorldFeed.js (and
+      // any other WORLD_EVENTS.GLOBAL_EVENT_ADDED listener) reads this
+      // straight off the event, no separate retirements[] lookup needed.
+      isHallOfFamer: reconversion.isHallOfFamer,
+      nickname: reconversion.nickname,
+      reconversionOutcome: reconversion.outcome,
+    });
+    retirements.push({
+      fighterId: fighter.identity.id,
+      name: fighter.identity.name,
+      age: newAge,
+      archetype: fighter.psychology.personality.archetype,
+      wins: fighter.career.wins,
+      losses: fighter.career.losses,
+      draws: fighter.career.draws,
+      titles: fighter.career.titles.length,
+      reconversion,
+    });
+    playerState.removeFighter(fighter.identity.id);
   }
 
-  return birthdays;
+  return { birthdays, retirements };
 }
 
 function uniformSkills(value) {
@@ -210,7 +256,7 @@ export function advanceWeek(gameState, options = {}) {
   const trainingReport = processWeeklyTraining(playerState, worldState, { rng });
   const economyReport = processWeeklyExpenses(playerState);
   const narrativeReport = evaluateWeeklyEvents(gameState, { rng });
-  const birthdays = processBirthdays(playerState, worldState);
+  const { birthdays, retirements } = processBirthdaysAndRetirements(playerState, worldState, rng);
   const rivalGymReport = processRivalGyms(worldState, rng);
 
   const summary = {
@@ -221,6 +267,7 @@ export function advanceWeek(gameState, options = {}) {
     economyReport,
     narrativeReport,
     birthdays,
+    retirements,
     rivalGymReport,
   };
 

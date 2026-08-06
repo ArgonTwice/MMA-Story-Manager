@@ -12,6 +12,7 @@ import Fighter from '../models/Fighter.js';
 import { GameState } from '../state/GameState.js';
 import { createSeededRng } from './CombatEngine.js';
 import { advanceWeek, PROGRESSION_EVENTS } from './ProgressionEngine.js';
+import { LEGACY_ENGINE_OUTCOMES } from './LegacyEngine.js';
 
 const WEEKS_PER_YEAR = BALANCE.CALENDAR.WEEKS_PER_SEASON * BALANCE.CALENDAR.SEASONS_PER_YEAR;
 
@@ -74,6 +75,29 @@ test('a full 52-week year ages every fighter by exactly one year, on a single di
 
   assert.equal(fighter.identity.age, 31);
   assert.equal(totalBirthdayHits, 1, 'a fighter should have exactly one birthday per 52-week year');
+});
+
+test('Phase 4.3: a fighter aging into forced retirement is fully resolved (Legacy Engine reconversion, then removed from the roster), not just left on it', () => {
+  const gameState = new GameState();
+  gameState.newGame({ gymName: 'Retirement Gym' });
+  const fighter = new Fighter({
+    identity: { name: 'Elder Fighter', age: BALANCE.AGE.RETIREMENT.FORCED_RETIREMENT_AGE - 1 },
+    career: { wins: 10, losses: 5, draws: 0 },
+  });
+  gameState.playerState.addFighter(fighter);
+
+  let summary;
+  for (let week = 0; week < WEEKS_PER_YEAR; week += 1) {
+    summary = advanceWeek(gameState, { rng: createSeededRng(week + 1) });
+    if (summary.retirements.length > 0) break;
+  }
+
+  assert.equal(summary.retirements.length, 1);
+  const retirement = summary.retirements[0];
+  assert.equal(retirement.fighterId, fighter.identity.id);
+  assert.equal(retirement.age, BALANCE.AGE.RETIREMENT.FORCED_RETIREMENT_AGE);
+  assert.ok(Object.values(LEGACY_ENGINE_OUTCOMES).includes(retirement.reconversion.outcome));
+  assert.equal(gameState.playerState.getFighter(fighter.identity.id), undefined, 'the retired fighter must actually leave the roster');
 });
 
 test('rival gyms drift weekly and can headlessly fight each other, recorded as a world global event', () => {
