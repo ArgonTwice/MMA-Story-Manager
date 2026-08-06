@@ -109,6 +109,7 @@ export class WorldState {
    * @param {Object} [config.records] - Historical bests (see defaultRecords()).
    * @param {Object} [config.titleHolders] - { [titleKey]: { fighterId, fighterName, sinceDay } }
    * @param {Object[]} [config.hallOfFame] - Phase 4.2: retired legends registry (see engine/HistoryEngine.js#induct).
+   * @param {number|null} [config.lastProspectWaveYear] - Phase V2.7: last year a prospect wave was generated.
    */
   constructor(config = {}) {
     this.currentDay = config.currentDay ?? BALANCE.CALENDAR.START_DAY;
@@ -119,7 +120,7 @@ export class WorldState {
 
     this.orgRanks = config.orgRanks ? structuredCloneOrCopy(config.orgRanks) : {};
     this.orgLadders = config.orgLadders ? structuredCloneOrCopy(config.orgLadders) : {};
-    this.rivalGyms = config.rivalGyms ? config.rivalGyms.map((gym) => ({ ...gym })) : [];
+    this.rivalGyms = config.rivalGyms ? structuredCloneOrCopy(config.rivalGyms) : [];
     this.globalEvents = config.globalEvents
       ? config.globalEvents.map((event) => ({ ...event }))
       : [];
@@ -129,6 +130,8 @@ export class WorldState {
     this.titleHolders = config.titleHolders ? structuredCloneOrCopy(config.titleHolders) : {};
     /** Phase 4.2: retired legends registry, see engine/HistoryEngine.js#induct/addHallOfFameEntry. */
     this.hallOfFame = config.hallOfFame ? config.hallOfFame.map((entry) => ({ ...entry })) : [];
+    /** Phase V2.7: last year a "Cuvee de Prospects" wave was generated — see engine/ProspectGenerator.js#isProspectWaveDue. null before the first wave. */
+    this.lastProspectWaveYear = config.lastProspectWaveYear ?? null;
   }
 
   // ---- calendar -----------------------------------------------------------
@@ -469,6 +472,17 @@ export class WorldState {
     return this.hallOfFame.map((entry) => ({ ...entry }));
   }
 
+  // ---- prospect waves -----------------------------------------------------------
+
+  /**
+   * Marks that this year's "Cuvee de Prospects" wave has been generated —
+   * see engine/ProspectGenerator.js#isProspectWaveDue/generateProspectWave.
+   * @param {number} year
+   */
+  recordProspectWave(year) {
+    this.lastProspectWaveYear = year;
+  }
+
   // ---- serialization ------------------------------------------------------------
 
   /**
@@ -481,12 +495,13 @@ export class WorldState {
       year: this.year,
       orgRanks: structuredCloneOrCopy(this.orgRanks),
       orgLadders: structuredCloneOrCopy(this.orgLadders),
-      rivalGyms: this.rivalGyms.map((gym) => ({ ...gym })),
+      rivalGyms: structuredCloneOrCopy(this.rivalGyms),
       globalEvents: this.globalEvents.map((event) => ({ ...event })),
       relationships: structuredCloneOrCopy(this.relationships),
       records: structuredCloneOrCopy(this.records),
       titleHolders: structuredCloneOrCopy(this.titleHolders),
       hallOfFame: this.hallOfFame.map((entry) => ({ ...entry })),
+      lastProspectWaveYear: this.lastProspectWaveYear,
     };
   }
 

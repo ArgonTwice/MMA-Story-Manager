@@ -21,6 +21,8 @@ import { processWeeklyExpenses } from './EconomyEngine.js';
 import { evaluateWeeklyEvents } from './EventEngine.js';
 import { generatePersonality } from './FighterGenerator.js';
 import { processRetirement } from './LegacyEngine.js';
+import { processTransferMarket } from './TransferMarket.js';
+import { isProspectWaveDue, generateProspectWave } from './ProspectGenerator.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -149,6 +151,20 @@ function uniformSkills(value) {
  *
  * @returns {Object[]} Global-event records for any rival fights resolved this week.
  */
+/**
+ * Fisher-Yates shuffle over a COPY of `list` — never mutates the original
+ * array/order (worldState.rivalGyms' own ordering is untouched; this is
+ * purely a per-week matchmaking draw).
+ */
+function shuffledCopy(list, rng) {
+  const copy = [...list];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
 function processRivalGyms(worldState, rng) {
   const w = BALANCE.WORLD;
   const gyms = worldState.rivalGyms;
@@ -168,12 +184,24 @@ function processRivalGyms(worldState, rng) {
     });
   }
 
+  // Phase V2.7 ("Le Monde Vivant"): pairings are re-drawn every week rather
+  // than fixed by roster order — with a FIXED pairing, the same two gyms
+  // would fight each other exclusively for the entire simulation, and
+  // RIVAL_GYM_FIGHT_REPUTATION_DELTA's asymmetric WIN/LOSS swing (a
+  // pre-existing mechanic, not introduced here) turns that into an
+  // unbounded "rich get richer" snowball within an isolated pair (see
+  // tools/BalanceReporter.js's Gym Dominance Index, which measures exactly
+  // this). Shuffling lets every gym eventually face every other gym,
+  // spreading competition across the whole roster instead of a few sealed-
+  // off rivalries.
+  const shuffledGyms = shuffledCopy(gyms, rng);
+
   const fightResults = [];
-  for (let i = 0; i + 1 < gyms.length; i += 2) {
+  for (let i = 0; i + 1 < shuffledGyms.length; i += 2) {
     if (rng() >= w.RIVAL_GYM_FIGHT_CHANCE_PER_WEEK) continue;
 
-    const gymA = gyms[i];
-    const gymB = gyms[i + 1];
+    const gymA = shuffledGyms[i];
+    const gymB = shuffledGyms[i + 1];
     const skillA = clamp(
       gymA.reputation ?? BALANCE.GYM.STARTING_REPUTATION,
       BALANCE.PROGRESSION.SKILL_MIN,
@@ -251,6 +279,7 @@ export function advanceWeek(gameState, options = {}) {
   const { worldState, playerState } = gameState;
 
   const seasonBefore = worldState.season;
+  const yearBefore = worldState.year;
   worldState.advanceDay(BALANCE.CALENDAR.DAYS_PER_WEEK);
 
   const trainingReport = processWeeklyTraining(playerState, worldState, { rng });
@@ -258,6 +287,18 @@ export function advanceWeek(gameState, options = {}) {
   const narrativeReport = evaluateWeeklyEvents(gameState, { rng });
   const { birthdays, retirements } = processBirthdaysAndRetirements(playerState, worldState, rng);
   const rivalGymReport = processRivalGyms(worldState, rng);
+
+  // Phase V2.7 ("Le Monde Vivant"): the autonomous transfer market runs
+  // once per season boundary — rival gyms recruit/extend/release entirely
+  // on their own, independent of anything the player did this week.
+  const transferMarketReport = worldState.season !== seasonBefore ? processTransferMarket(worldState, { rng }) : null;
+
+  // A themed prospect wave only ever fires on a genuine year boundary, and
+  // only if isProspectWaveDue() agrees this exact year hasn't already
+  // produced one (guards against advanceWeek somehow running twice into
+  // the same year-boundary week, and against re-firing on load).
+  const prospectWaveReport =
+    worldState.year !== yearBefore && isProspectWaveDue(worldState) ? generateProspectWave(worldState, { rng }) : null;
 
   const summary = {
     day: worldState.currentDay,
@@ -269,6 +310,8 @@ export function advanceWeek(gameState, options = {}) {
     birthdays,
     retirements,
     rivalGymReport,
+    transferMarketReport,
+    prospectWaveReport,
   };
 
   EventBus.publish(PROGRESSION_EVENTS.WEEK_ADVANCED, summary);

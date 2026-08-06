@@ -63,3 +63,32 @@ test('toJSON()/fromJSON() round-trips relationships (with history), records, and
   rebuilt.upsertRelationship('f1', 'f2', { tension: 50 });
   assert.notEqual(rebuilt.getRelationship('f1', 'f2').gauges.tension, world.getRelationship('f1', 'f2').gauges.tension);
 });
+
+test('rivalGyms round-trips through toJSON/fromJSON with an independent (deep-cloned) roster array, not a shared reference', () => {
+  const world = new WorldState();
+  const gym = world.addRivalGym({ name: 'Iron Fist Academy', reputation: 40 });
+  world.updateRivalGym(gym.id, { roster: [{ identity: { id: 'rf1', name: 'Rival Fighter' } }] });
+
+  const snapshot = world.toJSON();
+  assert.deepEqual(snapshot.rivalGyms[0].roster, [{ identity: { id: 'rf1', name: 'Rival Fighter' } }]);
+
+  // Mutating the live gym's roster after snapshotting must not leak into the already-taken snapshot.
+  world.updateRivalGym(gym.id, { roster: [{ identity: { id: 'rf1', name: 'Rival Fighter' } }, { identity: { id: 'rf2', name: 'New Signing' } }] });
+  assert.equal(snapshot.rivalGyms[0].roster.length, 1);
+
+  const rebuilt = WorldState.fromJSON(snapshot);
+  assert.equal(rebuilt.rivalGyms[0].roster.length, 1);
+  rebuilt.rivalGyms[0].roster.push({ identity: { id: 'rf3' } });
+  assert.equal(world.rivalGyms.find((g) => g.id === gym.id).roster.length, 2, 'mutating the rebuilt copy must not leak back into the live world');
+});
+
+test('Phase V2.7: lastProspectWaveYear starts null, recordProspectWave sets it, and it round-trips through toJSON/fromJSON', () => {
+  const world = new WorldState();
+  assert.equal(world.lastProspectWaveYear, null);
+
+  world.recordProspectWave(3);
+  assert.equal(world.lastProspectWaveYear, 3);
+
+  const rebuilt = WorldState.fromJSON(world.toJSON());
+  assert.equal(rebuilt.lastProspectWaveYear, 3);
+});

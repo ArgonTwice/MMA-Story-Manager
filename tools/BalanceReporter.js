@@ -1085,6 +1085,115 @@ function renderLegacyValidationSection(result) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------
+// Phase V2.7 ("Le Monde Vivant & Ecosysteme Global")
+// ---------------------------------------------------------------------
+
+/** Phase V2.7 explicit validation targets: "Gym Dominance Index (< 30%)" et "Prospect Success Rate (10-20%)". */
+const WORLD_ECOSYSTEM_TARGETS = Object.freeze({
+  GYM_DOMINANCE_MAX: 0.3,
+  PROSPECT_SUCCESS_RATE_MIN: 0.1,
+  PROSPECT_SUCCESS_RATE_MAX: 0.2,
+});
+
+function renderWorldEcosystemHeader() {
+  return '\n=== \u{1F30D} LE MONDE VIVANT & ECOSYSTEME GLOBAL (Phase V2.7) ===';
+}
+
+function renderGymDominanceSubsection(result) {
+  const g = result.gymDominance;
+  const lines = [renderSectionTitle('\u{1F3DF}\u{FE0F} GYM DOMINANCE INDEX')];
+
+  const rivalRows = Object.entries(g.rivalOnlyShares).map(([gymId, share]) => [
+    gymId,
+    formatNumber(g.wins[gymId] ?? 0),
+    share === null ? 'N/A' : formatPercent(share, 1),
+    gymId === g.dominantRivalGymId ? 'GYM DOMINANT' : '',
+  ]);
+  lines.push(renderTable(['Gym rival', 'Victoires (rivaux uniquement)', 'Part (rivaux uniquement)', ''], rivalRows));
+  lines.push('');
+
+  const dominancePass = g.dominantRivalShare !== null && g.dominantRivalShare < WORLD_ECOSYSTEM_TARGETS.GYM_DOMINANCE_MAX;
+  lines.push(
+    `Gym rival dominant : ${g.dominantRivalGymId ?? 'N/A'} avec ${formatPercent(g.dominantRivalShare, 1)} des victoires entre rivaux ` +
+      `(cible : < ${formatPercent(WORLD_ECOSYSTEM_TARGETS.GYM_DOMINANCE_MAX, 0)}) : ` +
+      `${g.dominantRivalShare === null ? 'N/A' : dominancePass ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
+  );
+  lines.push('');
+  lines.push(
+    `(Part du joueur (informatif) : ${formatPercent(g.playerShare, 1)} des victoires TOUS gyms confondus — non evaluee` +
+      " contre la cible ci-dessus : le matchmaking de ce simulateur reste intra-roster uniquement, donc le gym du" +
+      ' joueur gagne mecaniquement la quasi-totalite de ses combats, une limitation deja documentee et sans rapport' +
+      " avec l'ecosysteme autonome introduit par cette phase. La cible Gym Dominance Index ne porte donc que sur la" +
+      ' repartition des victoires ENTRE gyms rivaux, hors joueur.)'
+  );
+  return lines.join('\n');
+}
+
+function renderProspectSuccessSubsection(result) {
+  const p = result.prospects;
+  const lines = [renderSectionTitle('\u{2B50} PROSPECT SUCCESS RATE')];
+  const successPass =
+    p.successRate !== null &&
+    p.successRate >= WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MIN &&
+    p.successRate <= WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MAX;
+  lines.push(`Prospects signes (Marche des Transferts + Cuvees de Prospects) : ${formatNumber(p.totalSigned)}`);
+  lines.push(`Prospects ayant survecu a au moins un renouvellement de contrat  : ${formatNumber(p.totalExtendedAtLeastOnce)}`);
+  lines.push(
+    `Taux de reussite : ${formatPercent(p.successRate, 1)} ` +
+      `(cible : ${formatPercent(WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MIN, 0)} - ${formatPercent(WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MAX, 0)}) : ` +
+      `${p.successRate === null ? 'N/A' : successPass ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
+  );
+  lines.push('');
+  lines.push(
+    '("Reussite" = le prospect a survecu a au moins une verification de renouvellement de contrat (extension) sans' +
+      ' etre libere — la definition la plus honnete disponible dans ce simulateur : les combattants de roster rival' +
+      ' ne combattent jamais reellement (engine/ProgressionEngine.js#processRivalGyms simule toujours des' +
+      ' adversaires synthetiques anonymes pour les rivalites hebdomadaires, un perimetre volontairement non re-' +
+      ' branche cette phase — voir les notes methodologiques), donc un critere fonde sur des victoires/titres reels' +
+      ' serait innatteignable par construction, pas un signal honnete.)'
+  );
+  return lines.join('\n');
+}
+
+function renderWorldEcosystemValidationSubsection(result) {
+  const g = result.gymDominance;
+  const p = result.prospects;
+  const dominancePass = g.dominantRivalShare !== null && g.dominantRivalShare < WORLD_ECOSYSTEM_TARGETS.GYM_DOMINANCE_MAX;
+  const successPass =
+    p.successRate !== null &&
+    p.successRate >= WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MIN &&
+    p.successRate <= WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MAX;
+
+  const lines = [renderSectionTitle('\u{1F3AF} PHASE V2.7 — VALIDATION (Ecosysteme Autonome)')];
+  const headers = ['Metrique', 'Mesure', 'Cible', 'Statut'];
+  const rows = [
+    [
+      'Gym Dominance Index (part du gym rival dominant)',
+      formatPercent(g.dominantRivalShare, 1),
+      `< ${formatPercent(WORLD_ECOSYSTEM_TARGETS.GYM_DOMINANCE_MAX, 0)}`,
+      g.dominantRivalShare === null ? 'N/A' : dominancePass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+    [
+      'Prospect Success Rate',
+      formatPercent(p.successRate, 1),
+      `${formatPercent(WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MIN, 0)} - ${formatPercent(WORLD_ECOSYSTEM_TARGETS.PROSPECT_SUCCESS_RATE_MAX, 0)}`,
+      p.successRate === null ? 'N/A' : successPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+  ];
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderWorldEcosystemSection(result) {
+  return [
+    renderWorldEcosystemHeader(),
+    renderGymDominanceSubsection(result),
+    renderProspectSuccessSubsection(result),
+    renderWorldEcosystemValidationSubsection(result),
+  ].join('\n');
+}
+
 function renderFightsSection(result) {
   const lines = [renderSectionTitle('COMBATS')];
   lines.push(`Total de combats simules : ${formatNumber(result.fights.total)}`);
@@ -1472,6 +1581,17 @@ function renderNotesSection(result) {
       ' silencieusement inertes a la fois la categorie RIVALRIES et le drift/combats de rivaux deja code dans' +
       ' engine/ProgressionEngine.js#processRivalGyms depuis une phase anterieure.'
   );
+  lines.push(
+    '* Phase V2.7 (Le Monde Vivant & Ecosysteme Global) : engine/TransferMarket.js (marche libre, une fois par' +
+      ' saison) et engine/ProspectGenerator.js (cuvees thematiques, tous les 3 ans) font vivre les rosters des' +
+      ' gyms rivaux (data/leagues.js, 4 ligues) sans aucune action du joueur. Limitation assumee : les combats' +
+      ' hebdomadaires entre gyms rivaux (engine/ProgressionEngine.js#processRivalGyms) simulent toujours des' +
+      ' adversaires synthetiques anonymes generes a la volee depuis la Reputation du gym, plutot que de tirer' +
+      ' parti des combattants desormais reels et persistes sur worldState.rivalGyms[*].roster — reconnecter les' +
+      ' deux est un prolongement naturel, non inclus dans le perimetre explicite de cette phase. Le Gym Dominance' +
+      ' Index exclut deliberement le joueur (voir sa propre note plus haut) et le Prospect Success Rate se fonde' +
+      ' sur la survie contractuelle (extension vs liberation) plutot que sur des victoires, pour la meme raison.'
+  );
   return lines.join('\n');
 }
 
@@ -1496,6 +1616,7 @@ export function formatReport(result) {
     renderClinchValidationSection(result),
     renderLegacyEngineSection(result),
     renderLegacyValidationSection(result),
+    renderWorldEcosystemSection(result),
     renderVersionHistorySection(result),
     renderNotesSection(result),
     '',

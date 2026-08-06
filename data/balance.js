@@ -1078,6 +1078,76 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
+  // TRANSFER_MARKET — Phase V2.7: autonomous rival-gym roster management
+  // (see engine/TransferMarket.js), run once per season.
+  // ---------------------------------------------------------------------
+  TRANSFER_MARKET: {
+    /** Rival gyms recruit while under this roster size, and never recruit above it. */
+    ROSTER_TARGET_SIZE: 6,
+    /** Chance a rival gym under ROSTER_TARGET_SIZE actually recruits this season (not guaranteed every season). */
+    RECRUIT_CHANCE: 0.6,
+
+    /** New signings' contract length, in years, before an extend-or-release decision is rolled again. */
+    NEW_CONTRACT_YEARS: 2,
+    EXTEND_CONTRACT_YEARS: 2,
+    /**
+     * Base chance an expiring contract is released rather than extended,
+     * before the age/rating modifiers below. Tuned to 0.85 (most rookies
+     * DON'T pan out) after a real SimRunner measurement at 0.2 showed a
+     * ~58-60% Prospect Success Rate ("extended at least once") — nowhere
+     * near the spec's 10-20% target (see tools/BalanceReporter.js). Since
+     * a rival gym's roster fighters never train/age while under contract
+     * (only playerState.roster gets weekly training/birthday processing),
+     * a signing's release odds stay CONSTANT at every renewal check for
+     * their whole tenure — so this single base rate alone determines the
+     * population-wide success rate, and needed to move a lot, not a little.
+     */
+    BASE_RELEASE_CHANCE: 0.65,
+    /** Extra release chance for a fighter past BALANCE.AGE.DECLINE_START_AGE. */
+    AGE_DECLINE_RELEASE_BONUS: 0.25,
+    /** Extra release chance for a fighter whose getOverallRating() is below LOW_RATING_THRESHOLD. */
+    LOW_RATING_RELEASE_BONUS: 0.2,
+    LOW_RATING_THRESHOLD: 35,
+
+    /** New recruit generation: baseline skill mean before the gym's own Reputation bonus, and per-skill random spread — same spirit as ACADEMY_DRAFT's own generation knobs. */
+    RECRUIT_SKILL_MEAN_BASE: 30,
+    RECRUIT_SKILL_SPREAD: 15,
+    RECRUIT_REPUTATION_SKILL_MEAN_BONUS_PER_POINT: 0.15,
+    RECRUIT_MIN_AGE: 19,
+    RECRUIT_MAX_AGE: 29,
+  },
+
+  // ---------------------------------------------------------------------
+  // PROSPECT_GENERATOR — Phase V2.7: periodic themed prospect waves
+  // (see engine/ProspectGenerator.js), distributed into rival gym rosters.
+  // ---------------------------------------------------------------------
+  PROSPECT_GENERATOR: {
+    /** A new "Cuvee" is generated every this-many in-world years. */
+    WAVE_INTERVAL_YEARS: 3,
+    WAVE_SIZE_MIN: 4,
+    WAVE_SIZE_MAX: 8,
+
+    SKILL_MEAN_BASE: 35,
+    SKILL_SPREAD: 12,
+    /** Bonus applied only to a theme's own associated skills (see THEMES[*].skills) — what makes a "Cuvee de Strikers" actually strike harder as a cohort. */
+    THEME_SKILL_BONUS: 15,
+
+    MIN_AGE: 18,
+    MAX_AGE: 21,
+
+    /**
+     * One theme is picked per wave. `skills` are the Fighter.attributes.skills
+     * keys THEME_SKILL_BONUS applies to; `styles` is the pool
+     * identity.style is drawn from for this wave.
+     */
+    THEMES: {
+      LUTTEURS: { label: 'Cuvee des Lutteurs', skills: ['sol', 'soumission'], styles: ['Lutte', 'Jiu-Jitsu Bresilien'] },
+      STRIKERS: { label: 'Cuvee des Strikers', skills: ['boxe', 'jambes'], styles: ['Boxe', 'Kickboxing', 'Muay Thai'] },
+      GRAPPLERS: { label: 'Cuvee des Grapplers', skills: ['sol', 'cardio'], styles: ['Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle'] },
+    },
+  },
+
+  // ---------------------------------------------------------------------
   // WEIGH_IN — weight-cut profiles resolved by CombatEngine's WEIGH_IN phase
   // ---------------------------------------------------------------------
   WEIGH_IN: {
@@ -1199,8 +1269,18 @@ const BALANCE = {
   DRAMA: {
     PRIMARY_EVENT_CHANCE: 0.85,
     SECONDARY_EVENT_CHANCE: 0.15,
-    /** How many rival gyms tools/SimRunner.js seeds at setup so RIVALRIES-category events (and the pre-existing but previously-dormant engine/ProgressionEngine.js#processRivalGyms drift/fights) have something to read — the headless sim never called WorldState#addRivalGym before this test. */
-    SEEDED_RIVAL_GYM_COUNT: 4,
+    /**
+     * How many rival gyms tools/SimRunner.js seeds at setup so RIVALRIES-
+     * category events (and engine/ProgressionEngine.js#processRivalGyms
+     * drift/fights) have something to read. Raised from 4 to 8 for Phase
+     * V2.7's Gym Dominance Index (<30% target, see
+     * tools/BalanceReporter.js): with only 4 gyms (2 pairings), even a
+     * perfectly even split still hands each pairing's winner 50% — the
+     * <30% target is mathematically unreachable below ~4 gyms even in the
+     * best case, and 8 leaves enough headroom (12.5% each at perfect
+     * balance) to absorb real variance and still clear the bar.
+     */
+    SEEDED_RIVAL_GYM_COUNT: 8,
   },
 
   // ---------------------------------------------------------------------

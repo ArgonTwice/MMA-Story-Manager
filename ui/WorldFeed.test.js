@@ -111,6 +111,24 @@ test('a RIVAL_FIGHT_RESULT global event and an unrecognized global event type: t
   assert.ok(feed.getEntries()[0].text.includes('KO'));
 });
 
+test('Phase V2.7: RIVAL_SIGNING/RIVAL_EXTENSION/RIVAL_RELEASE/PROSPECT_WAVE global events are each logged with their gym/fighter/theme details', () => {
+  const worldState = new WorldState();
+  const feed = makeFeed({ worldState });
+
+  worldState.addGlobalEvent({ type: 'RIVAL_SIGNING', gymId: 'g1', gymName: 'Iron Fist Academy', fighterName: 'New Recruit', leagueId: 'IRON_CAGE' });
+  worldState.addGlobalEvent({ type: 'RIVAL_EXTENSION', gymId: 'g1', gymName: 'Iron Fist Academy', fighterName: 'Loyal Vet' });
+  worldState.addGlobalEvent({ type: 'RIVAL_RELEASE', gymId: 'g1', gymName: 'Iron Fist Academy', fighterName: 'Cut Fighter' });
+  worldState.addGlobalEvent({ type: 'PROSPECT_WAVE', theme: 'STRIKERS', themeLabel: 'Cuvee des Strikers', waveSize: 6, placedCount: 5 });
+  feed.detach();
+
+  const texts = feed.getEntries().map((e) => e.text);
+  assert.ok(texts.some((t) => t.includes('Iron Fist Academy') && t.includes('New Recruit')));
+  assert.ok(texts.some((t) => t.includes('Iron Fist Academy') && t.includes('Loyal Vet')));
+  assert.ok(texts.some((t) => t.includes('Iron Fist Academy') && t.includes('Cut Fighter')));
+  assert.ok(texts.some((t) => t.includes('Cuvee des Strikers') && t.includes('5/6')));
+  assert.equal(feed.getEntries().length, 4);
+});
+
 test('a NARRATIVE_ENGINE_EVENTS.PUBLISHED beat is logged using its own headline', () => {
   const feed = makeFeed();
   EventBus.publish(NARRATIVE_ENGINE_EVENTS.PUBLISHED, {

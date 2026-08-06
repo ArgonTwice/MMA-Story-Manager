@@ -434,6 +434,10 @@ function createStatsAccumulator() {
     rosterAttachment: { fighterSpawnDay: {}, attachedCount: 0, totalCount: 0 },
     weeklyMetrics: [],
     seasonalMetrics: [],
+    /** Phase V2.7 ("Le Monde Vivant"): rival-vs-rival fight wins per gym id (see engine/ProgressionEngine.js#advanceWeek's rivalGymReport) — the player's own gym's win count is folded in at finalizeStats() from stats.fights, since every player fight is intra-roster and so always credits exactly one "gym win". */
+    gymDominance: {},
+    /** Phase V2.7: every TransferMarket/ProspectGenerator-originated fighter id ever signed, and the subset that survived at least one contract renewal — see BalanceReporter's Prospect Success Rate. */
+    prospects: { signedIds: new Set(), extendedIds: new Set() },
   };
 }
 
@@ -482,6 +486,24 @@ function createDramaAccumulator() {
     byEvent[event.id] = { category: event.category, totalCount: 0, choiceCounts };
   }
   return { totalEventsResolved: 0, weeksSimulated: 0, byEvent };
+}
+
+/** Phase V2.7 ("Le Monde Vivant"): folds one week's autonomous-world activity (rival-vs-rival fight results, transfer market signings/extensions, a prospect wave's placements) into the running gymDominance/prospects accumulators. */
+function recordWorldEcosystemTelemetry(stats, summary) {
+  for (const fightRecord of summary.rivalGymReport ?? []) {
+    if (fightRecord.winnerGymId) {
+      stats.gymDominance[fightRecord.winnerGymId] = (stats.gymDominance[fightRecord.winnerGymId] ?? 0) + 1;
+    }
+  }
+
+  if (summary.transferMarketReport) {
+    for (const signing of summary.transferMarketReport.signings) stats.prospects.signedIds.add(signing.fighterId);
+    for (const extension of summary.transferMarketReport.extensions) stats.prospects.extendedIds.add(extension.fighterId);
+  }
+
+  if (summary.prospectWaveReport) {
+    for (const assignment of summary.prospectWaveReport.assignments) stats.prospects.signedIds.add(assignment.fighterId);
+  }
 }
 
 function recordDramaTelemetry(stats, dramaReport) {
@@ -955,6 +977,7 @@ export function runSimulation(options = {}) {
       narrativeBeatsThisWeek += dramaReport.events.length;
 
       const summary = advanceWeek(gameState, { rng });
+      recordWorldEcosystemTelemetry(stats, summary);
 
       for (const injury of summary.trainingReport.injuries) recordInjury(stats, injury, 'TRAINING');
       for (const injury of weeklyPlanReport.injuries) recordInjury(stats, injury, 'SPARRING_SESSION');
@@ -1361,6 +1384,60 @@ function computeMetaHealthIndex({ diversityScore, balanceScore, financialHealthS
   return Math.round(average(components));
 }
 
+/**
+ * Phase V2.7 ("Le Monde Vivant"): finalizes gym-win telemetry and the
+ * Prospect Success Rate (fraction of TransferMarket/ProspectGenerator-
+ * originated fighters who survived at least one contract renewal).
+ *
+ * The dominance figure that's actually validated against the spec's <30%
+ * target is computed among RIVAL gyms only, deliberately excluding the
+ * player's own gym: every player fight is intra-roster (matchmaking has no
+ * external-opponent system yet, a pre-existing, already-documented scope
+ * limitation — see web/app.js's own fight-picker copy), so the player's
+ * gym mechanically wins every non-draw fight it's ever in and would always
+ * blow past any "share of total wins" target for reasons that have nothing
+ * to do with the autonomous rival-gym ecosystem this phase actually builds
+ * (engine/TransferMarket.js) and is meant to validate. playerShare is still
+ * reported, transparently, as informational context rather than hidden.
+ */
+function finalizeWorldEcosystem(stats) {
+  const drawCount = stats.fights.byMethod[FINISH_METHODS.DRAW] ?? 0;
+  const playerWins = Math.max(0, stats.fights.total - drawCount);
+
+  const rivalWins = { ...stats.gymDominance };
+  const allWins = { PLAYER: playerWins, ...rivalWins };
+
+  const totalWinsIncludingPlayer = Object.values(allWins).reduce((sum, wins) => sum + wins, 0);
+  const totalRivalWins = Object.values(rivalWins).reduce((sum, wins) => sum + wins, 0);
+
+  const sharesIncludingPlayer = Object.fromEntries(
+    Object.entries(allWins).map(([gymId, wins]) => [gymId, totalWinsIncludingPlayer > 0 ? wins / totalWinsIncludingPlayer : null])
+  );
+  const rivalOnlyShares = Object.fromEntries(
+    Object.entries(rivalWins).map(([gymId, wins]) => [gymId, totalRivalWins > 0 ? wins / totalRivalWins : null])
+  );
+  const dominantRivalGymId = totalRivalWins > 0 ? Object.entries(rivalWins).reduce((a, b) => (b[1] > a[1] ? b : a))[0] : null;
+
+  const totalSigned = stats.prospects.signedIds.size;
+  const totalExtended = stats.prospects.extendedIds.size;
+
+  return {
+    gymDominance: {
+      wins: allWins,
+      sharesIncludingPlayer,
+      playerShare: sharesIncludingPlayer.PLAYER ?? null,
+      rivalOnlyShares,
+      dominantRivalGymId,
+      dominantRivalShare: dominantRivalGymId ? rivalOnlyShares[dominantRivalGymId] : null,
+    },
+    prospects: {
+      totalSigned,
+      totalExtendedAtLeastOnce: totalExtended,
+      successRate: totalSigned > 0 ? totalExtended / totalSigned : null,
+    },
+  };
+}
+
 function finalizeStats(stats, config, durationMs) {
   const archetypes = Object.fromEntries(
     Object.entries(stats.archetypes).map(([key, bucket]) => [
@@ -1492,6 +1569,7 @@ function finalizeStats(stats, config, durationMs) {
     rosterAttachment: finalizeRosterAttachment(stats.rosterAttachment),
     weeklyMetrics: stats.weeklyMetrics,
     seasonalMetrics: stats.seasonalMetrics,
+    ...finalizeWorldEcosystem(stats),
   };
 }
 

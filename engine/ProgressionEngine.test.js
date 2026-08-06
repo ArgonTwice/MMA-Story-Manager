@@ -61,6 +61,42 @@ test('crossing a season boundary publishes world:season_ended in addition to wor
   assert.equal(seasonEndedEvents[0].newSeason, gameState.worldState.season);
 });
 
+test('Phase V2.7: the autonomous transfer market only runs on a season boundary, and its report is null every other week', () => {
+  const gameState = new GameState();
+  gameState.newGame({ gymName: 'Transfer Gym' });
+  gameState.worldState.addRivalGym({ name: 'Rival Gym', reputation: 40 });
+
+  const daysPerSeason = BALANCE.CALENDAR.DAYS_PER_WEEK * BALANCE.CALENDAR.WEEKS_PER_SEASON;
+  const weeksToSeasonEdge = Math.floor(daysPerSeason / BALANCE.CALENDAR.DAYS_PER_WEEK) - 1;
+
+  let midSeasonSummary = null;
+  for (let i = 0; i < weeksToSeasonEdge; i += 1) {
+    midSeasonSummary = advanceWeek(gameState, { rng: createSeededRng(i + 1) });
+  }
+  assert.equal(midSeasonSummary.transferMarketReport, null, 'mid-season weeks should never run the transfer market');
+
+  const boundarySummary = advanceWeek(gameState, { rng: () => 0 }); // rng=0 forces a recruit on the still-empty rival roster
+  assert.notEqual(boundarySummary.transferMarketReport, null);
+  assert.ok(Array.isArray(boundarySummary.transferMarketReport.signings));
+});
+
+test('Phase V2.7: a prospect wave fires exactly once across a full WAVE_INTERVAL_YEARS span, on the correct year boundary', () => {
+  const gameState = new GameState();
+  gameState.newGame({ gymName: 'Prospect Gym' });
+  gameState.worldState.addRivalGym({ name: 'Rival Gym', reputation: 40 });
+
+  const interval = BALANCE.PROSPECT_GENERATOR.WAVE_INTERVAL_YEARS;
+  const waveWeeks = [];
+  for (let week = 1; week <= WEEKS_PER_YEAR * interval; week += 1) {
+    const summary = advanceWeek(gameState, { rng: createSeededRng(week) });
+    if (summary.prospectWaveReport) waveWeeks.push({ week, year: summary.year });
+  }
+
+  assert.equal(waveWeeks.length, 1, 'exactly one wave should fire across the whole interval');
+  assert.equal(waveWeeks[0].year, interval);
+  assert.equal(gameState.worldState.lastProspectWaveYear, interval);
+});
+
 test('a full 52-week year ages every fighter by exactly one year, on a single distinct week', () => {
   const gameState = new GameState();
   gameState.newGame({ gymName: 'Birthday Gym' });

@@ -131,6 +131,14 @@ export class WorldFeed {
       }
       case 'RIVAL_FIGHT_RESULT':
         return `Combat chez un gym rival (${event.method ?? 'resultat inconnu'}).`;
+      case 'RIVAL_SIGNING':
+        return `\u{270D}\u{FE0F} ${event.gymName} signe ${event.fighterName}.`;
+      case 'RIVAL_EXTENSION':
+        return `\u{1F4DD} ${event.gymName} prolonge le contrat de ${event.fighterName}.`;
+      case 'RIVAL_RELEASE':
+        return `\u{1F44B} ${event.gymName} libere ${event.fighterName}.`;
+      case 'PROSPECT_WAVE':
+        return `\u{1F31F} Nouvelle cuvee de prospects : "${event.themeLabel}" (${event.placedCount}/${event.waveSize} places pourvues).`;
       default:
         return null;
     }

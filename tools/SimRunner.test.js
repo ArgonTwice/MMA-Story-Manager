@@ -101,6 +101,9 @@ test('formatReport renders every required section as plain text without throwing
     'FIGHTERS WITH SOUL — TRAITS (Phase 4.6)',
     'TRAIT WINRATE DELTA',
     'TRAIT EVENT FREQUENCY',
+    'LE MONDE VIVANT & ECOSYSTEME GLOBAL (Phase V2.7)',
+    'GYM DOMINANCE INDEX',
+    'PROSPECT SUCCESS RATE',
   ]) {
     assert.ok(report.includes(heading), `report should include a "${heading}" section`);
   }
@@ -501,6 +504,49 @@ test('Phase 4.2: Legacy Engine telemetry is internally consistent, and every wor
   assert.ok(report.includes('ROSTER ATTACHMENT INDEX'));
   assert.ok(report.includes('PHASE 4.2 — VALIDATION'));
   assert.ok(!report.includes('NaN'), 'the Legacy Engine section should never render NaN');
+});
+
+test('Phase V2.7: Gym Dominance Index and Prospect Success Rate telemetry are internally consistent, and both PASS/FAIL against their targets in the report', () => {
+  const result = runSimulation({ seasons: 200, rosterSize: 8, seed: 7 });
+  const g = result.gymDominance;
+  const p = result.prospects;
+
+  assert.ok(result.fighters.totalGenerated > 0, 'sanity: 200 seasons should produce plenty of activity');
+
+  // gymDominance.wins always includes a PLAYER entry alongside every rival gym that won at least once.
+  assert.ok('PLAYER' in g.wins);
+  for (const wins of Object.values(g.wins)) assert.ok(wins >= 0);
+
+  // sharesIncludingPlayer sums to 1 across every gym (player + rivals) once any win has been recorded.
+  const totalShareIncludingPlayer = Object.values(g.sharesIncludingPlayer).reduce((sum, share) => sum + (share ?? 0), 0);
+  assert.ok(Math.abs(totalShareIncludingPlayer - 1) < 1e-9, `sharesIncludingPlayer should sum to 1, got ${totalShareIncludingPlayer}`);
+  assert.equal(g.playerShare, g.sharesIncludingPlayer.PLAYER);
+
+  // rivalOnlyShares excludes the player entirely and sums to 1 across rival gyms alone.
+  assert.ok(!('PLAYER' in g.rivalOnlyShares));
+  const totalRivalOnlyShare = Object.values(g.rivalOnlyShares).reduce((sum, share) => sum + (share ?? 0), 0);
+  assert.ok(Math.abs(totalRivalOnlyShare - 1) < 1e-9, `rivalOnlyShares should sum to 1, got ${totalRivalOnlyShare}`);
+
+  assert.ok(g.dominantRivalGymId in g.rivalOnlyShares, 'the dominant rival gym must be one of the rival gyms with a recorded share');
+  assert.equal(g.dominantRivalShare, g.rivalOnlyShares[g.dominantRivalGymId]);
+  assert.ok(g.dominantRivalShare >= 0 && g.dominantRivalShare <= 1);
+
+  assert.ok(p.totalSigned >= 0);
+  assert.ok(p.totalExtendedAtLeastOnce <= p.totalSigned, 'a prospect cannot survive a renewal without having been signed');
+  if (p.totalSigned > 0) {
+    assert.equal(p.successRate, p.totalExtendedAtLeastOnce / p.totalSigned);
+    assert.ok(p.successRate >= 0 && p.successRate <= 1);
+  } else {
+    assert.equal(p.successRate, null);
+  }
+
+  const report = formatReport(result);
+  assert.ok(report.includes('LE MONDE VIVANT & ECOSYSTEME GLOBAL (Phase V2.7)'));
+  assert.ok(report.includes('GYM DOMINANCE INDEX'));
+  assert.ok(report.includes('PROSPECT SUCCESS RATE'));
+  assert.ok(report.includes('PHASE V2.7 — VALIDATION'));
+  assert.ok(report.includes('DANS LA CIBLE') || report.includes('HORS CIBLE'));
+  assert.ok(!report.includes('NaN'), 'the World Ecosystem section should never render NaN');
 });
 
 test('runSimulation rejects an invalid seasons argument instead of silently misbehaving', () => {
