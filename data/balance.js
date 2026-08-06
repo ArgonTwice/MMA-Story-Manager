@@ -36,6 +36,7 @@
  *   BALANCE.WEIGH_IN     - weight-cut profiles, miss chance, form impact
  *   BALANCE.PERKS        - unlockable trait definitions and unlock thresholds
  *   BALANCE.EQUIPMENT    - gym equipment catalog (training/form/upkeep/purchase)
+ *   BALANCE.DRAMA          - Phase 3.2 Simulation Drama Engine weekly-resolution rates (see data/events.js)
  *   BALANCE.NARRATIVE_EVENTS - weekly random story events (sponsors, media, morale...)
  *   BALANCE.PERSONALITY  - archetype/trait definitions and their silent modifiers
  *   BALANCE.LEGACY        - Fighter#getLegacyStage() classification thresholds
@@ -76,7 +77,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.8.1',
+  VERSION: '1.9.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -1109,6 +1110,25 @@ const BALANCE = {
         purchaseCost: 3500,
       },
     },
+  },
+
+  // ---------------------------------------------------------------------
+  // DRAMA — Phase 3.2 ("Simulation Drama Engine"), consumed by
+  // engine/DramaEngine.js. Distinct from NARRATIVE_EVENTS below (which
+  // stays a single, low-frequency, no-choice "news ticker" — see
+  // engine/EventEngine.js): DRAMA_EVENTS (data/events.js) are richer,
+  // choice-driven, 5-category events resolved at a much higher weekly
+  // rate specifically to close the Dead Week Rate gap Phase 3.1's own
+  // telemetry surfaced (Fun sub-score stuck ~68/100 since Phase 3.1 v1).
+  // PRIMARY_EVENT_CHANCE + SECONDARY_EVENT_CHANCE = the target "0.8 a 1.2
+  // evenement significatif par semaine" from the spec (two independent
+  // rolls rather than a single non-uniform distribution, for simplicity).
+  // ---------------------------------------------------------------------
+  DRAMA: {
+    PRIMARY_EVENT_CHANCE: 0.85,
+    SECONDARY_EVENT_CHANCE: 0.15,
+    /** How many rival gyms tools/SimRunner.js seeds at setup so RIVALRIES-category events (and the pre-existing but previously-dormant engine/ProgressionEngine.js#processRivalGyms drift/fights) have something to read — the headless sim never called WorldState#addRivalGym before this test. */
+    SEEDED_RIVAL_GYM_COUNT: 4,
   },
 
   // ---------------------------------------------------------------------

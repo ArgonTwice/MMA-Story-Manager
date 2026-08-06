@@ -164,13 +164,18 @@ function renderHealthSection(result) {
   return lines.join('\n');
 }
 
+/** Dead Week Rate target (Phase 3.2 spec). */
+const DEAD_WEEK_RATE_MAX = 0.15;
+
 function renderFunDetectorSection(result) {
   const f = result.fun;
   const n = result.narrative;
   const lines = [renderSectionTitle('FUN DETECTOR')];
+  const deadWeekPass = f.dullWeekRate !== null && f.dullWeekRate < DEAD_WEEK_RATE_MAX;
   lines.push(
-    `Semaines "creuses" (0 evenement narratif, 0 combat, 0 tension financiere) : ` +
-      `${formatNumber(f.dullWeeks)} / ${formatNumber(f.totalWeeks)} (${formatPercent(f.dullWeekRate)})`
+    `Dead Week Rate (0 evenement narratif/drama, 0 combat, 0 tension financiere) : ` +
+      `${formatNumber(f.dullWeeks)} / ${formatNumber(f.totalWeeks)} (${formatPercent(f.dullWeekRate)}) ` +
+      `(cible : < ${formatPercent(DEAD_WEEK_RATE_MAX, 0)}) : ${f.dullWeekRate === null ? 'N/A' : deadWeekPass ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
   );
   lines.push(`Beats narratifs generes par les combats (StoryEngine/NarrativeEngine) : ${formatNumber(n.totalBeats)}`);
   const tones = Object.entries(n.byTone);
@@ -655,6 +660,90 @@ function renderWeeklyPlanningSection(result) {
   ].join('\n');
 }
 
+/** Event Choice Distribution alert threshold (Phase 3.2 spec: "alerter si un choix depasse 70%"). */
+const EVENT_CHOICE_MAX_SHARE = 0.7;
+/** Phase 3.2 explicit validation targets. */
+const DRAMA_TARGETS = Object.freeze({ META_HEALTH_MIN: 90, FUN_MIN: 75 });
+
+const DRAMA_CATEGORY_LABELS = Object.freeze({
+  FIGHTER_STORY: 'Fighter Stories',
+  MEDIA_ENGINE: 'Media Engine',
+  SPONSORS_MARCHE_NOIR: 'Sponsors / Marche Noir',
+  RIVALRIES: 'Rivalites',
+  GYM_LIFE: 'Gym Life',
+});
+
+function renderDramaEngineHeader() {
+  return '\n=== DRAMA ENGINE (Phase 3.2) ===';
+}
+
+function renderEventFrequencySubsection(result) {
+  const d = result.drama;
+  const lines = [renderSectionTitle('\u{1F3AC} FREQUENCE DES EVENEMENTS')];
+  lines.push(`Evenements resolus au total : ${formatNumber(d.totalEventsResolved)} sur ${formatNumber(d.weeksSimulated)} semaines`);
+  lines.push(`Moyenne par semaine : ${formatDecimal(d.averageEventsPerWeek, 2)} (cible : 0.8 - 1.2)`);
+  const byCategory = {};
+  for (const [eventId, e] of Object.entries(d.byEvent)) {
+    byCategory[e.category] = (byCategory[e.category] ?? 0) + e.totalCount;
+  }
+  lines.push('');
+  const headers = ['Categorie', 'Evenements resolus'];
+  const rows = Object.entries(byCategory).map(([category, count]) => [DRAMA_CATEGORY_LABELS[category] ?? category, formatNumber(count)]);
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderEventChoiceDistributionSubsection(result) {
+  const d = result.drama;
+  const lines = [renderSectionTitle('\u{1F9ED} EVENT CHOICE DISTRIBUTION')];
+  const headers = ['Evenement', 'Choix', 'Selections', 'Part'];
+  const rows = [];
+  for (const [eventId, e] of Object.entries(d.byEvent)) {
+    for (const [choiceId, c] of Object.entries(e.choices)) {
+      rows.push([eventId, choiceId, formatNumber(c.count), formatPercent(c.share, 1)]);
+    }
+  }
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  const maxSharePass = d.maxChoiceShare <= EVENT_CHOICE_MAX_SHARE;
+  lines.push(
+    `Part maximale d'un choix (tous evenements confondus) : ${formatPercent(d.maxChoiceShare, 1)} ` +
+      `(cible : <= ${formatPercent(EVENT_CHOICE_MAX_SHARE, 0)}) : ${maxSharePass ? 'DANS LA CIBLE' : 'HORS CIBLE'}`
+  );
+  lines.push(
+    '(Le bot headless pioche chaque choix selon un poids personnalite-dependant (voir' +
+      ' engine/DramaEngine.js#pickChoice et data/events.js[*].choices[*].personalityLean) — ce n\'est jamais un' +
+      ' choix scripte fixe, donc une repartition proche de 50/50 par defaut est attendue pour les choix sans' +
+      ' lean declare.)'
+  );
+  return lines.join('\n');
+}
+
+function renderDramaValidationSubsection(result) {
+  const funScore = result.metaHealth.funScore;
+  const metaHealth = result.metaHealth.overallIndex;
+  const funPass = funScore !== null && funScore >= DRAMA_TARGETS.FUN_MIN;
+  const metaHealthPass = metaHealth !== null && metaHealth >= DRAMA_TARGETS.META_HEALTH_MIN;
+
+  const lines = [renderSectionTitle('\u{1F3AF} PHASE 3.2 — VALIDATION (Fun Detector & Meta Health)')];
+  const headers = ['Metrique', 'Mesure', 'Cible', 'Statut'];
+  const rows = [
+    ['Fun Detector (sous-score)', funScore === null ? 'N/A' : `${formatNumber(funScore)}/100`, `>= ${DRAMA_TARGETS.FUN_MIN}/100`, funPass ? 'DANS LA CIBLE' : 'HORS CIBLE'],
+    ['Meta Health Index', metaHealth === null ? 'N/A' : `${formatNumber(metaHealth)}/100`, `>= ${DRAMA_TARGETS.META_HEALTH_MIN}/100`, metaHealthPass ? 'DANS LA CIBLE' : 'HORS CIBLE'],
+  ];
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderDramaEngineSection(result) {
+  return [
+    renderDramaEngineHeader(),
+    renderEventFrequencySubsection(result),
+    renderEventChoiceDistributionSubsection(result),
+    renderDramaValidationSubsection(result),
+  ].join('\n');
+}
+
 function renderFightsSection(result) {
   const lines = [renderSectionTitle('COMBATS')];
   lines.push(`Total de combats simules : ${formatNumber(result.fights.total)}`);
@@ -1029,6 +1118,19 @@ function renderNotesSection(result) {
       ' implementation (voir tools/SimRunner.js), desormais ventilee par archetype reel plutot que par bucket' +
       ' synthetique.'
   );
+  lines.push(
+    '* Phase 3.2 (Simulation Drama Engine) : coexiste avec engine/EventEngine.js (BALANCE.NARRATIVE_EVENTS) sans' +
+      ' le remplacer — EventEngine reste un "news ticker" bas-frequence sans choix, DramaEngine (data/events.js,' +
+      ' 10 evenements sur 5 categories) resout ~1 evenement a choix par semaine (2 jets independants,' +
+      ' BALANCE.DRAMA.PRIMARY_EVENT_CHANCE + SECONDARY_EVENT_CHANCE = 0.85 + 0.15) et publie sur le meme compteur' +
+      ' narratif que isDullWeek lit deja. EventWeight = BaseChance * Context * FighterTraits * WorldState : la' +
+      ' distinction Context/WorldState reste conceptuelle ici (les deux se combinent dans la meme chaine de' +
+      ' multiplicateurs — voir engine/DramaEngine.js#SIGNAL_EVALUATORS), le spec ne les separant pas' +
+      ' mecaniquement. tools/SimRunner.js seed desormais BALANCE.DRAMA.SEEDED_RIVAL_GYM_COUNT rivaux au' +
+      ' demarrage : le simulateur headless n\'appelait jamais WorldState#addRivalGym auparavant, ce qui rendait' +
+      ' silencieusement inertes a la fois la categorie RIVALRIES et le drift/combats de rivaux deja code dans' +
+      ' engine/ProgressionEngine.js#processRivalGyms depuis une phase anterieure.'
+  );
   return lines.join('\n');
 }
 
@@ -1048,6 +1150,7 @@ export function formatReport(result) {
     renderCombatTelemetrySection(result),
     renderMetaHealthDashboard(result),
     renderWeeklyPlanningSection(result),
+    renderDramaEngineSection(result),
     renderVersionHistorySection(result),
     renderNotesSection(result),
     '',

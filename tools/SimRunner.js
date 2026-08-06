@@ -42,6 +42,8 @@ import { GameState } from '../state/GameState.js';
 import { CombatEngine, createSeededRng, FINISH_METHODS } from '../engine/CombatEngine.js';
 import { advanceWeek } from '../engine/ProgressionEngine.js';
 import { processWeeklyPlan } from '../engine/WeeklyPlanningEngine.js';
+import { processWeeklyDrama } from '../engine/DramaEngine.js';
+import { DRAMA_EVENTS } from '../data/events.js';
 import { generatePersonality } from '../engine/FighterGenerator.js';
 import { PersonalityEngine, computeActivityWeights } from '../engine/PersonalityEngine.js';
 import { RelationshipEngine } from '../engine/RelationshipEngine.js';
@@ -240,6 +242,24 @@ function ensureRosterCapacity(playerState, desiredSize) {
   return Math.min(desiredSize, playerState.getRosterCapacity());
 }
 
+/**
+ * Phase 3.2: seeds BALANCE.DRAMA.SEEDED_RIVAL_GYM_COUNT synthetic rival
+ * gyms so RIVALRIES-category drama events (and the pre-existing but
+ * previously-dormant engine/ProgressionEngine.js#processRivalGyms weekly
+ * drift/fights, never fed any data before this headless simulator ever
+ * called WorldState#addRivalGym) have something real to read.
+ */
+function seedRivalGyms(worldState, rng) {
+  const w = BALANCE.WORLD;
+  for (let i = 0; i < BALANCE.DRAMA.SEEDED_RIVAL_GYM_COUNT; i += 1) {
+    worldState.addRivalGym({
+      name: `Rival Gym ${i + 1}`,
+      reputation: BALANCE.GYM.STARTING_REPUTATION + Math.round((rng() - 0.5) * 20),
+      activity: w.RIVAL_GYM_ACTIVITY.STARTING_VALUE,
+    });
+  }
+}
+
 // ---- stats accumulator -----------------------------------------------------
 
 function emptyArchetypeBucket() {
@@ -374,9 +394,33 @@ function createStatsAccumulator() {
     fun: { totalWeeks: 0, dullWeeks: 0 },
     narrative: { totalBeats: 0, byTone: {} },
     weeklyPlanning: createWeeklyPlanningAccumulator(),
+    drama: createDramaAccumulator(),
     weeklyMetrics: [],
     seasonalMetrics: [],
   };
+}
+
+/** Phase 3.2 telemetry accumulator: per-event Event Choice Distribution ("aucun choix ne depasse 70%"), and total events resolved (to verify the "0.8 a 1.2 evenement/semaine" target). */
+function createDramaAccumulator() {
+  const byEvent = {};
+  for (const event of DRAMA_EVENTS) {
+    const choiceCounts = {};
+    for (const choice of event.choices) choiceCounts[choice.id] = 0;
+    byEvent[event.id] = { category: event.category, totalCount: 0, choiceCounts };
+  }
+  return { totalEventsResolved: 0, weeksSimulated: 0, byEvent };
+}
+
+function recordDramaTelemetry(stats, dramaReport) {
+  const drama = stats.drama;
+  drama.weeksSimulated += 1;
+  for (const event of dramaReport.events) {
+    drama.totalEventsResolved += 1;
+    const bucket = drama.byEvent[event.eventId];
+    if (!bucket) continue;
+    bucket.totalCount += 1;
+    bucket.choiceCounts[event.choiceId] = (bucket.choiceCounts[event.choiceId] ?? 0) + 1;
+  }
 }
 
 function emptyActivityUsageCount() {
@@ -765,6 +809,7 @@ export function runSimulation(options = {}) {
   for (let i = 0; i < actualRosterSize; i += 1) {
     spawnFighter(playerState, stats, rng, nextFighterId);
   }
+  seedRivalGyms(worldState, rng);
 
   const combatEngine = new CombatEngine({ playerState, worldState, rng });
   const engines = createReactiveEngines();
@@ -787,6 +832,10 @@ export function runSimulation(options = {}) {
       assignWeeklyPlan(playerState, worldState, rng);
       const weeklyPlanReport = processWeeklyPlan(playerState, worldState, { rng });
       recordWeeklyPlanningTelemetry(stats, playerState, weeklyPlanReport);
+
+      const dramaReport = processWeeklyDrama(playerState, worldState, { rng });
+      recordDramaTelemetry(stats, dramaReport);
+      narrativeBeatsThisWeek += dramaReport.events.length;
 
       const summary = advanceWeek(gameState, { rng });
 
@@ -1271,8 +1320,37 @@ function finalizeStats(stats, config, durationMs) {
     narrative: stats.narrative,
     metaHealth,
     weeklyPlanning: finalizeWeeklyPlanning(stats.weeklyPlanning, insolvencyRate),
+    drama: finalizeDrama(stats.drama),
     weeklyMetrics: stats.weeklyMetrics,
     seasonalMetrics: stats.seasonalMetrics,
+  };
+}
+
+/**
+ * Phase 3.2 telemetry: average events resolved per week (verifies the
+ * "0.8 a 1.2" target), and per-event Event Choice Distribution — each
+ * choice's share of that event's own total resolutions, plus the run-wide
+ * max share across every event (for the ">= 70%" alert threshold).
+ */
+function finalizeDrama(drama) {
+  const byEvent = {};
+  let maxChoiceShare = 0;
+  for (const [eventId, bucket] of Object.entries(drama.byEvent)) {
+    const choices = {};
+    for (const [choiceId, count] of Object.entries(bucket.choiceCounts)) {
+      const share = bucket.totalCount > 0 ? count / bucket.totalCount : null;
+      choices[choiceId] = { count, share };
+      if (share !== null) maxChoiceShare = Math.max(maxChoiceShare, share);
+    }
+    byEvent[eventId] = { category: bucket.category, totalCount: bucket.totalCount, choices };
+  }
+
+  return {
+    totalEventsResolved: drama.totalEventsResolved,
+    weeksSimulated: drama.weeksSimulated,
+    averageEventsPerWeek: drama.weeksSimulated > 0 ? drama.totalEventsResolved / drama.weeksSimulated : null,
+    byEvent,
+    maxChoiceShare,
   };
 }
 

@@ -360,6 +360,39 @@ test('Phase 3.1 v2: weekly-planning telemetry (activity usage, Average Readiness
   assert.ok(!report.includes('NaN'), 'the weekly-planning section should never render NaN');
 });
 
+test('Phase 3.2: Drama Engine telemetry is internally consistent and the Dead Week Rate/Fun/Meta Health targets are visible in the report', () => {
+  const result = runSimulation({ seasons: 300, rosterSize: 8, seed: 99 });
+  const d = result.drama;
+
+  assert.ok(d.weeksSimulated > 0);
+  assert.ok(d.averageEventsPerWeek >= 0);
+  assert.equal(d.totalEventsResolved, Object.values(d.byEvent).reduce((sum, e) => sum + e.totalCount, 0));
+
+  for (const [eventId, e] of Object.entries(d.byEvent)) {
+    const choiceTotal = Object.values(e.choices).reduce((sum, c) => sum + c.count, 0);
+    assert.equal(choiceTotal, e.totalCount, `${eventId}: choice counts should sum back to the event's own total`);
+    for (const choice of Object.values(e.choices)) {
+      assert.ok(choice.share === null || (choice.share >= 0 && choice.share <= 1));
+    }
+  }
+  assert.ok(d.maxChoiceShare >= 0 && d.maxChoiceShare <= 1);
+
+  // Rival gyms are now seeded at setup (Phase 3.2), so RIVALRIES-category events should have a chance to fire.
+  assert.ok(result.fights !== undefined); // sanity the run completed
+  const rivalryCount = Object.values(d.byEvent)
+    .filter((e) => e.category === 'RIVALRIES')
+    .reduce((sum, e) => sum + e.totalCount, 0);
+  assert.ok(rivalryCount > 0, 'expected at least one RIVALRIES event over 300 seasons now that rival gyms are seeded');
+
+  const report = formatReport(result);
+  assert.ok(report.includes('DRAMA ENGINE'));
+  assert.ok(report.includes('FREQUENCE DES EVENEMENTS'));
+  assert.ok(report.includes('EVENT CHOICE DISTRIBUTION'));
+  assert.ok(report.includes('Dead Week Rate'));
+  assert.ok(report.includes('PHASE 3.2 — VALIDATION'));
+  assert.ok(!report.includes('NaN'), 'the Drama Engine section should never render NaN');
+});
+
 test('runSimulation rejects an invalid seasons argument instead of silently misbehaving', () => {
   assert.throws(() => runSimulation({ seasons: 0 }), TypeError);
   assert.throws(() => runSimulation({ seasons: -5 }), TypeError);
