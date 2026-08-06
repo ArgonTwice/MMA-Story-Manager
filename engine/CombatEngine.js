@@ -609,9 +609,19 @@ export class CombatEngine {
       const outcome = isDraw ? 'draw' : finish.winnerKey === key ? 'win' : 'loss';
       const wonTitle = titleWinnerKey === key;
 
+      // Phase 4.2 "Phoenix" nickname signal: did this fighter win despite
+      // being out-struck on raw damage? Both corners' judgePointsFromDamage
+      // are already fully accumulated by this point in the match (tallied
+      // round-by-round during ROUND_SIMULATION, well before this state).
+      const opponentKey = key === 'A' ? 'B' : 'A';
+      const comeback =
+        outcome === 'win' && c.combatMetrics[key].judgePointsFromDamage < c.combatMetrics[opponentKey].judgePointsFromDamage;
+
       fighter.recordFightResult({
         outcome,
         byFinish: byFinish && outcome === 'win',
+        finishMethod: finish.method,
+        comeback,
         titleWon: wonTitle ? `${c.orgId} ${fighter.identity.weightClass}` : undefined,
       });
 
@@ -682,6 +692,14 @@ export class CombatEngine {
       names: { A: c.fighters.A.identity.name, B: c.fighters.B.identity.name },
       weightClasses: { A: c.fighters.A.identity.weightClass, B: c.fighters.B.identity.weightClass },
       careerTitlesCount: { A: c.fighters.A.career.titles.length, B: c.fighters.B.career.titles.length },
+      // Phase 4.2: engine/HistoryEngine.js's youngestChampion/longestWinStreak
+      // world records read these straight off the payload (same decoupled
+      // pattern as WorldMemory's fastestKO/mostTitles above — no roster
+      // lookup needed). ages/winStreaks are post-fight values: recordFightResult
+      // has already run by this point (see the loop above), so winStreaks
+      // already reflects this result.
+      ages: { A: c.fighters.A.identity.age, B: c.fighters.B.identity.age },
+      winStreaks: { A: c.fighters.A.career.currentWinStreak, B: c.fighters.B.career.currentWinStreak },
       purses,
       reputationDeltas,
       hypeDeltas,

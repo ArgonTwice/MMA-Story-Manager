@@ -41,6 +41,7 @@
  *   BALANCE.NARRATIVE_EVENTS - weekly random story events (sponsors, media, morale...)
  *   BALANCE.PERSONALITY  - archetype/trait definitions and their silent modifiers
  *   BALANCE.LEGACY        - Fighter#getLegacyStage() classification thresholds
+ *   BALANCE.LEGACY_ENGINE - Phase 4.2 retirement reconversion (engine/LegacyEngine.js): Hall of Fame induction bar, coach-hire cap, reconversion outcome weights
  *   BALANCE.RELATIONSHIP  - relationship-graph gauge bounds and event deltas
  *   BALANCE.STORY         - narrative-opportunity detection thresholds
  *   BALANCE.NARRATIVE      - narrative-form selection weights per opportunity
@@ -78,7 +79,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.10.0',
+  VERSION: '1.11.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -1017,6 +1018,8 @@ const BALANCE = {
   WORLD: {
     /** Max number of entries kept in WorldState.globalEvents (oldest are trimmed). */
     GLOBAL_EVENT_HISTORY_LIMIT: 500,
+    /** Max number of entries kept in WorldState.hallOfFame (oldest are trimmed) — see engine/HistoryEngine.js#induct. */
+    HALL_OF_FAME_HISTORY_LIMIT: 200,
 
     /** Passive weekly reputation walk applied to every rival gym, fight or not. */
     RIVAL_GYM_REPUTATION_DRIFT: { MIN: -3, MAX: 3 },
@@ -1410,6 +1413,99 @@ const BALANCE = {
     /** Career titles ever won + total wins needed to reach LEGENDE (once CHAMPION). */
     LEGEND_MIN_TITLES: 2,
     LEGEND_MIN_WINS: 30,
+  },
+
+  // ---------------------------------------------------------------------
+  // LEGACY_ENGINE — Phase 4.2 ("Memoire du Monde, Legacy Engine &
+  // Attachement au Roster"): retirement-time Hall of Fame induction and
+  // reconversion (engine/HistoryEngine.js#evaluateHallOfFameEligibility/
+  // induct, engine/LegacyEngine.js#processRetirement).
+  // ---------------------------------------------------------------------
+  LEGACY_ENGINE: {
+    /**
+     * Career resume bar for Hall of Fame induction, checked at forced
+     * retirement. Deliberately win-record-based rather than title-based
+     * like Fighter#getLegacyStage()'s LEGENDE tier (LEGEND_MIN_TITLES) —
+     * tools/SimRunner.js's headless coach-AI never books a title fight
+     * (setupMatch's isTitle is always false there, a pre-existing,
+     * documented limitation — see the report's own methodology notes), so
+     * a title-gated bar would induct nobody in every simulated run. Both
+     * numbers tuned empirically against the fully-wired system (20 seeds x
+     * 1000 seasons, ~2,140 retirees sampled, tools/SimRunner.js's
+     * runSimulation()#result.legacy.legendaryFighterRate read directly —
+     * an earlier pass calibrated in isolation against raw career win/loss
+     * counters read materially higher once engine/LegacyEngine.js's own
+     * rng() consumption during retirement started reshuffling every
+     * downstream matchmaking/fight roll, so only an end-to-end measurement
+     * is trustworthy here) to land the "Legendary Fighter Rate" at ~4.6% of
+     * all retirees, comfortably inside the spec's stated 3-6% target band.
+     */
+    HALL_OF_FAME_MIN_WINS: 125,
+    HALL_OF_FAME_MIN_WIN_RATE: 0.76,
+
+    /**
+     * Roster coach slots this engine may ever occupy with a reconverted
+     * champion at once. A real payroll cost applies to every hired coach
+     * (see BALANCE.ECONOMY.SALARIES.COACH_BASE_WEEKLY, deducted weekly by
+     * engine/EconomyEngine.js#processWeeklyExpenses) and an insolvency
+     * crisis auto-fires the lowest-skill coach first — an unbounded
+     * hiring spree across a 1000-season run (hundreds of retirements)
+     * would silently drag the gym toward permanent insolvency. Once the
+     * cap is reached, further COACH_IN_GYM outcomes are still recorded in
+     * telemetry (the retiree's chosen path) but not actually hired.
+     */
+    MAX_LEGACY_COACHES: 3,
+
+    /**
+     * Base relative weights for engine/LegacyEngine.js's weighted-random
+     * reconversion pick, before the archetype lean and Hall of Fame
+     * multiplier below are applied. Flat (all equal) by design — every
+     * lean comes from the fighter's own data, never a scripted default.
+     */
+    BASE_RECONVERSION_WEIGHTS: { COACH_IN_GYM: 1, PHYSIO: 1, RIVAL_GYM_OWNER: 1, RECRUITER: 1 },
+
+    /**
+     * Multiplies the base weights above for a fighter who *did* clear the
+     * Hall of Fame bar — a proven champion is far more likely to be
+     * courted as a coach or to bankroll their own rival gym than to fade
+     * into a quiet Physio role.
+     */
+    HALL_OF_FAME_RECONVERSION_MULTIPLIER: { COACH_IN_GYM: 2.5, PHYSIO: 0.4, RIVAL_GYM_OWNER: 2, RECRUITER: 0.8 },
+
+    /**
+     * Per-archetype multipliers layered on top of BASE_RECONVERSION_WEIGHTS
+     * (multiplicative, missing outcomes default to 1 — no lean). Grounded
+     * in each archetype's existing BALANCE.PERSONALITY.ARCHETYPES flavor
+     * rather than invented fresh: Genie/Leader's real activityWeights lean
+     * hardest on VIDEO_PREP (tactical/analytical) -> COACH_IN_GYM; Veteran
+     * leans hardest on PHYSIO_REST (understands recovery) -> PHYSIO;
+     * Icone/Showman/Mercenaire lean hardest on MEDIA_SPONSORS
+     * (networking/promotion-savvy) -> RECRUITER; Guerrier/Predateur lean
+     * hardest on SPARRING (competitive drive) -> RIVAL_GYM_OWNER;
+     * Phenomene (highest progressionMultiplier, natural talent) leans both
+     * COACH_IN_GYM and RIVAL_GYM_OWNER; Cameleon (no strong lean anywhere
+     * in its own activityWeights) gets none here either.
+     */
+    ARCHETYPE_RECONVERSION_LEAN: {
+      Guerrier: { RIVAL_GYM_OWNER: 2 },
+      Genie: { COACH_IN_GYM: 2.5 },
+      Icone: { RECRUITER: 2 },
+      Mercenaire: { RECRUITER: 2, RIVAL_GYM_OWNER: 1.5 },
+      Leader: { COACH_IN_GYM: 2.5 },
+      Showman: { RECRUITER: 2 },
+      Predateur: { RIVAL_GYM_OWNER: 2 },
+      Veteran: { PHYSIO: 2.5 },
+      Phenomene: { COACH_IN_GYM: 1.5, RIVAL_GYM_OWNER: 1.5 },
+      Cameleon: {},
+    },
+
+    /**
+     * Reputation boost applied to an existing rival gym when a retiree
+     * reconverts as its new RIVAL_GYM_OWNER (a no-op, still telemetered,
+     * if WorldState has no rival gyms at all — see
+     * tools/SimRunner.js#seedRivalGyms).
+     */
+    RIVAL_GYM_OWNER_REPUTATION_BOOST: 8,
   },
 
   // ---------------------------------------------------------------------

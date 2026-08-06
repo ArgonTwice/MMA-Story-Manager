@@ -20,6 +20,7 @@
  */
 
 import BALANCE from '../data/balance.js';
+import { NICKNAME_RULES } from '../data/nicknames.js';
 
 /**
  * @typedef {Object} FighterSkills
@@ -60,6 +61,14 @@ import BALANCE from '../data/balance.js';
  * @property {number} losses
  * @property {number} draws
  * @property {number} finishes - Wins by KO/TKO/Submission (subset of wins).
+ * @property {number} koWins - Phase 4.2: wins by KO specifically (subset of finishes).
+ * @property {number} tkoWins - Phase 4.2: wins by TKO or doctor stoppage (subset of finishes).
+ * @property {number} submissionWins - Phase 4.2: wins by submission (subset of finishes).
+ * @property {number} decisionWins - Phase 4.2: wins by judges' decision (wins - finishes).
+ * @property {number} comebackWins - Phase 4.2: wins where this fighter was out-struck on
+ *   raw damage yet still won (see CombatEngine#_processPostMatchRewards's comeback flag).
+ * @property {number} currentWinStreak - Phase 4.2: consecutive wins, reset by a loss or draw.
+ * @property {number} longestWinStreak - Phase 4.2: this career's best currentWinStreak ever reached.
  * @property {string[]} titles - Titles held/won, e.g. ["WFC Lightweight"].
  * @property {('none'|'eligible'|'inducted')} hallOfFameStatus
  */
@@ -154,6 +163,8 @@ export class Fighter {
       weightClass: config.identity?.weightClass ?? 'Lightweight',
       bio: config.identity?.bio ?? '',
       origin: config.identity?.origin ?? '',
+      /** Phase 4.2: emergent nickname, earned automatically from career deeds. See evaluateNickname()/data/nicknames.js. Null until earned. */
+      nickname: config.identity?.nickname ?? null,
     };
 
     /** Combat skills + current condition/morale. */
@@ -207,6 +218,16 @@ export class Fighter {
       losses: config.career?.losses ?? 0,
       draws: config.career?.draws ?? 0,
       finishes: config.career?.finishes ?? 0,
+      /** Phase 4.2: finish-method breakdown, subsets of finishes (koWins + tkoWins + submissionWins === finishes). Feeds evaluateNickname(). */
+      koWins: config.career?.koWins ?? 0,
+      tkoWins: config.career?.tkoWins ?? 0,
+      submissionWins: config.career?.submissionWins ?? 0,
+      /** Phase 4.2: wins - finishes, tracked directly rather than derived on read. */
+      decisionWins: config.career?.decisionWins ?? 0,
+      /** Phase 4.2: see evaluateNickname()'s PHOENIX rule / CombatEngine's comeback flag. */
+      comebackWins: config.career?.comebackWins ?? 0,
+      currentWinStreak: config.career?.currentWinStreak ?? 0,
+      longestWinStreak: config.career?.longestWinStreak ?? 0,
       titles: config.career?.titles ? [...config.career.titles] : [],
       hallOfFameStatus: config.career?.hallOfFameStatus ?? 'none',
     };
@@ -427,27 +448,74 @@ export class Fighter {
   /**
    * Records the outcome of a completed fight in the career stats.
    * The caller (Engine) is responsible for resolving the fight itself;
-   * this method only updates bookkeeping.
+   * this method only updates bookkeeping — including, since Phase 4.2,
+   * refreshing the fighter's emergent nickname (see evaluateNickname()).
    *
    * @param {Object} result
    * @param {('win'|'loss'|'draw')} result.outcome
    * @param {boolean} [result.byFinish=false] - KO/TKO/Submission rather than decision.
+   * @param {string} [result.finishMethod] - Phase 4.2: the raw finish method string
+   *   (e.g. CombatEngine's FINISH_METHODS.KO/TKO/SUBMISSION/DOCTOR_STOPPAGE) when
+   *   byFinish is true, used only to classify koWins/tkoWins/submissionWins — plain
+   *   string comparison rather than importing CombatEngine's enum (Models never
+   *   depend on Engine, see this file's header).
    * @param {string} [result.titleWon] - Title name, if this win captured a title.
+   * @param {boolean} [result.comeback=false] - Phase 4.2: true if this win came
+   *   despite this fighter being out-struck on raw damage (see
+   *   CombatEngine#_processPostMatchRewards) — feeds the PHOENIX nickname rule.
    */
-  recordFightResult({ outcome, byFinish = false, titleWon }) {
+  recordFightResult({ outcome, byFinish = false, finishMethod, titleWon, comeback = false }) {
     if (outcome === 'win') {
       this.career.wins += 1;
-      if (byFinish) this.career.finishes += 1;
+      if (byFinish) {
+        this.career.finishes += 1;
+        if (finishMethod === 'KO') this.career.koWins += 1;
+        else if (finishMethod === 'TKO' || finishMethod === 'DOCTOR_STOPPAGE') this.career.tkoWins += 1;
+        else if (finishMethod === 'SUBMISSION') this.career.submissionWins += 1;
+      } else {
+        this.career.decisionWins += 1;
+      }
+      if (comeback) this.career.comebackWins += 1;
+      this.career.currentWinStreak += 1;
+      this.career.longestWinStreak = Math.max(this.career.longestWinStreak, this.career.currentWinStreak);
       if (titleWon && !this.career.titles.includes(titleWon)) {
         this.career.titles.push(titleWon);
       }
     } else if (outcome === 'loss') {
       this.career.losses += 1;
+      this.career.currentWinStreak = 0;
     } else if (outcome === 'draw') {
       this.career.draws += 1;
+      this.career.currentWinStreak = 0;
     } else {
       throw new TypeError(`Fighter.recordFightResult: unknown outcome "${outcome}".`);
     }
+
+    this.evaluateNickname();
+  }
+
+  /**
+   * Phase 4.2 ("Surnoms Emergents"): re-checks every rule in
+   * data/nicknames.js#NICKNAME_RULES against this fighter's current career
+   * counters, and adopts the highest-priority matching rule's label. Since
+   * every counter NICKNAME_RULES reads is monotonically non-decreasing over
+   * a career (see recordFightResult), a nickname is never un-earned — this
+   * can only ever replace it with a higher-priority one, or leave it as-is.
+   * Called automatically at the end of recordFightResult(); exposed
+   * publicly for tests/tools that want to force a re-check without another
+   * fight (e.g. after directly restoring career counters from a save).
+   *
+   * @returns {string|null} The resulting nickname (unchanged if no rule matches).
+   */
+  evaluateNickname() {
+    let best = null;
+    for (const rule of NICKNAME_RULES) {
+      if ((this.career[rule.statKey] ?? 0) >= rule.minValue) {
+        if (!best || rule.priority > best.priority) best = rule;
+      }
+    }
+    if (best) this.identity.nickname = best.label;
+    return this.identity.nickname;
   }
 
   /**

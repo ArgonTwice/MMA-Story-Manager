@@ -37,6 +37,7 @@ export const WORLD_EVENTS = Object.freeze({
   GLOBAL_EVENT_ADDED: 'world:global_event_added',
   RELATIONSHIP_UPDATED: 'world:relationship_updated',
   RECORD_BROKEN: 'world:record_broken',
+  HALL_OF_FAME_INDUCTED: 'world:hall_of_fame_inducted',
 });
 
 /** The five relationship gauges tracked per entity pair. */
@@ -66,6 +67,10 @@ function defaultRecords() {
     longestTitleReign: blank(),
     mostTitles: { value: 0, day: null, detail: null, meta: null },
     biggestFight: blank(),
+    /** Phase 4.2: lowest identity.age at a fighter's FIRST title win (see engine/HistoryEngine.js). Structurally N/A in a headless sim run that never books title fights (isTitle always false) — see tools/SimRunner.js's own documented limitation. */
+    youngestChampion: blank(),
+    /** Phase 4.2: highest Fighter.career.longestWinStreak ever observed across every fighter (see engine/HistoryEngine.js). */
+    longestWinStreak: { value: 0, day: null, detail: null, meta: null },
   };
 }
 
@@ -103,6 +108,7 @@ export class WorldState {
    * @param {Object} [config.relationships] - { [pairKey]: RelationshipRecord }
    * @param {Object} [config.records] - Historical bests (see defaultRecords()).
    * @param {Object} [config.titleHolders] - { [titleKey]: { fighterId, fighterName, sinceDay } }
+   * @param {Object[]} [config.hallOfFame] - Phase 4.2: retired legends registry (see engine/HistoryEngine.js#induct).
    */
   constructor(config = {}) {
     this.currentDay = config.currentDay ?? BALANCE.CALENDAR.START_DAY;
@@ -121,6 +127,8 @@ export class WorldState {
     this.relationships = config.relationships ? structuredCloneOrCopy(config.relationships) : {};
     this.records = config.records ? structuredCloneOrCopy(config.records) : defaultRecords();
     this.titleHolders = config.titleHolders ? structuredCloneOrCopy(config.titleHolders) : {};
+    /** Phase 4.2: retired legends registry, see engine/HistoryEngine.js#induct/addHallOfFameEntry. */
+    this.hallOfFame = config.hallOfFame ? config.hallOfFame.map((entry) => ({ ...entry })) : [];
   }
 
   // ---- calendar -----------------------------------------------------------
@@ -428,6 +436,39 @@ export class WorldState {
     this.titleHolders[titleKey] = { ...holder };
   }
 
+  // ---- hall of fame (Phase 4.2) -------------------------------------------------
+
+  /**
+   * Appends a retired legend to the world's permanent Hall of Fame registry
+   * (see engine/HistoryEngine.js#induct), trimming the oldest entries past
+   * BALANCE.WORLD.HALL_OF_FAME_HISTORY_LIMIT.
+   *
+   * @param {Object} entry
+   * @returns {Object} The stored entry (with an id/inductedOnDay assigned if missing).
+   */
+  addHallOfFameEntry(entry) {
+    const record = {
+      id: entry.id ?? generateId('hof'),
+      inductedOnDay: entry.inductedOnDay ?? this.currentDay,
+      ...entry,
+    };
+
+    this.hallOfFame.push(record);
+    if (this.hallOfFame.length > BALANCE.WORLD.HALL_OF_FAME_HISTORY_LIMIT) {
+      this.hallOfFame.splice(0, this.hallOfFame.length - BALANCE.WORLD.HALL_OF_FAME_HISTORY_LIMIT);
+    }
+
+    EventBus.publish(WORLD_EVENTS.HALL_OF_FAME_INDUCTED, { entry: record });
+    return record;
+  }
+
+  /**
+   * @returns {Object[]} A copy of the full Hall of Fame registry.
+   */
+  getHallOfFame() {
+    return this.hallOfFame.map((entry) => ({ ...entry }));
+  }
+
   // ---- serialization ------------------------------------------------------------
 
   /**
@@ -445,6 +486,7 @@ export class WorldState {
       relationships: structuredCloneOrCopy(this.relationships),
       records: structuredCloneOrCopy(this.records),
       titleHolders: structuredCloneOrCopy(this.titleHolders),
+      hallOfFame: this.hallOfFame.map((entry) => ({ ...entry })),
     };
   }
 

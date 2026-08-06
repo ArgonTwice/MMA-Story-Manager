@@ -415,6 +415,55 @@ test('Phase 3.2: Drama Engine telemetry is internally consistent and the Dead We
   assert.ok(!report.includes('NaN'), 'the Drama Engine section should never render NaN');
 });
 
+test('Phase 4.2: Legacy Engine telemetry is internally consistent, and every world-record/Hall of Fame field is well-shaped', () => {
+  const result = runSimulation({ seasons: 300, rosterSize: 8, seed: 42 });
+  const legacy = result.legacy;
+
+  assert.ok(result.fighters.totalRetired > 0, 'sanity: 300 seasons should produce forced retirements');
+
+  // Hall of Fame inductions/nickname pickups never exceed the retirements they're drawn from.
+  assert.ok(legacy.hallOfFameInductions <= result.fighters.totalRetired);
+  assert.ok(legacy.retirementsWithNickname <= result.fighters.totalRetired);
+  assert.equal(result.hallOfFame.length, legacy.hallOfFameInductions, 'every HOF induction should have produced exactly one WorldState.hallOfFame entry');
+
+  // Reconversion counts always sum back to total retirements; applied is always <= chosen per outcome.
+  const totalReconversions = Object.values(legacy.reconversionCounts).reduce((sum, v) => sum + v, 0);
+  assert.equal(totalReconversions, result.fighters.totalRetired);
+  for (const outcome of Object.keys(legacy.reconversionCounts)) {
+    assert.ok(legacy.reconversionApplied[outcome] <= legacy.reconversionCounts[outcome]);
+  }
+  assert.ok(result.activeLegacyCoaches <= BALANCE.LEGACY_ENGINE.MAX_LEGACY_COACHES, 'active legacy coaches must never exceed the configured cap');
+  assert.ok(legacy.legacyCoachesHiredTotal >= result.activeLegacyCoaches, 'cumulative hires can only be >= the currently-active count (insolvency can fire coaches, never un-hire them retroactively)');
+
+  // Nickname breakdown sums back to retirementsWithNickname.
+  const nicknameTotal = Object.values(legacy.nicknameCounts).reduce((sum, v) => sum + v, 0);
+  assert.equal(nicknameTotal, legacy.retirementsWithNickname);
+
+  for (const rate of [legacy.legendaryFighterRate, legacy.nicknamePickupRate, result.rosterAttachment.attachmentRate]) {
+    assert.ok(rate === null || (rate >= 0 && rate <= 1), `rate ${rate} should be null or within [0, 1]`);
+  }
+
+  // Roster Attachment Index: every fighter ever generated is eventually measured (retired or still active at run-end).
+  assert.equal(result.rosterAttachment.totalCount, result.fighters.totalGenerated);
+  assert.ok(result.rosterAttachment.attachedCount <= result.rosterAttachment.totalCount);
+
+  for (const recordKey of ['fastestKO', 'longestTitleReign', 'mostTitles', 'biggestFight', 'youngestChampion', 'longestWinStreak']) {
+    assert.ok(recordKey in result.worldRecords, `expected worldRecords to carry a "${recordKey}" entry`);
+  }
+  assert.ok(result.worldRecords.mostTitles.value === 0, 'no title fight is ever booked by this headless coach-AI (isTitle always false), so mostTitles must stay at its untouched default');
+  assert.equal(result.worldRecords.youngestChampion.value, null, 'same limitation: youngestChampion can never be set without a booked title fight');
+
+  const report = formatReport(result);
+  assert.ok(report.includes('LEGACY ENGINE'));
+  assert.ok(report.includes('REGISTRE DES RECORDS DU MONDE'));
+  assert.ok(report.includes('HALL OF FAME'));
+  assert.ok(report.includes('RECONVERSION DES RETRAITES'));
+  assert.ok(report.includes('SURNOMS EMERGENTS'));
+  assert.ok(report.includes('ROSTER ATTACHMENT INDEX'));
+  assert.ok(report.includes('PHASE 4.2 — VALIDATION'));
+  assert.ok(!report.includes('NaN'), 'the Legacy Engine section should never render NaN');
+});
+
 test('runSimulation rejects an invalid seasons argument instead of silently misbehaving', () => {
   assert.throws(() => runSimulation({ seasons: 0 }), TypeError);
   assert.throws(() => runSimulation({ seasons: -5 }), TypeError);

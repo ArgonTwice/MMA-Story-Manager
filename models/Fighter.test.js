@@ -102,3 +102,109 @@ test('toJSON/fromJSON round-trips both Fatigue gauges, weeklyPlan and preparatio
   assert.equal(rebuilt.preparation.tacticalBonusPending, true);
   assert.equal(rebuilt.preparation.weeklyCharge, 4);
 });
+
+// ---- Phase 4.2 ("Memoire du Monde, Legacy Engine & Attachement au Roster") -
+
+test('recordFightResult classifies a KO win into both finishes and koWins, and starts a win streak', () => {
+  const fighter = makeFighter();
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO' });
+
+  assert.equal(fighter.career.wins, 1);
+  assert.equal(fighter.career.finishes, 1);
+  assert.equal(fighter.career.koWins, 1);
+  assert.equal(fighter.career.tkoWins, 0);
+  assert.equal(fighter.career.submissionWins, 0);
+  assert.equal(fighter.career.decisionWins, 0);
+  assert.equal(fighter.career.currentWinStreak, 1);
+  assert.equal(fighter.career.longestWinStreak, 1);
+});
+
+test('TKO and DOCTOR_STOPPAGE both classify into tkoWins; SUBMISSION into submissionWins', () => {
+  const tkoFighter = makeFighter();
+  tkoFighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'TKO' });
+  assert.equal(tkoFighter.career.tkoWins, 1);
+
+  const doctorStoppageFighter = makeFighter();
+  doctorStoppageFighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'DOCTOR_STOPPAGE' });
+  assert.equal(doctorStoppageFighter.career.tkoWins, 1);
+
+  const subFighter = makeFighter();
+  subFighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'SUBMISSION' });
+  assert.equal(subFighter.career.submissionWins, 1);
+});
+
+test('a decision win (byFinish=false) increments decisionWins, not finishes', () => {
+  const fighter = makeFighter();
+  fighter.recordFightResult({ outcome: 'win', byFinish: false });
+
+  assert.equal(fighter.career.wins, 1);
+  assert.equal(fighter.career.finishes, 0);
+  assert.equal(fighter.career.decisionWins, 1);
+});
+
+test('currentWinStreak resets to 0 on a loss or a draw, but longestWinStreak remembers the peak', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 4; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  assert.equal(fighter.career.currentWinStreak, 4);
+  assert.equal(fighter.career.longestWinStreak, 4);
+
+  fighter.recordFightResult({ outcome: 'loss' });
+  assert.equal(fighter.career.currentWinStreak, 0);
+  assert.equal(fighter.career.longestWinStreak, 4, 'the peak should not be forgotten after the streak ends');
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  fighter.recordFightResult({ outcome: 'draw' });
+  assert.equal(fighter.career.currentWinStreak, 0);
+  assert.equal(fighter.career.longestWinStreak, 4);
+});
+
+test('a comeback win increments comebackWins; a normal win does not', () => {
+  const fighter = makeFighter();
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, comeback: true });
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, comeback: false });
+
+  assert.equal(fighter.career.comebackWins, 1);
+});
+
+test('evaluateNickname adopts "The Hammer" once koWins reaches 5, and never regresses it afterward', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 4; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO' });
+  assert.equal(fighter.identity.nickname, null, 'sanity: 4 KOs should not be enough yet');
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO' });
+  assert.equal(fighter.identity.nickname, 'The Hammer');
+
+  fighter.recordFightResult({ outcome: 'loss' });
+  assert.equal(fighter.identity.nickname, 'The Hammer', 'a nickname, once earned, must not be un-earned by a loss');
+});
+
+test('evaluateNickname prefers the higher-priority PHOENIX rule over an already-earned lower-priority THE_HAMMER', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 5; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO' });
+  assert.equal(fighter.identity.nickname, 'The Hammer');
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, comeback: true });
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, comeback: true });
+  assert.equal(fighter.identity.nickname, 'Phoenix', 'PHOENIX (priority 30) should outrank THE_HAMMER (priority 20) once both match');
+});
+
+test('evaluateNickname adopts "The Technician" once decisionWins reaches 10', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 9; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  assert.equal(fighter.identity.nickname, null);
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  assert.equal(fighter.identity.nickname, 'The Technician');
+});
+
+test('toJSON/fromJSON round-trips the Phase 4.2 identity/career fields', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 5; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO' });
+
+  const rebuilt = Fighter.fromJSON(fighter.toJSON());
+
+  assert.equal(rebuilt.identity.nickname, 'The Hammer');
+  assert.equal(rebuilt.career.koWins, 5);
+  assert.equal(rebuilt.career.longestWinStreak, 5);
+  assert.equal(rebuilt.career.currentWinStreak, 5);
+});

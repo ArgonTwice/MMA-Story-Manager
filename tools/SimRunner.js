@@ -51,6 +51,8 @@ import { StoryEngine } from '../engine/StoryEngine.js';
 import { NarrativeEngine, NARRATIVE_ENGINE_EVENTS } from '../engine/NarrativeEngine.js';
 import { WorldMemory } from '../engine/WorldMemory.js';
 import { SocialEngine } from '../engine/SocialEngine.js';
+import { HistoryEngine } from '../engine/HistoryEngine.js';
+import { processRetirement, LEGACY_ENGINE_OUTCOMES } from '../engine/LegacyEngine.js';
 
 /** Not exported by CombatEngine.js (its own copy is module-private) — same set, mirrored the way engine/SocialEngine.js already does from FINISH_METHODS. */
 const DECISION_METHODS = Object.freeze([
@@ -60,6 +62,9 @@ const DECISION_METHODS = Object.freeze([
 ]);
 
 const WEEKS_PER_SEASON = BALANCE.CALENDAR.WEEKS_PER_SEASON;
+const DAYS_PER_SEASON = BALANCE.CALENDAR.DAYS_PER_WEEK * WEEKS_PER_SEASON;
+/** Phase 4.2 "Roster Attachment Index" bar ("% de fighters gardes > 3 saisons") — this implementation's own reporting threshold, taken verbatim from the spec's own wording rather than a BALANCE-owned gameplay concept. */
+const ROSTER_ATTACHMENT_MIN_SEASONS = 3;
 const SKILL_KEYS = Object.freeze(['boxe', 'jambes', 'sol', 'soumission', 'cardio', 'intelligence']);
 
 /** Fighting styles this tool generates fighters into — the exact set CombatEngine gives a bonus to (see BALANCE.COMBAT.STYLE_BONUSES), minus the catch-all DEFAULT. */
@@ -239,11 +244,15 @@ function generateFighter(rng, nextFighterId) {
 }
 
 /** Generates a fighter, adds it to the roster, and records it in the run's population/diversity stats (initial fill and every retirement replacement funnel through here). */
-function spawnFighter(playerState, stats, rng, nextFighterId) {
+function spawnFighter(playerState, stats, rng, nextFighterId, currentDay) {
   const fighter = generateFighter(rng, nextFighterId);
   playerState.addFighter(fighter);
   stats.fighters.totalGenerated += 1;
   stats.fighterCountsByStyle[fighter.identity.style] += 1;
+  // Phase 4.2 "Roster Attachment Index": remembers when this fighter joined
+  // so processRetirements (on departure) or the run's final sweep (still
+  // active) can measure how many in-world seasons they were actually kept.
+  stats.rosterAttachment.fighterSpawnDay[fighter.identity.id] = currentDay;
   return fighter;
 }
 
@@ -416,9 +425,47 @@ function createStatsAccumulator() {
     narrative: { totalBeats: 0, byTone: {} },
     weeklyPlanning: createWeeklyPlanningAccumulator(),
     drama: createDramaAccumulator(),
+    legacy: createLegacyAccumulator(),
+    rosterAttachment: { fighterSpawnDay: {}, attachedCount: 0, totalCount: 0 },
     weeklyMetrics: [],
     seasonalMetrics: [],
   };
+}
+
+/** Phase 4.2 telemetry accumulator: Hall of Fame inductions, nickname pickup, and the reconversion-outcome breakdown (see engine/LegacyEngine.js#processRetirement). */
+function createLegacyAccumulator() {
+  const reconversionCounts = {};
+  const reconversionApplied = {};
+  for (const outcome of Object.values(LEGACY_ENGINE_OUTCOMES)) {
+    reconversionCounts[outcome] = 0;
+    reconversionApplied[outcome] = 0;
+  }
+  return {
+    hallOfFameInductions: 0,
+    retirementsWithNickname: 0,
+    nicknameCounts: {},
+    reconversionCounts,
+    reconversionApplied,
+    legacyCoachesHiredTotal: 0,
+  };
+}
+
+/** Folds one resolved retirement's engine/LegacyEngine.js#processRetirement report into the run-wide Phase 4.2 telemetry. */
+function recordLegacyTelemetry(stats, reconversion) {
+  const legacy = stats.legacy;
+  if (reconversion.isHallOfFamer) legacy.hallOfFameInductions += 1;
+  if (reconversion.nickname) {
+    legacy.retirementsWithNickname += 1;
+    legacy.nicknameCounts[reconversion.nickname] = (legacy.nicknameCounts[reconversion.nickname] ?? 0) + 1;
+  }
+
+  legacy.reconversionCounts[reconversion.outcome] += 1;
+  if (reconversion.applied) {
+    legacy.reconversionApplied[reconversion.outcome] += 1;
+    if (reconversion.outcome === LEGACY_ENGINE_OUTCOMES.COACH_IN_GYM) {
+      legacy.legacyCoachesHiredTotal += 1;
+    }
+  }
 }
 
 /** Phase 3.2 telemetry accumulator: per-event Event Choice Distribution ("aucun choix ne depasse 70%"), and total events resolved (to verify the "0.8 a 1.2 evenement/semaine" target). */
@@ -727,8 +774,20 @@ function recordWeeklyPlanningTelemetry(stats, playerState, weeklyPlanReport) {
   }
 }
 
-/** Removes every fighter who hit forced retirement this week (per ProgressionEngine's birthday pass), recording career stats, and replaces them so roster size stays constant. */
-function processRetirements({ summary, playerState, rng, stats, nextFighterId }) {
+/** Marks one fighter as "measured" for the Roster Attachment Index, given their known departure/measurement day (retirement day, or the run's final day for a still-active fighter). */
+function recordRosterAttachmentSample(stats, fighterId, measuredOnDay) {
+  const spawnDay = stats.rosterAttachment.fighterSpawnDay[fighterId];
+  if (spawnDay === undefined) return;
+
+  const tenureDays = measuredOnDay - spawnDay;
+  stats.rosterAttachment.totalCount += 1;
+  if (tenureDays > ROSTER_ATTACHMENT_MIN_SEASONS * DAYS_PER_SEASON) {
+    stats.rosterAttachment.attachedCount += 1;
+  }
+}
+
+/** Removes every fighter who hit forced retirement this week (per ProgressionEngine's birthday pass), recording career stats, running Phase 4.2's Legacy Engine, and replacing them so roster size stays constant. */
+function processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId }) {
   for (const { fighterId } of summary.birthdays) {
     const fighter = playerState.getFighter(fighterId);
     if (!fighter || !fighter.isForcedRetirement()) continue;
@@ -742,9 +801,13 @@ function processRetirements({ summary, playerState, rng, stats, nextFighterId })
       titles: fighter.career.titles.length,
     });
     stats.fighters.totalRetired += 1;
+    recordRosterAttachmentSample(stats, fighterId, worldState.currentDay);
+
+    const reconversion = processRetirement(fighter, { playerState, worldState, rng });
+    recordLegacyTelemetry(stats, reconversion);
 
     playerState.removeFighter(fighterId);
-    spawnFighter(playerState, stats, rng, nextFighterId);
+    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
   }
 }
 
@@ -781,6 +844,7 @@ function createReactiveEngines() {
     narrativeEngine: new NarrativeEngine(),
     worldMemory: new WorldMemory(),
     socialEngine: new SocialEngine(),
+    historyEngine: new HistoryEngine(),
   };
 }
 
@@ -791,6 +855,7 @@ function attachReactiveEngines(engines, playerState, worldState) {
   engines.narrativeEngine.attach(playerState, worldState);
   engines.worldMemory.attach(worldState);
   engines.socialEngine.attach(playerState);
+  engines.historyEngine.attach(worldState);
 }
 
 function detachReactiveEngines(engines) {
@@ -800,6 +865,7 @@ function detachReactiveEngines(engines) {
   engines.narrativeEngine.detach();
   engines.worldMemory.detach();
   engines.socialEngine.detach();
+  engines.historyEngine.detach();
 }
 
 // ---- public entry point ------------------------------------------------------
@@ -847,7 +913,7 @@ export function runSimulation(options = {}) {
   const nextFighterId = createFighterIdSequencer();
   const actualRosterSize = ensureRosterCapacity(playerState, rosterSize);
   for (let i = 0; i < actualRosterSize; i += 1) {
-    spawnFighter(playerState, stats, rng, nextFighterId);
+    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
   }
   seedRivalGyms(worldState, rng);
 
@@ -897,7 +963,7 @@ export function runSimulation(options = {}) {
         orgId,
       });
 
-      processRetirements({ summary, playerState, rng, stats, nextFighterId });
+      processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId });
 
       recordWeeklyEconomy(stats, playerState, summary.economyReport);
 
@@ -945,8 +1011,29 @@ export function runSimulation(options = {}) {
     detachReactiveEngines(engines);
   }
 
+  // Phase 4.2 "Roster Attachment Index": every fighter still on the roster
+  // at run-end hasn't retired yet, so their tenure-so-far is measured
+  // against the run's final day rather than a retirement day.
+  for (const fighter of playerState.roster) {
+    recordRosterAttachmentSample(stats, fighter.identity.id, worldState.currentDay);
+  }
+
   const durationMs = Date.now() - startedAt;
-  return finalizeStats(stats, { seasons, weeksPerSeason: WEEKS_PER_SEASON, totalWeeks, rosterSize: actualRosterSize, fightChancePerPair, orgId, seed: options.seed }, durationMs);
+  const result = finalizeStats(
+    stats,
+    { seasons, weeksPerSeason: WEEKS_PER_SEASON, totalWeeks, rosterSize: actualRosterSize, fightChancePerPair, orgId, seed: options.seed },
+    durationMs
+  );
+
+  // Phase 4.2: final world-state snapshots that live outside `stats`
+  // (WorldMemory/HistoryEngine write world records straight onto
+  // WorldState, not into this file's own accumulator) — folded onto the
+  // returned result so tools/BalanceReporter.js has a single object to read.
+  result.worldRecords = worldState.records;
+  result.hallOfFame = worldState.getHallOfFame();
+  result.activeLegacyCoaches = playerState.coaches.filter((coach) => coach.isLegacyCoach).length;
+
+  return result;
 }
 
 // ---- season rollups ------------------------------------------------------------
@@ -1381,8 +1468,45 @@ function finalizeStats(stats, config, durationMs) {
     metaHealth,
     weeklyPlanning: finalizeWeeklyPlanning(stats.weeklyPlanning, insolvencyRate),
     drama: finalizeDrama(stats.drama),
+    legacy: finalizeLegacy(stats.legacy, stats.fighters.totalRetired),
+    rosterAttachment: finalizeRosterAttachment(stats.rosterAttachment),
     weeklyMetrics: stats.weeklyMetrics,
     seasonalMetrics: stats.seasonalMetrics,
+  };
+}
+
+/**
+ * Phase 4.2 telemetry: Legendary Fighter Rate (Hall of Fame inductions over
+ * every forced retirement observed this run — see
+ * BALANCE.LEGACY_ENGINE#HALL_OF_FAME_MIN_WINS/MIN_WIN_RATE's own doc comment
+ * for why this bar is win-record-based, not title-based), nickname pickup
+ * rate, and the reconversion-outcome breakdown (counts vs. how many of each
+ * actually applied a mechanical effect — see engine/LegacyEngine.js).
+ */
+function finalizeLegacy(legacy, totalRetired) {
+  return {
+    hallOfFameInductions: legacy.hallOfFameInductions,
+    legendaryFighterRate: totalRetired > 0 ? legacy.hallOfFameInductions / totalRetired : null,
+    retirementsWithNickname: legacy.retirementsWithNickname,
+    nicknamePickupRate: totalRetired > 0 ? legacy.retirementsWithNickname / totalRetired : null,
+    nicknameCounts: legacy.nicknameCounts,
+    reconversionCounts: legacy.reconversionCounts,
+    reconversionApplied: legacy.reconversionApplied,
+    legacyCoachesHiredTotal: legacy.legacyCoachesHiredTotal,
+  };
+}
+
+/**
+ * Phase 4.2 "Roster Attachment Index": % of every fighter this run ever
+ * measured (retired, or still active at run-end) who spent more than
+ * ROSTER_ATTACHMENT_MIN_SEASONS in-world seasons on the roster.
+ */
+function finalizeRosterAttachment(rosterAttachment) {
+  return {
+    attachedCount: rosterAttachment.attachedCount,
+    totalCount: rosterAttachment.totalCount,
+    attachmentRate: rosterAttachment.totalCount > 0 ? rosterAttachment.attachedCount / rosterAttachment.totalCount : null,
+    minSeasonsThreshold: ROSTER_ATTACHMENT_MIN_SEASONS,
   };
 }
 

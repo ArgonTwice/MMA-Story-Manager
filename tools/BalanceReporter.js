@@ -840,6 +840,175 @@ function renderClinchValidationSection(result) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------
+// Phase 4.2 ("Memoire du Monde, Legacy Engine & Attachement au Roster")
+// ---------------------------------------------------------------------
+
+/**
+ * Legendary Fighter Rate target (spec's own "cible 3-6%"). Roster
+ * Attachment Index deliberately carries no PASS/FAIL band — see
+ * renderRosterAttachmentSubsection's own note on why it structurally reads
+ * near 100% under this game's current retirement-only departure rules.
+ */
+const LEGACY_TARGETS = Object.freeze({ LEGENDARY_FIGHTER_RATE_MIN: 0.03, LEGENDARY_FIGHTER_RATE_MAX: 0.06 });
+
+const RECONVERSION_LABELS = Object.freeze({
+  COACH_IN_GYM: 'Coach specialise (gym du joueur)',
+  PHYSIO: 'Physio',
+  RIVAL_GYM_OWNER: 'Proprietaire/Coach de gym rival',
+  RECRUITER: 'Recruteur',
+});
+
+function renderLegacyEngineHeader() {
+  return '\n=== \u{1F3C6} LEGACY ENGINE & MEMOIRE DU MONDE (Phase 4.2) ===';
+}
+
+function renderWorldRecordsSubsection(result) {
+  const r = result.worldRecords;
+  const lines = [renderSectionTitle('REGISTRE DES RECORDS DU MONDE')];
+  const headers = ['Record', 'Valeur', 'Detail'];
+  const rows = [
+    ['KO le plus rapide (secondes ecoulees)', r.fastestKO.value === null ? 'N/A' : formatNumber(r.fastestKO.value), r.fastestKO.detail ?? '—'],
+    ['Plus longue serie de victoires', r.longestWinStreak.value === null ? 'N/A' : formatNumber(r.longestWinStreak.value), r.longestWinStreak.detail ?? '—'],
+    ['Plus jeune champion (age)', r.youngestChampion.value === null ? 'N/A' : formatNumber(r.youngestChampion.value), r.youngestChampion.detail ?? '—'],
+    ['Plus long regne de titre (jours)', r.longestTitleReign.value === null ? 'N/A' : formatNumber(r.longestTitleReign.value), r.longestTitleReign.detail ?? '—'],
+    ['Plus de titres en carriere', formatNumber(r.mostTitles.value), r.mostTitles.detail ?? '—'],
+    ['Plus grosse bourse combinee ($)', r.biggestFight.value === null ? 'N/A' : formatNumber(r.biggestFight.value), r.biggestFight.detail ?? '—'],
+  ];
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  lines.push(
+    "(youngestChampion/longestTitleReign/mostTitles restent structurellement N/A ou 0 dans ce simulateur headless : " +
+      "tools/SimRunner.js#bookWeeklyFights appelle toujours CombatEngine#setupMatch avec isTitle=false — aucun combat " +
+      'de championnat n\'est jamais reserve, une limitation deja documentee dans les notes methodologiques ci-dessous. ' +
+      'fastestKO/biggestFight sont suivis en continu par engine/WorldMemory.js depuis une phase anterieure ; ce rapport ' +
+      'est la premiere fois qu\'ils sont affiches.)'
+  );
+  return lines.join('\n');
+}
+
+function renderHallOfFameSubsection(result) {
+  const hof = result.hallOfFame;
+  const lines = [renderSectionTitle(`HALL OF FAME (${formatNumber(hof.length)} intronise(s))`)];
+
+  if (hof.length === 0) {
+    lines.push('Aucun combattant intronise sur cette periode.');
+    return lines.join('\n');
+  }
+
+  const top = [...hof].sort((a, b) => b.wins - a.wins).slice(0, 10);
+  const headers = ['Nom', 'Surnom', 'Style', 'Archetype', 'Bilan', 'Finishes', 'Plus longue serie', 'Plus grand rival'];
+  const rows = top.map((entry) => [
+    entry.name,
+    entry.nickname ?? '—',
+    entry.style,
+    entry.archetype,
+    entry.record,
+    formatNumber(entry.finishes),
+    formatNumber(entry.longestWinStreak),
+    entry.biggestRival ? `${entry.biggestRival.fighterName} (tension ${formatNumber(entry.biggestRival.tension)})` : '—',
+  ]);
+  lines.push(renderTable(headers, rows));
+  if (hof.length > top.length) {
+    lines.push('');
+    lines.push(`(top ${top.length} par victoires affiche — ${formatNumber(hof.length)} intronises au total.)`);
+  }
+  return lines.join('\n');
+}
+
+function renderReconversionSubsection(result) {
+  const legacy = result.legacy;
+  const lines = [renderSectionTitle('RECONVERSION DES RETRAITES')];
+  const headers = ['Reconversion', 'Choisie', 'Appliquee (effet mecanique reel)'];
+  const rows = Object.entries(legacy.reconversionCounts).map(([outcome, count]) => [
+    RECONVERSION_LABELS[outcome] ?? outcome,
+    formatNumber(count),
+    formatNumber(legacy.reconversionApplied[outcome] ?? 0),
+  ]);
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  lines.push(
+    `Coachs Legacy actifs en fin de simulation : ${formatNumber(result.activeLegacyCoaches)} ` +
+      `(sur ${formatNumber(legacy.legacyCoachesHiredTotal)} embauche(s) au total sur la periode — voir ` +
+      "BALANCE.LEGACY_ENGINE.MAX_LEGACY_COACHES pour le plafond de postes, et les licenciements automatiques " +
+      "d'engine/EconomyEngine.js en cas d'insolvabilite pour l'ecart eventuel entre les deux chiffres)."
+  );
+  lines.push('');
+  lines.push(
+    '(Seuls COACH_IN_GYM et RIVAL_GYM_OWNER ont un effet mecanique reel dans cette phase — voir engine/LegacyEngine.js ' +
+      "pour le choix de perimetre documente. PHYSIO et RECRUTEUR restent des issues classifiees, telemetrees, mais " +
+      "sans systeme de jeu dedie construit derriere pour l'instant.)"
+  );
+  return lines.join('\n');
+}
+
+function renderNicknamesSubsection(result) {
+  const legacy = result.legacy;
+  const lines = [renderSectionTitle('SURNOMS EMERGENTS')];
+  lines.push(
+    `Retraites ayant gagne un surnom : ${formatNumber(legacy.retirementsWithNickname)} ` +
+      `(${formatPercent(legacy.nicknamePickupRate, 1)} des retraites)`
+  );
+  const nicknameRows = Object.entries(legacy.nicknameCounts).map(([label, count]) => [label, formatNumber(count)]);
+  if (nicknameRows.length > 0) {
+    lines.push('');
+    lines.push(renderTable(['Surnom', 'Retraites concernes'], nicknameRows));
+  }
+  return lines.join('\n');
+}
+
+function renderRosterAttachmentSubsection(result) {
+  const ra = result.rosterAttachment;
+  const lines = [renderSectionTitle('ROSTER ATTACHMENT INDEX')];
+  lines.push(
+    `Combattants gardes plus de ${formatNumber(ra.minSeasonsThreshold)} saisons : ${formatNumber(ra.attachedCount)} / ` +
+      `${formatNumber(ra.totalCount)} (${formatPercent(ra.attachmentRate, 1)})`
+  );
+  lines.push('');
+  lines.push(
+    "(Ce chiffre est structurellement proche de 100% avec les regles actuelles du jeu : le seul depart de roster " +
+      'possible dans ce simulateur est la retraite forcee a BALANCE.AGE.RETIREMENT.FORCED_RETIREMENT_AGE (45 ans) — ' +
+      'la retraite volontaire anticipee reste non branchee (voir les notes methodologiques), et il n\'existe aucun ' +
+      "mecanisme de coupe/transfert. Meme un combattant genere au plus tard possible (BALANCE.AGE.DEBUT_MAX_AGE, 35 " +
+      `ans) sert donc un minimum de 10 ans/${formatNumber(4 * 10)} saisons avant de partir — tres largement au-dessus ` +
+      'du seuil de 3 saisons. Ce n\'est pas un artefact de mesure : c\'est un resultat honnete et attendu tant ' +
+      "qu'aucun mecanisme de depart anticipe n'existe.)"
+  );
+  return lines.join('\n');
+}
+
+function renderLegacyEngineSection(result) {
+  return [
+    renderLegacyEngineHeader(),
+    renderWorldRecordsSubsection(result),
+    renderHallOfFameSubsection(result),
+    renderReconversionSubsection(result),
+    renderNicknamesSubsection(result),
+    renderRosterAttachmentSubsection(result),
+  ].join('\n');
+}
+
+function renderLegacyValidationSection(result) {
+  const legacy = result.legacy;
+  const rate = legacy.legendaryFighterRate;
+  const ratePass = rate !== null && rate >= LEGACY_TARGETS.LEGENDARY_FIGHTER_RATE_MIN && rate <= LEGACY_TARGETS.LEGENDARY_FIGHTER_RATE_MAX;
+
+  const lines = [renderSectionTitle('\u{1F3C6} PHASE 4.2 — VALIDATION (Legacy Engine & Attachement)')];
+  const headers = ['Metrique', 'Mesure', 'Cible', 'Statut'];
+  const rows = [
+    [
+      'Legendary Fighter Rate',
+      formatPercent(rate, 1),
+      `${formatPercent(LEGACY_TARGETS.LEGENDARY_FIGHTER_RATE_MIN, 0)} - ${formatPercent(LEGACY_TARGETS.LEGENDARY_FIGHTER_RATE_MAX, 0)}`,
+      ratePass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+    ['Roster Attachment Index', formatPercent(result.rosterAttachment.attachmentRate, 1), 'informatif (voir note methodologique)', 'N/A'],
+    ['Coachs Legacy actifs', formatNumber(result.activeLegacyCoaches), 'informatif (plafonne par MAX_LEGACY_COACHES)', 'N/A'],
+  ];
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
 function renderFightsSection(result) {
   const lines = [renderSectionTitle('COMBATS')];
   lines.push(`Total de combats simules : ${formatNumber(result.fights.total)}`);
@@ -1248,6 +1417,8 @@ export function formatReport(result) {
     renderWeeklyPlanningSection(result),
     renderDramaEngineSection(result),
     renderClinchValidationSection(result),
+    renderLegacyEngineSection(result),
+    renderLegacyValidationSection(result),
     renderVersionHistorySection(result),
     renderNotesSection(result),
     '',
