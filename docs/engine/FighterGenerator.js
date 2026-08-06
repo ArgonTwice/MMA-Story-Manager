@@ -18,6 +18,28 @@
  */
 
 import BALANCE from '../data/balance.js';
+import { FIRST_NAMES, LAST_NAMES } from '../data/names.js';
+
+/**
+ * Draws a real "Prenom Nom" identity from data/names.js — the real-name
+ * counterpart to the placeholder `${style} Prospect` names
+ * web/app.js#bootstrapRoster used to stamp on every brand-new gym's
+ * starting roster. Deliberately does NOT assign a nickname: Fighter#identity.nickname
+ * is an emergent, career-earned field (see data/nicknames.js/
+ * Fighter#evaluateNickname, "Surnoms Emergents") that recordFightResult()
+ * recomputes and overwrites from career deeds on every fight — a nickname
+ * handed out here at generation would just get silently clobbered (or
+ * worse, sit unexplained on a fighter with zero fights), so nicknames stay
+ * earned, never randomly assigned at birth.
+ *
+ * @param {() => number} [rng] - Random source in [0, 1). Defaults to Math.random.
+ * @returns {{ name: string }}
+ */
+export function generateFighterIdentity(rng = Math.random) {
+  const firstName = FIRST_NAMES[Math.floor(rng() * FIRST_NAMES.length)];
+  const lastName = LAST_NAMES[Math.floor(rng() * LAST_NAMES.length)];
+  return { name: `${firstName} ${lastName}` };
+}
 
 /**
  * @param {() => number} [rng] - Random source in [0, 1). Defaults to Math.random.

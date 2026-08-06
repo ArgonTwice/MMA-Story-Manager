@@ -23,7 +23,6 @@ import { WORLD_EVENTS } from './state/WorldState.js';
 import BALANCE from './data/balance.js';
 import { getTraitDisplay } from './data/traits.js';
 import Fighter from './models/Fighter.js';
-import { generatePersonality } from './engine/FighterGenerator.js';
 import { CombatEngine, COMBAT_STATES } from './engine/CombatEngine.js';
 import { PersonalityEngine } from './engine/PersonalityEngine.js';
 import { RelationshipEngine } from './engine/RelationshipEngine.js';
@@ -34,6 +33,8 @@ import { HistoryEngine } from './engine/HistoryEngine.js';
 import { SocialEngine } from './engine/SocialEngine.js';
 
 import { generateAcademyPool, isAcademyDraftAvailable } from './engine/AcademyEngine.js';
+import { generateInitialDraftPool, generateRecruitmentPool, generateRivalGymStarterRoster } from './engine/DraftEngine.js';
+import { assertNoIntraGymMatch } from './engine/Matchmaking.js';
 import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from './engine/StoryAnalyzer.js';
 
 import { GymHub } from './ui/GymHub.js';
@@ -50,7 +51,6 @@ import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from './e
 
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
-const STARTING_ROSTER_STYLES = Object.freeze(['Boxe', 'Muay Thai', 'Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle', 'Kickboxing']);
 
 // ---- Underground Circuit: challenge catalog (Phase Underground) -----------------
 
@@ -298,29 +298,6 @@ function gaugeRow(label, value, options = {}) {
   ]);
 }
 
-// ---- roster bootstrap (same spirit as tools/play-vertical-slice.js's own) ---
-
-function bootstrapRoster(playerState, rng) {
-  const skillDefault = BALANCE.PROGRESSION.DEFAULT_STARTING_SKILL_VALUE;
-  for (const style of STARTING_ROSTER_STYLES) {
-    const spread = 15;
-    const skills = Object.fromEntries(
-      ['boxe', 'jambes', 'sol', 'soumission', 'cardio', 'intelligence'].map((key) => [key, Math.round(skillDefault + (rng() * 2 - 1) * spread)])
-    );
-    const fighter = new Fighter({
-      identity: {
-        name: `${style} Prospect`,
-        age: BALANCE.AGE.DEBUT_MIN_AGE + Math.floor(rng() * 8),
-        style,
-        weightClass: 'Poids Welter',
-      },
-      attributes: { skills },
-      psychology: { personality: generatePersonality(rng) },
-    });
-    playerState.addFighter(fighter);
-  }
-}
-
 // ---- reactive engine lifecycle (mirrors App.js/tools/play-vertical-slice.js) --
 
 function createReactiveEngines() {
@@ -361,7 +338,6 @@ class WebApp {
     this.worldFeed = null;
     this.weeklyFlow = null;
     this.fightView = null;
-    this.selectedFighterIds = [];
     this.fightCard = null;
     this.weeklyResultsThisYear = [];
     this.fightResultsThisYear = [];
@@ -387,6 +363,15 @@ class WebApp {
     this.undergroundFilter = 'ALL';
     /** In-progress Underground Circuit setup ({ challenge, fighterId, gymId, opponentId }), or null — see _showUndergroundSetupModal(). Runtime-only, never persisted. */
     this._undergroundSetup = null;
+    /** This "Nouvelle Partie" session's generated draft pool ({ fighter, cost }[]) and the fighter ids currently picked — see _startInitialDraft(). Runtime-only. */
+    this._initialDraftPool = [];
+    this._initialDraftSelectedIds = [];
+    /** The permanent Recrutement market's currently-open pool ({ fighter, cost }[]) — regenerated each time the modal opens, see _showRecruitmentMarketModal(). */
+    this._recruitmentPool = [];
+    /** In-progress official-fight opponent setup ({ fighterId, gymId, opponentId }), or null — mirrors _undergroundSetup's shape: a competitive bout's opponent always comes from a rival gym's roster, never the player's own (see engine/Matchmaking.js). */
+    this._fightOpponentSetup = null;
+    /** Live Text Feed playback state ({ beats, revealedCount, playing, timerId }) for the fight currently in progress, or null — see _beginCombatPlayback()/_scheduleNextBeat(). Runtime-only, torn down on every fight reset. */
+    this._combatPlayback = null;
     this.dom = {};
   }
 
@@ -453,18 +438,30 @@ class WebApp {
   _wireStartScreen() {
     this.dom.btnNewGame.addEventListener('click', () => {
       try {
+        // A brand new gym starts with STRICTLY ZERO fighters — no more
+        // silent bootstrapRoster() auto-fill with placeholder
+        // "${style} Prospect" names. The player must draft their first
+        // MIN_PICKS-MAX_PICKS fighters from a real, named prospect pool
+        // (see _startInitialDraft/_showInitialDraftModal) before
+        // _enterGame() ever runs.
         this.gameState.newGame({
           gymName: this.dom.newGymName.value || undefined,
           country: this.dom.newGymCountry.value || undefined,
         });
-        bootstrapRoster(this.gameState.playerState, this.rng);
-        for (let i = 0; i < STARTING_ROSTER_STYLES.length; i += 1) telemetry.recordFighterRecruited();
-        this.gameState.worldState.addRivalGym({ name: 'Iron Fist Academy', reputation: 55 });
-        this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
-        this._isBrandNewGame = true;
-        this._enterGame();
-        this._autosave();
-        this._maybeShowFirstStepsOnboarding();
+        // Seeded with a starting roster (not the default empty one) so a
+        // fresh game has a legal opponent from Day 1: engine/Matchmaking.js
+        // now forbids a competitive bout between two of the player's own
+        // fighters, and engine/TransferMarket.js's own autonomous recruiting
+        // only runs once a season — an empty rival gym would otherwise leave
+        // the Combat tab with nobody to fight for weeks.
+        for (const { name, reputation } of [
+          { name: 'Iron Fist Academy', reputation: 55 },
+          { name: 'Apex MMA', reputation: 45 },
+        ]) {
+          const starterRoster = generateRivalGymStarterRoster({ reputation, rng: this.rng });
+          this.gameState.worldState.addRivalGym({ name, reputation, roster: starterRoster.map((fighter) => fighter.toJSON()) });
+        }
+        this._startInitialDraft();
       } catch (error) {
         // A failure here used to fail completely silently: the click handler
         // would throw, the start screen would just sit there, and nothing in
@@ -520,6 +517,102 @@ class WebApp {
     });
   }
 
+  // ---- INITIAL DRAFT (zero-fighter "Nouvelle Partie" opening mercato) -------------
+
+  _startInitialDraft() {
+    this._initialDraftPool = generateInitialDraftPool({ rng: this.rng });
+    this._initialDraftSelectedIds = [];
+    this._showInitialDraftModal();
+  }
+
+  _showInitialDraftModal() {
+    const cfg = BALANCE.INITIAL_DRAFT;
+    const budget = this.gameState.playerState.money;
+    const remaining = budget - this._initialDraftSelectedCost();
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F94A} Draft Initiale — Mercato de demarrage' }),
+      el('p', {
+        text: `Votre salle demarre sans combattant. Choisissez ${cfg.MIN_PICKS} a ${cfg.MAX_PICKS} recrues parmi les prospects ci-dessous, dans la limite de votre budget de depart.`,
+      }),
+      el('p', { class: 'fighter-meta', text: `Budget restant : ${Math.round(remaining).toLocaleString('fr-FR')}$ / ${Math.round(budget).toLocaleString('fr-FR')}$` }),
+      ...this._initialDraftPool.map((candidate) => this._buildDraftCandidateCard(candidate, remaining)),
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: `Confirmer la draft (${this._initialDraftSelectedIds.length}/${cfg.MAX_PICKS})`,
+        disabled: this._isInitialDraftReady() ? null : 'disabled',
+        onclick: () => this._confirmInitialDraft(),
+      }),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _buildDraftCandidateCard(candidate, remaining) {
+    const { fighter, cost } = candidate;
+    const selected = this._initialDraftSelectedIds.includes(fighter.identity.id);
+    const atMaxPicks = this._initialDraftSelectedIds.length >= BALANCE.INITIAL_DRAFT.MAX_PICKS;
+    const disabled = !selected && (atMaxPicks || cost > remaining);
+
+    return el(
+      'div',
+      {
+        class: `fighter-card selectable${selected ? ' selected' : ''}`,
+        onclick: disabled ? null : () => this._toggleInitialDraftPick(fighter.identity.id),
+      },
+      [
+        el('div', { class: 'fighter-head' }, [
+          el('div', {}, [
+            el('div', { class: 'fighter-name', text: fighter.identity.name }),
+            el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.identity.age} ans — Note ${fighter.getOverallRating()}` }),
+          ]),
+          el('span', { class: 'badge badge-blue', text: `${cost.toLocaleString('fr-FR')}$` }),
+        ]),
+      ]
+    );
+  }
+
+  _toggleInitialDraftPick(fighterId) {
+    if (this._initialDraftSelectedIds.includes(fighterId)) {
+      this._initialDraftSelectedIds = this._initialDraftSelectedIds.filter((id) => id !== fighterId);
+    } else if (this._initialDraftSelectedIds.length < BALANCE.INITIAL_DRAFT.MAX_PICKS) {
+      this._initialDraftSelectedIds = [...this._initialDraftSelectedIds, fighterId];
+    }
+    this._showInitialDraftModal();
+  }
+
+  _initialDraftSelectedCost() {
+    return this._initialDraftPool
+      .filter((candidate) => this._initialDraftSelectedIds.includes(candidate.fighter.identity.id))
+      .reduce((sum, candidate) => sum + candidate.cost, 0);
+  }
+
+  _isInitialDraftReady() {
+    const cfg = BALANCE.INITIAL_DRAFT;
+    const count = this._initialDraftSelectedIds.length;
+    if (count < cfg.MIN_PICKS || count > cfg.MAX_PICKS) return false;
+    return this._initialDraftSelectedCost() <= this.gameState.playerState.money;
+  }
+
+  _confirmInitialDraft() {
+    const chosen = this._initialDraftPool.filter((candidate) => this._initialDraftSelectedIds.includes(candidate.fighter.identity.id));
+    const totalCost = chosen.reduce((sum, candidate) => sum + candidate.cost, 0);
+
+    for (const { fighter } of chosen) {
+      this.gameState.playerState.addFighter(fighter);
+      telemetry.recordFighterRecruited();
+    }
+    this.gameState.playerState.changeMoney(-totalCost, 'INITIAL_DRAFT');
+
+    this._initialDraftPool = [];
+    this._initialDraftSelectedIds = [];
+    this._hideModal();
+
+    this._isBrandNewGame = true;
+    this._enterGame();
+    this._autosave();
+    this._maybeShowFirstStepsOnboarding();
+  }
+
   _enterGame() {
     this.engines = createReactiveEngines();
     attachReactiveEngines(this.engines, this.gameState.playerState, this.gameState.worldState);
@@ -535,7 +628,7 @@ class WebApp {
     this.fightResultsThisYear = [];
     this.lastWeekEconomy = null;
     this.journalTab = 'world';
-    this.selectedFighterIds = [];
+    this._fightOpponentSetup = null;
     this.fightView = null;
     this.fightSetupDone = false;
     this.academyPool = [];
@@ -810,9 +903,77 @@ class WebApp {
 
     panel.appendChild(el('h2', { class: 'section-title', text: `Effectif (${roster.length}/${this.gameState.playerState.getRosterCapacity()})` }));
 
+    panel.appendChild(
+      el('button', {
+        class: 'btn btn-outline btn-block',
+        text: '\u{1F4B0} Marche de Recrutement',
+        onclick: () => this._showRecruitmentMarketModal(),
+      })
+    );
+
     for (const fighter of roster) {
       panel.appendChild(this._buildRosterDetailCard(fighter));
     }
+  }
+
+  // ---- RECRUITMENT MARKET (permanent, always-open — see engine/DraftEngine.js) ----
+
+  _showRecruitmentMarketModal() {
+    this._recruitmentPool = generateRecruitmentPool({ playerState: this.gameState.playerState, rng: this.rng });
+    this._renderRecruitmentMarketModal();
+  }
+
+  _renderRecruitmentMarketModal() {
+    const playerState = this.gameState.playerState;
+    const rosterFull = playerState.roster.length >= playerState.getRosterCapacity();
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F4B0} Marche de Recrutement' }),
+      el('p', { text: 'Recrutez de nouveaux combattants a tout moment, contre remuneration — independamment de la Draft Annuelle de l\'Academie.' }),
+      el('p', { class: 'fighter-meta', text: `Tresorerie : ${Math.round(playerState.money).toLocaleString('fr-FR')}$ — Effectif ${playerState.roster.length}/${playerState.getRosterCapacity()}` }),
+      rosterFull ? el('p', { text: 'Effectif au complet — liberez une place avant de recruter.' }) : null,
+      ...this._recruitmentPool.map((candidate) => this._buildRecruitmentCandidateCard(candidate, rosterFull)),
+      el('button', { class: 'btn btn-outline btn-block', text: 'Rafraichir la liste', onclick: () => this._showRecruitmentMarketModal() }),
+      el('button', { class: 'btn btn-gold btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _buildRecruitmentCandidateCard(candidate, rosterFull) {
+    const { fighter, cost } = candidate;
+    const { playerState } = this.gameState;
+    const affordable = !rosterFull && playerState.money >= cost;
+
+    return el('div', { class: 'fighter-card' }, [
+      el('div', { class: 'fighter-head' }, [
+        el('div', {}, [
+          el('div', { class: 'fighter-name', text: fighter.identity.name }),
+          el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.identity.age} ans — Note ${fighter.getOverallRating()}` }),
+        ]),
+        el('span', { class: 'badge badge-blue', text: `${cost.toLocaleString('fr-FR')}$` }),
+      ]),
+      el('button', {
+        class: 'btn btn-gold btn-sm',
+        text: 'Signer',
+        disabled: affordable ? null : 'disabled',
+        onclick: () => this._signRecruit(fighter, cost),
+      }),
+    ]);
+  }
+
+  _signRecruit(fighter, cost) {
+    const { playerState } = this.gameState;
+    if (playerState.roster.length >= playerState.getRosterCapacity() || playerState.money < cost) return;
+
+    playerState.addFighter(fighter);
+    playerState.changeMoney(-cost, 'RECRUITMENT_MARKET');
+    telemetry.recordFighterRecruited();
+    this._recruitmentPool = this._recruitmentPool.filter((candidate) => candidate.fighter.identity.id !== fighter.identity.id);
+
+    this._showToast(`\u{1F4DD} ${fighter.identity.name} signe au gym.`);
+    this._renderRecruitmentMarketModal();
+    this._renderTopbar();
+    this._autosave();
   }
 
   _buildRosterDetailCard(fighter) {
@@ -1132,8 +1293,9 @@ class WebApp {
     });
 
     const card = el('div', {}, [
-      el('h2', { class: 'section-title', text: '\u{1F3AD} Evenement' }),
-      el('p', { text: `${dramaPrompt.fighterName} — ${dramaPrompt.eventId}` }),
+      el('h2', { class: 'section-title', text: `\u{1F3AD} ${dramaPrompt.title ?? 'Evenement'}` }),
+      el('p', { class: 'fighter-meta', text: dramaPrompt.fighterName }),
+      el('p', { text: dramaPrompt.description ?? '' }),
       el(
         'div',
         { class: 'choice-list' },
@@ -1244,57 +1406,129 @@ class WebApp {
     this._renderFightPicker(panel);
   }
 
+  /**
+   * A sanctioned/competitive bout (as opposed to Underground) always pits
+   * one of the player's own fighters against a RIVAL gym's fighter — never
+   * two gym-mates (see engine/Matchmaking.js). Two gym-mates only ever
+   * spar, as a weekly Planning activity. Mirrors
+   * _renderUndergroundSetupModal's own (fighter, gym, their fighter) picker.
+   */
   _renderFightPicker(panel) {
-    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Choisir un combat' }));
-    panel.appendChild(el('p', { text: 'Selectionnez 2 combattants disponibles (limitation : combats internes au roster, pas de systeme d’adversaires externes).' }));
+    if (!this._fightOpponentSetup) this._fightOpponentSetup = { fighterId: null, gymId: null, opponentId: null };
+    const setup = this._fightOpponentSetup;
+    const { playerState, worldState } = this.gameState;
 
-    const available = this.gameState.playerState.roster.filter((f) => !f.isInjured(this.gameState.worldState.currentDay));
-    if (available.length < 2) {
-      panel.appendChild(el('p', { text: 'Pas assez de combattants disponibles (non blesses).' }));
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Choisir un combat' }));
+    panel.appendChild(el('p', { text: 'Un combat officiel oppose toujours l\'un de vos combattants a celui d\'un gym rival — deux membres du roster ne se rencontrent qu\'en Sparring (Planning).' }));
+
+    const available = playerState.roster.filter((f) => !f.isInjured(worldState.currentDay));
+    panel.appendChild(el('div', { class: 'card-title', text: 'Votre combattant' }));
+    if (available.length === 0) {
+      panel.appendChild(el('p', { text: 'Pas de combattant disponible (non blesse).' }));
       return;
     }
-
     for (const fighter of available) {
-      const selected = this.selectedFighterIds.includes(fighter.identity.id);
-      const card = el('div', {
-        class: `fighter-card selectable${selected ? ' selected' : ''}`,
-        onclick: () => this._toggleFighterSelection(fighter.identity.id),
-      });
-      card.appendChild(
-        el('div', { class: 'fighter-head' }, [
-          el('div', {}, [
-            el('div', { class: 'fighter-name', text: fighter.identity.name + (fighter.identity.nickname ? ` "${fighter.identity.nickname}"` : '') }),
-            el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.getRecordString()}` }),
-          ]),
-        ])
+      const selected = setup.fighterId === fighter.identity.id;
+      panel.appendChild(
+        el(
+          'div',
+          {
+            class: `fighter-card selectable${selected ? ' selected' : ''}`,
+            onclick: () => {
+              setup.fighterId = fighter.identity.id;
+              this._renderFight();
+            },
+          },
+          [
+            el('div', { class: 'fighter-head' }, [
+              el('div', {}, [
+                el('div', { class: 'fighter-name', text: fighter.identity.name + (fighter.identity.nickname ? ` "${fighter.identity.nickname}"` : '') }),
+                el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.getRecordString()}` }),
+              ]),
+            ]),
+            gaugeRow('Readiness', fighter.getReadiness()),
+          ]
+        )
       );
-      card.appendChild(gaugeRow('Readiness', fighter.getReadiness()));
-      panel.appendChild(card);
+    }
+
+    panel.appendChild(el('div', { class: 'card-title', text: 'Gym adverse' }));
+    if (worldState.rivalGyms.length === 0) {
+      panel.appendChild(el('p', { text: 'Aucun gym rival recense.' }));
+      return;
+    }
+    for (const gym of worldState.rivalGyms) {
+      const selected = setup.gymId === gym.id;
+      panel.appendChild(
+        el(
+          'div',
+          {
+            class: `fighter-card selectable${selected ? ' selected' : ''}`,
+            onclick: () => {
+              setup.gymId = gym.id;
+              setup.opponentId = null;
+              this._renderFight();
+            },
+          },
+          [
+            el('div', { class: 'fighter-name', text: gym.name ?? gym.id }),
+            el('div', { class: 'fighter-meta', text: `Reputation ${Math.round(gym.reputation ?? 0)} — ${(gym.roster?.length ?? 0)} combattant(s) recense(s)` }),
+          ]
+        )
+      );
+    }
+
+    const selectedGym = worldState.rivalGyms.find((gym) => gym.id === setup.gymId) ?? null;
+    if (selectedGym) {
+      panel.appendChild(el('div', { class: 'card-title', text: 'Leur combattant' }));
+      const roster = selectedGym.roster ?? [];
+      if (roster.length === 0) {
+        panel.appendChild(el('p', { text: 'Ce gym n\'a pas encore de combattant recrute.' }));
+      }
+      for (const entry of roster) {
+        const selected = setup.opponentId === entry.identity.id;
+        panel.appendChild(
+          el(
+            'div',
+            {
+              class: `fighter-card selectable${selected ? ' selected' : ''}`,
+              onclick: () => {
+                setup.opponentId = entry.identity.id;
+                this._renderFight();
+              },
+            },
+            [
+              el('div', { class: 'fighter-name', text: entry.identity.name }),
+              el('div', { class: 'fighter-meta', text: `${entry.identity.style} — ${entry.career.wins}-${entry.career.losses}-${entry.career.draws}` }),
+            ]
+          )
+        );
+      }
     }
 
     panel.appendChild(
       el('button', {
         class: 'btn btn-gold btn-block',
         text: 'Lancer le combat',
-        disabled: this.selectedFighterIds.length === 2 ? null : 'disabled',
+        disabled: setup.fighterId && setup.gymId && setup.opponentId ? null : 'disabled',
         onclick: () => this._startFight(),
       })
     );
   }
 
-  _toggleFighterSelection(fighterId) {
-    if (this.selectedFighterIds.includes(fighterId)) {
-      this.selectedFighterIds = this.selectedFighterIds.filter((id) => id !== fighterId);
-    } else if (this.selectedFighterIds.length < 2) {
-      this.selectedFighterIds = [...this.selectedFighterIds, fighterId];
-    }
-    this._renderFight();
-  }
-
   _startFight() {
-    const [idA, idB] = this.selectedFighterIds;
-    const fighterA = this.gameState.playerState.getFighter(idA);
-    const fighterB = this.gameState.playerState.getFighter(idB);
+    const setup = this._fightOpponentSetup;
+    const { playerState, worldState } = this.gameState;
+    const gym = worldState.rivalGyms.find((g) => g.id === setup.gymId);
+    const opponentEntry = (gym?.roster ?? []).find((entry) => entry.identity.id === setup.opponentId);
+
+    const fighterA = playerState.getFighter(setup.fighterId);
+    const fighterB = Fighter.fromJSON(opponentEntry);
+    assertNoIntraGymMatch(fighterA, fighterB, playerState);
+
+    this._fightOpponentGymId = gym.id;
+    this._fightFighterB = fighterB;
+    this._teardownCombatPlayback();
     this.fightView = new FightNightView({ combatEngine: this.combatEngine });
     this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false);
     this.fightSetupDone = false;
@@ -1665,46 +1899,138 @@ class WebApp {
     this.combatEngine.selectWeightCutProfile('B', this.weightCutChoices.B);
     this.fightView.setGameplans({ A: this.gameplanChoices.A, B: this.gameplanChoices.B });
     this.fightSetupDone = true;
+    this._beginCombatPlayback();
+  }
+
+  // ---- LIVE TEXT FEED (play-by-play combat playback) ------------------------------
+
+  /** Fetches the next round (or the final result) and, for a round, arms the beat-by-beat reveal timer — the single engine-advancing step every playback control (auto-advance, Sauter le Round) ultimately calls. */
+  _advanceCombatRound() {
+    const step = this.fightView.advanceOneRound();
+    if (step.finished) {
+      this._finishCombatPlayback();
+      return;
+    }
+    this._combatPlayback = { beats: step.round.beats, revealedCount: 0, playing: true, timerId: null };
+    this._renderFight();
+    this._scheduleNextBeat();
+  }
+
+  _beginCombatPlayback() {
+    this._teardownCombatPlayback();
+    this._advanceCombatRound();
+  }
+
+  /** Reveals one beat every ~1.4s while playback.playing stays true — paused by _togglePlayback, short-circuited by _skipRound. */
+  _scheduleNextBeat() {
+    const playback = this._combatPlayback;
+    if (!playback || !playback.playing) return;
+
+    if (playback.revealedCount >= playback.beats.length) {
+      this._advanceCombatRound();
+      return;
+    }
+
+    playback.timerId = setTimeout(() => {
+      if (this._combatPlayback !== playback) return; // a newer round/playback superseded this timer — stale, ignore.
+      playback.revealedCount += 1;
+      this._renderFight();
+      this._scheduleNextBeat();
+    }, 1400);
+  }
+
+  _togglePlayback() {
+    const playback = this._combatPlayback;
+    if (!playback) return;
+    playback.playing = !playback.playing;
+    if (playback.playing) this._scheduleNextBeat();
+    else clearTimeout(playback.timerId);
+    this._renderFight();
+  }
+
+  /** "Sauter le Round": instantly reveals the rest of the current round's text, then immediately fetches the next round (or the result) — preserving whatever play/pause state was already active. */
+  _skipRound() {
+    const playback = this._combatPlayback;
+    if (!playback) return;
+    clearTimeout(playback.timerId);
+    playback.revealedCount = playback.beats.length;
+    this._renderFight();
+    this._advanceCombatRound();
+  }
+
+  /** "Simuler le Match": abandons the live feed entirely and resolves the rest of the fight instantly. */
+  _simulateWholeFight() {
+    this._teardownCombatPlayback();
+    this.fightView.simulateToCompletion();
+    this._finishCombatPlayback();
+  }
+
+  _teardownCombatPlayback() {
+    if (this._combatPlayback?.timerId) clearTimeout(this._combatPlayback.timerId);
+    this._combatPlayback = null;
+  }
+
+  _finishCombatPlayback() {
+    this._teardownCombatPlayback();
+    if (this._fightOpponentGymId && this._fightFighterB) {
+      this._writeBackRivalFighter(this._fightOpponentGymId, this._fightFighterB);
+    }
+    this.fightResultsThisYear.push(this.combatEngine.getSnapshot().result);
+    this._autosave();
     this._renderFight();
   }
 
   _renderFightInProgress(panel) {
+    const playback = this._combatPlayback;
+    const roundLogs = this.fightView.getRoundLogs();
+    const currentRoundNumber = roundLogs.length > 0 ? roundLogs[roundLogs.length - 1].round : 1;
+    const revealedBeats = playback ? playback.beats.slice(0, playback.revealedCount) : [];
+    const clock = revealedBeats.length > 0 ? revealedBeats[revealedBeats.length - 1].timestamp : this._formatRoundClock(BALANCE.COMBAT.ROUND_DURATION_SECONDS);
+
     panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Combat en cours' }));
     panel.appendChild(el('pre', { class: 'card', style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: this.fightView.toCardText() }));
 
-    for (const round of this.fightView.getRoundLogs()) {
-      panel.appendChild(
-        el('div', { class: 'round-log' }, [
-          el('div', { class: 'round-log-header', text: `Round ${round.round} — Degats A ${round.damageDealt.A} / B ${round.damageDealt.B}` }),
-          gaugeRow('Vie A', round.healthAfter.A),
-          gaugeRow('Vie B', round.healthAfter.B),
-          gaugeRow('Stamina A', round.staminaAfter.A),
-          gaugeRow('Stamina B', round.staminaAfter.B),
+    panel.appendChild(
+      el('div', { class: 'card round-log-header', text: `Round ${currentRoundNumber} — \u{23F1}\u{FE0F} ${clock}` })
+    );
+
+    const feed = el('div', { class: 'card fight-feed' });
+    for (const beat of revealedBeats) {
+      feed.appendChild(
+        el('div', { class: 'fight-feed-line' }, [
+          el('span', { class: 'fight-feed-time', text: beat.timestamp }),
+          el('span', { class: 'fight-feed-text', text: beat.text }),
         ])
       );
     }
+    panel.appendChild(feed);
 
+    const lastLog = roundLogs[roundLogs.length - 1];
+    if (lastLog) {
+      panel.appendChild(gaugeRow('Vie A', lastLog.healthAfter.A));
+      panel.appendChild(gaugeRow('Vie B', lastLog.healthAfter.B));
+      panel.appendChild(gaugeRow('Stamina A', lastLog.staminaAfter.A));
+      panel.appendChild(gaugeRow('Stamina B', lastLog.staminaAfter.B));
+    }
+
+    const isPlaying = Boolean(playback?.playing);
     const controls = el('div', { class: 'slot-row' }, [
-      el('button', { class: 'btn btn-gold', text: 'Round suivant ▶️', onclick: () => this._advanceFightRound() }),
-      el('button', { class: 'btn btn-outline', text: '⏩ Simuler jusqu’au bout', onclick: () => this._simulateFightToEnd() }),
+      el('button', {
+        class: 'btn btn-gold',
+        text: isPlaying ? '\u{23F8}\u{FE0F} Pause' : '\u{25B6}\u{FE0F} Lecture',
+        onclick: () => this._togglePlayback(),
+      }),
+      el('button', { class: 'btn btn-outline', text: '\u{23ED}\u{FE0F} Sauter le round', onclick: () => this._skipRound() }),
+      el('button', { class: 'btn btn-outline', text: '\u{23E9} Simuler le combat', onclick: () => this._simulateWholeFight() }),
     ]);
     panel.appendChild(controls);
   }
 
-  _advanceFightRound() {
-    const step = this.fightView.advanceOneRound();
-    if (step.finished) {
-      this.fightResultsThisYear.push(this.combatEngine.getSnapshot().result);
-      this._autosave();
-    }
-    this._renderFight();
-  }
-
-  _simulateFightToEnd() {
-    this.fightView.simulateToCompletion();
-    this.fightResultsThisYear.push(this.combatEngine.getSnapshot().result);
-    this._autosave();
-    this._renderFight();
+  _formatRoundClock(secondsRemaining) {
+    const clamped = Math.max(0, Math.round(secondsRemaining));
+    const minutes = Math.floor(clamped / 60);
+    const seconds = clamped % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
 
   _renderFightResult(panel) {
@@ -1725,13 +2051,20 @@ class WebApp {
       }
     }
 
-    panel.appendChild(el('h3', { class: 'section-title', text: 'Rounds' }));
+    panel.appendChild(el('h3', { class: 'section-title', text: 'Compte-rendu' }));
     for (const round of this.fightView.getRoundLogs()) {
-      panel.appendChild(
-        el('div', { class: 'round-log' }, [
-          el('div', { class: 'round-log-header', text: `Round ${round.round} — Degats A ${round.damageDealt.A} / B ${round.damageDealt.B}` }),
-        ])
-      );
+      const roundCard = el('div', { class: 'card fight-feed' }, [
+        el('div', { class: 'round-log-header', text: `Round ${round.round}` }),
+      ]);
+      for (const beat of round.beats ?? []) {
+        roundCard.appendChild(
+          el('div', { class: 'fight-feed-line' }, [
+            el('span', { class: 'fight-feed-time', text: beat.timestamp }),
+            el('span', { class: 'fight-feed-text', text: beat.text }),
+          ])
+        );
+      }
+      panel.appendChild(roundCard);
     }
 
     panel.appendChild(
@@ -1739,7 +2072,10 @@ class WebApp {
         class: 'btn btn-gold btn-block',
         text: 'Nouveau combat',
         onclick: () => {
-          this.selectedFighterIds = [];
+          this._teardownCombatPlayback();
+          this._fightOpponentSetup = null;
+          this._fightOpponentGymId = null;
+          this._fightFighterB = null;
           this.fightView = null;
           this.fightCard = null;
           this.fightSetupDone = false;

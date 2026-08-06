@@ -599,6 +599,34 @@ export class CombatEngine {
     const log = {
       round,
       gameplans: { A: { ...c.gameplans.A }, B: { ...c.gameplans.B } },
+      // Play-by-play support (ui/FightNightView.js#_generateRoundBeats): the
+      // subset of _computeRoundOffense's per-corner return value a human
+      // narration actually needs (what was attempted, what landed) — never
+      // read by the simulation itself, purely descriptive.
+      actions: {
+        A: {
+          target: offenseA.target,
+          distance: offenseA.distance,
+          rawDamage: offenseA.rawDamage,
+          takedownAttempted: offenseA.takedownAttempted,
+          takedownSuccess: offenseA.takedownSuccess,
+          clinchAttempted: offenseA.clinchAttempted,
+          clinchTakedownLanded: offenseA.clinchTakedownLanded,
+          submissionAttempted: offenseA.submissionAttempted,
+          submissionSuccess: offenseA.submissionSuccess,
+        },
+        B: {
+          target: offenseB.target,
+          distance: offenseB.distance,
+          rawDamage: offenseB.rawDamage,
+          takedownAttempted: offenseB.takedownAttempted,
+          takedownSuccess: offenseB.takedownSuccess,
+          clinchAttempted: offenseB.clinchAttempted,
+          clinchTakedownLanded: offenseB.clinchTakedownLanded,
+          submissionAttempted: offenseB.submissionAttempted,
+          submissionSuccess: offenseB.submissionSuccess,
+        },
+      },
       damageDealt: {
         A: Math.round(offenseA.rawDamage * 10) / 10,
         B: Math.round(offenseB.rawDamage * 10) / 10,

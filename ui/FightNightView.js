@@ -43,6 +43,118 @@ function renderBar(value, width = 20) {
   return `[${'█'.repeat(filled)}${'░'.repeat(width - filled)}] ${clamped}%`;
 }
 
+// ---- Play-by-play commentary (Live Text Feed) --------------------------------
+// Purely descriptive flavor text built from engine/CombatEngine.js's own
+// round `actions` (see its _processRoundSimulation log — target/distance/
+// takedown-submission outcomes already computed by the simulation, never
+// re-decided here). No randomness is introduced: the same fight replayed
+// from the same seed always narrates identically, since the phrase picked
+// for a given beat is a deterministic function of the round/corner/action
+// it describes, not a fresh roll.
+
+const STRIKING_HEAD_PHRASES = [
+  '{name} envoie un jab sec au visage de {opp} !',
+  '{name} place un crochet du droit qui fait vaciller {opp} !',
+  '{name} enchaine une combinaison rapide a la tete.',
+  '{name} connecte un uppercut tranchant !',
+  '{name} cherche l\'ouverture avec des coups au visage.',
+];
+const STRIKING_BODY_PHRASES = [
+  '{name} plante un crochet au foie !',
+  '{name} martele les cotes de {opp}.',
+  '{name} coupe {opp} en deux avec un coup au corps !',
+  '{name} travaille methodiquement le corps.',
+];
+const STRIKING_LEGS_PHRASES = [
+  '{name} balance un low-kick sec sur la cuisse de {opp} !',
+  '{name} fauche la jambe d\'appui de {opp}.',
+  '{name} hache la cuisse a coups de low-kicks repetes.',
+];
+const CLINCH_LANDED_PHRASES = [
+  '{name} colle {opp} contre la cage et place un genou au corps !',
+  '{name} controle le clinch et enchaine les coudes courts.',
+  '{name} plaque {opp} contre la grille, genoux et coudes au menu.',
+];
+const CLINCH_TAKEDOWN_LANDED_PHRASES = [
+  '{name} bascule {opp} au sol depuis le clinch !',
+  '{name} trouve l\'angle et emmene {opp} au tapis depuis la cage !',
+];
+const CLINCH_TAKEDOWN_FAILED_PHRASES = [
+  '{name} tente de basculer {opp} au sol mais celui-ci tient la position debout.',
+  '{name} cherche la bascule depuis le clinch, sans succes.',
+];
+const TAKEDOWN_LANDED_PHRASES = [
+  '{name} enchaine un takedown net et passe directement en garde montee !',
+  '{name} penetre le double-leg et amene {opp} au sol !',
+  '{name} plaque {opp} au tapis d\'un takedown propre.',
+];
+const TAKEDOWN_FAILED_PHRASES = [
+  '{name} tente un takedown mais {opp} sprawl et se degage !',
+  '{name} shoot sur les jambes, {opp} defend et se replace debout.',
+  '{name} echoue a amener {opp} au sol.',
+];
+const SUBMISSION_ATTEMPT_PHRASES = [
+  '{name} cherche l\'etranglement depuis la garde montee !',
+  '{name} isole un bras et tente une cle !',
+  '{name} tente de passer au sol pour chercher la soumission.',
+];
+const SUBMISSION_SUCCESS_PHRASES = [
+  '{name} serre l\'etranglement, {opp} n\'a plus le choix !',
+  '{name} verrouille la cle de bras, la soumission se rapproche !',
+];
+
+function fillPhrase(phrase, name, opp) {
+  return phrase.replace('{name}', name).replace('{opp}', opp);
+}
+
+/** Deterministic pseudo-random index (no external rng dependency) so the same fight always narrates the same way. */
+function stableIndex(seedString, length) {
+  let hash = 0;
+  for (let i = 0; i < seedString.length; i += 1) hash = (hash * 31 + seedString.charCodeAt(i)) >>> 0;
+  return hash % length;
+}
+
+function pickPhrase(list, seedString) {
+  return list[stableIndex(seedString, list.length)];
+}
+
+/** Builds one corner's action beat text from its engine/CombatEngine.js `actions` entry (target/distance/takedown-submission outcome). */
+function describeAction(action, name, opp, seedString) {
+  if (action.submissionAttempted) {
+    const list = action.submissionSuccess ? SUBMISSION_SUCCESS_PHRASES : SUBMISSION_ATTEMPT_PHRASES;
+    return fillPhrase(pickPhrase(list, seedString), name, opp);
+  }
+  if (action.clinchAttempted) {
+    const list = action.clinchTakedownLanded
+      ? CLINCH_TAKEDOWN_LANDED_PHRASES
+      : action.distance === 'CLINCH'
+        ? CLINCH_LANDED_PHRASES
+        : CLINCH_TAKEDOWN_FAILED_PHRASES;
+    return fillPhrase(pickPhrase(list, seedString), name, opp);
+  }
+  if (action.takedownAttempted) {
+    const list = action.takedownSuccess ? TAKEDOWN_LANDED_PHRASES : TAKEDOWN_FAILED_PHRASES;
+    return fillPhrase(pickPhrase(list, seedString), name, opp);
+  }
+  if (action.target === 'BODY') return fillPhrase(pickPhrase(STRIKING_BODY_PHRASES, seedString), name, opp);
+  if (action.target === 'LEGS') return fillPhrase(pickPhrase(STRIKING_LEGS_PHRASES, seedString), name, opp);
+  return fillPhrase(pickPhrase(STRIKING_HEAD_PHRASES, seedString), name, opp);
+}
+
+const FINISH_BEAT_LINES = Object.freeze({
+  KO: '{winner} explose {loser} — K.O. !!!',
+  TKO: 'L\'arbitre s\'interpose, {loser} ne peut plus continuer — TKO pour {winner} !',
+  SUBMISSION: '{loser} tape au sol — soumission pour {winner} !',
+  DOCTOR_STOPPAGE: 'Le medecin met fin au combat — arret pour {winner} sur blessure de {loser}.',
+});
+
+function formatClock(secondsRemaining) {
+  const clamped = Math.max(0, Math.round(secondsRemaining));
+  const minutes = Math.floor(clamped / 60);
+  const seconds = clamped % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 /** Sensible default gameplan for a fighter whose corner didn't explicitly choose one — leans on their own style's primary distance/target affinity (see BALANCE.COMBAT.STYLE_BONUSES), same spirit as tools/SimRunner.js's headless gameplanForStyle but without that file's coach-AI randomness (a human corner can always override via setGameplans before simulating). */
 function defaultGameplanForFighter(fighter) {
   const styleBonus = BALANCE.COMBAT.STYLE_BONUSES[fighter.identity.style] ?? BALANCE.COMBAT.STYLE_BONUSES.DEFAULT;
@@ -205,7 +317,54 @@ export class FightNightView {
       healthBar: { A: renderBar(log.healthAfter.A), B: renderBar(log.healthAfter.B) },
       staminaBar: { A: renderBar(log.staminaAfter.A), B: renderBar(log.staminaAfter.B) },
       finish: log.finish ? { ...log.finish } : null,
+      /** Live Text Feed: timestamped French play-by-play lines for this round (see _generateRoundBeats), MM:SS counting down from BALANCE.COMBAT.ROUND_DURATION_SECONDS to 00:00. */
+      beats: this._generateRoundBeats(log),
     };
+  }
+
+  /**
+   * Builds this round's timestamped play-by-play beats from the engine's
+   * own already-decided `actions` (see engine/CombatEngine.js's
+   * _processRoundSimulation log) — never re-decides anything, purely
+   * narrates what the simulation already computed.
+   * @param {Object} log - The raw CombatEngine round log (round, actions, finish...).
+   * @returns {{ timestamp: string, text: string }[]}
+   */
+  _generateRoundBeats(log) {
+    const nameA = this._fighterA.identity.name;
+    const nameB = this._fighterB.identity.name;
+    const roundSeconds = BALANCE.COMBAT.ROUND_DURATION_SECONDS;
+
+    const lines = [];
+    lines.push(log.round === 1 ? 'La cloche retentit, le combat commence !' : `Round ${log.round} — les coins liberent les combattants.`);
+
+    if (log.actions) {
+      lines.push(describeAction(log.actions.A, nameA, nameB, `${log.round}-A-${log.actions.A.target}-${log.actions.A.distance}-${log.actions.A.takedownSuccess}`));
+      lines.push(describeAction(log.actions.B, nameB, nameA, `${log.round}-B-${log.actions.B.target}-${log.actions.B.distance}-${log.actions.B.takedownSuccess}`));
+    }
+
+    const totalDamage = log.damageDealt.A + log.damageDealt.B;
+    if (totalDamage > 15) {
+      lines.push('Les deux combattants echangent avec intensite, l\'assistance est debout !');
+    } else if (totalDamage < 4) {
+      lines.push('Round plus tactique, les deux coins jaugent la distance.');
+    }
+
+    if (log.finish) {
+      const winnerName = log.finish.winnerKey === 'A' ? nameA : nameB;
+      const loserName = log.finish.winnerKey === 'A' ? nameB : nameA;
+      const template = FINISH_BEAT_LINES[log.finish.method];
+      if (template) lines.push(template.replace('{winner}', winnerName).replace('{loser}', loserName));
+      else lines.push(`La cloche finale sonne le round ${log.round}.`);
+    } else {
+      lines.push(`Fin du round ${log.round} — retour au coin.`);
+    }
+
+    const count = lines.length;
+    return lines.map((text, index) => {
+      const secondsRemaining = roundSeconds * (1 - (index + 1) / count);
+      return { timestamp: formatClock(secondsRemaining), text };
+    });
   }
 
   _buildResultBanner() {

@@ -669,6 +669,32 @@ input[type='text'] {
   margin-bottom: 4px;
 }
 
+.fight-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.fight-feed-line {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.fight-feed-time {
+  flex-shrink: 0;
+  font-family: var(--font-display);
+  color: var(--gold-bright);
+  font-variant-numeric: tabular-nums;
+}
+
+.fight-feed-text {
+  color: var(--text-primary, inherit);
+}
+
 .result-banner {
   text-align: center;
   padding: 18px 12px;

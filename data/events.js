@@ -9,7 +9,13 @@
  *
  * Each event is a plain object:
  *   {
- *     id           - unique string key.
+ *     id           - unique string key. Never shown to the player directly —
+ *                    see `title`/`description` below (ui/WeeklyFlowController.js
+ *                    ('_buildDramaPrompt') and web/app.js's drama modal
+ *                    ('_showDramaModal') surface those instead, so the UI
+ *                    never leaks a raw id like "DOCUMENTARY_FEATURE").
+ *     title        - short French narrative headline shown in the drama modal.
+ *     description  - one-sentence French context/flavor shown under the title.
  *     category     - one of EVENT_CATEGORIES below (Fighter Stories, Media
  *                    Engine, Sponsors/Marche Noir, Rivalites, Gym Life).
  *     baseChance   - the "BaseChance" term of EventWeight = BaseChance *
@@ -50,6 +56,8 @@ export const EVENT_CATEGORIES = Object.freeze({
 export const DRAMA_EVENTS = Object.freeze([
   Object.freeze({
     id: 'BREAKTHROUGH_SESSION',
+    title: 'Seance Revelation',
+    description: 'Une seance d\'entrainement ou tout semble soudain plus facile — la percee technique que tout combattant espere.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 1.0,
     conditions: [{ type: 'NOT_INJURED' }],
@@ -78,6 +86,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'INJURY_SCARE',
+    title: 'Alerte Physique',
+    description: 'Une douleur inhabituelle inquiete le staff medical apres l\'entrainement.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.6,
     conditions: [{ type: 'NOT_INJURED' }],
@@ -104,6 +114,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'PERSONAL_SETBACK',
+    title: 'Coup Dur Personnel',
+    description: 'Des soucis en dehors du tapis pesent sur le moral du combattant.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.8,
     conditions: [],
@@ -131,6 +143,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'VIRAL_INTERVIEW',
+    title: 'Interview qui Buzz',
+    description: 'Un media sportif sollicite une interview qui pourrait faire parler.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 1.0,
     conditions: [{ type: 'NOT_INJURED' }],
@@ -162,6 +176,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'PRESS_CONTROVERSY',
+    title: 'Polemique Mediatique',
+    description: 'Des propos mal interpretes enflamment la presse specialisee.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.7,
     conditions: [],
@@ -186,6 +202,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'DOCUMENTARY_FEATURE',
+    title: 'Portrait Documentaire',
+    description: 'Une equipe de tournage propose de suivre le combattant pour un portrait intimiste.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.5,
     conditions: [{ type: 'NOT_INJURED' }],
@@ -211,6 +229,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'SPONSOR_OFFER',
+    title: 'Offre de Sponsoring',
+    description: 'Une marque propose un contrat de sponsoring pour ce combattant.',
     category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
     baseChance: 1.0,
     conditions: [],
@@ -235,6 +255,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'SHADY_SUPPLEMENT_OFFER',
+    title: 'Complement Douteux',
+    description: 'Un inconnu propose un complement au marche noir, promettant une recuperation express.',
     category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
     baseChance: 0.5,
     conditions: [{ type: 'NOT_INJURED' }],
@@ -259,6 +281,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'MERCHANDISE_DEAL',
+    title: 'Accord Merchandising',
+    description: 'Une opportunite de vendre des produits derives a l\'effigie du combattant se presente.',
     category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
     baseChance: 0.6,
     conditions: [],
@@ -283,6 +307,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'TRASH_TALK_CHALLENGE',
+    title: 'Provocation Rivale',
+    description: 'Un gym rival lance une pique publique pour faire monter la pression.',
     category: EVENT_CATEGORIES.RIVALRIES,
     baseChance: 0.9,
     conditions: [{ type: 'HAS_RIVAL_GYMS' }],
@@ -313,6 +339,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'POACHING_ATTEMPT',
+    title: 'Tentative de Debauchage',
+    description: 'Un gym concurrent tente de debaucher discretement ce combattant.',
     category: EVENT_CATEGORIES.RIVALRIES,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_RIVAL_GYMS' }, { type: 'MIN_MONEY', amount: 1000 }],
@@ -339,6 +367,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'PUBLIC_CALLOUT',
+    title: 'Callout Public',
+    description: 'Un rival interpelle publiquement ce combattant pour provoquer un affrontement.',
     category: EVENT_CATEGORIES.RIVALRIES,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_RIVAL_GYMS' }],
@@ -363,6 +393,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'EQUIPMENT_OPPORTUNITY',
+    title: 'Opportunite Materielle',
+    description: 'Un fournisseur propose du materiel d\'entrainement a prix avantageux.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.6,
     conditions: [{ type: 'MIN_MONEY', amount: 1500 }],
@@ -386,6 +418,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'TEAMMATE_CONFLICT',
+    title: 'Tension au Vestiaire',
+    description: 'Une friction eclate entre deux membres du roster.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.8,
     conditions: [{ type: 'MIN_ROSTER_SIZE', amount: 2 }],
@@ -419,6 +453,8 @@ export const DRAMA_EVENTS = Object.freeze([
   // ---------------------------------------------------------------------
   Object.freeze({
     id: 'PROFESSIONAL_CONSISTENCY',
+    title: 'Metronome du Gym',
+    description: 'Sa regularite exemplaire a l\'entrainement ne passe pas inapercue.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.7,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Professionnel' }],
@@ -441,6 +477,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'NIGHT_OUT_TEMPTATION',
+    title: 'Tentation Nocturne',
+    description: 'Une soiree s\'annonce, et la tentation de sortir est grande.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Fetard' }],
@@ -468,6 +506,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'IMPULSIVE_CHALLENGE',
+    title: 'Defi sur un Coup de Tete',
+    description: 'Une provocation sur les reseaux pousse le combattant a reagir sans reflechir.',
     category: EVENT_CATEGORIES.RIVALRIES,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Impulsif' }, { type: 'HAS_RIVAL_GYMS' }],
@@ -492,6 +532,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'PROVOCATEUR_STUNT',
+    title: 'Coup d\'Eclat Mediatique',
+    description: 'L\'occasion de faire un coup d\'eclat devant les cameras se presente.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Provocateur' }],
@@ -516,6 +558,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'EXTRA_MILE_SESSION',
+    title: 'Session Supplementaire',
+    description: 'Le combattant propose d\'ajouter une seance non prevue au programme.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.7,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Discipline' }, { type: 'NOT_INJURED' }],
@@ -539,6 +583,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'LOYALTY_TEST',
+    title: 'Epreuve de Loyaute',
+    description: 'Un gym rival teste l\'attachement du combattant envers votre salle.',
     category: EVENT_CATEGORIES.RIVALRIES,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Loyal' }, { type: 'HAS_RIVAL_GYMS' }],
@@ -561,6 +607,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'ARROGANT_CALLOUT',
+    title: 'Sortie Arrogante',
+    description: 'Face aux critiques, le combattant est tente d\'en rajouter une couche.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Arrogant' }],
@@ -588,6 +636,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'HUMBLE_DEFLECTION',
+    title: 'Modestie Assumee',
+    description: 'Les eloges pleuvent, mais le combattant prefere les rediriger vers le staff.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Humble' }],
@@ -613,6 +663,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'CHARITY_REQUEST',
+    title: 'Sollicitation Caritative',
+    description: 'Une association sollicite un don sur la bourse du combattant.',
     category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Genereux' }, { type: 'MIN_MONEY', amount: 500 }],
@@ -637,6 +689,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'OVERTRAINING_RISK',
+    title: 'Risque de Surentrainement',
+    description: 'Le combattant pousse fort a l\'entrainement, peut-etre trop fort.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Intense' }, { type: 'NOT_INJURED' }],
@@ -662,6 +716,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'ZEN_FOCUS',
+    title: 'Concentration Zen',
+    description: 'La pression mediatique monte, mais le combattant reste imperturbable.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Calme' }],
@@ -687,6 +743,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'TITLE_SHOT_DEMAND',
+    title: 'Exigence de Standing',
+    description: 'Le combattant juge le prochain combat propose indigne de son statut.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Ambitieux' }],
@@ -714,6 +772,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'GRINDER_BREAKTHROUGH',
+    title: 'Ethique de Bosseur',
+    description: 'Le combattant veut enchainer les heures supplementaires a la salle.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.7,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Travailleur' }, { type: 'NOT_INJURED' }],
@@ -737,6 +797,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'SKIPPED_SESSION',
+    title: 'Seance Sechee',
+    description: 'Le combattant a saute une session d\'entrainement sans prevenir.',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Paresseux' }, { type: 'NOT_INJURED' }],
@@ -763,6 +825,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'VIRAL_STUNT',
+    title: 'Coup Viral',
+    description: 'L\'occasion de tenter un coup mediatique risque mais tres visible se presente.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Frimeur' }],
@@ -790,6 +854,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'MEDIA_AVOIDANCE',
+    title: 'Evitement Mediatique',
+    description: 'Une interview est proposee, mais l\'exercice met le combattant mal a l\'aise.',
     category: EVENT_CATEGORIES.MEDIA_ENGINE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Introverti' }],
@@ -816,6 +882,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'SPARRING_INCIDENT',
+    title: 'Incident au Sparring',
+    description: 'Une session de sparring degenere en echange trop intense.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.6,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Agressif' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
@@ -844,6 +912,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'LOCKER_ROOM_SPEECH',
+    title: 'Discours du Vestiaire',
+    description: 'Le combattant sent que le groupe a besoin d\'etre galvanise avant la semaine.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Meneur' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
@@ -867,6 +937,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'TOXIC_FRICTION',
+    title: 'Friction Toxique',
+    description: 'Une tension malsaine s\'installe dans le vestiaire autour du combattant.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Toxique' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
@@ -893,6 +965,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'MENTORSHIP_MOMENT',
+    title: 'Moment de Mentorat',
+    description: 'Un jeune combattant du roster pourrait profiter de son experience.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.5,
     conditions: [{ type: 'HAS_TRAIT', trait: 'Mentor' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
@@ -916,6 +990,8 @@ export const DRAMA_EVENTS = Object.freeze([
   }),
   Object.freeze({
     id: 'FACILITY_INSPECTION',
+    title: 'Inspection des Installations',
+    description: 'Un controle de securite souleve des questions sur l\'etat des installations.',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.5,
     conditions: [{ type: 'MIN_MONEY', amount: 800 }],

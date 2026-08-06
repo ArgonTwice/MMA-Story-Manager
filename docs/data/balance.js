@@ -1891,6 +1891,45 @@ const BALANCE = {
       },
     },
   },
+
+  // ---------------------------------------------------------------------
+  // INITIAL_DRAFT — the zero-fighter "Nouvelle Partie" -> Draft/Mercato
+  // opening flow (see engine/DraftEngine.js, web/app.js's
+  // _showInitialDraftModal). A brand new gym starts with an EMPTY roster
+  // and must spend its starting funds signing MIN_PICKS-MAX_PICKS
+  // prospects from a generated pool before play begins — no more silent
+  // free auto-fill.
+  // ---------------------------------------------------------------------
+  INITIAL_DRAFT: {
+    POOL_SIZE: 8,
+    MIN_PICKS: 2,
+    MAX_PICKS: 3,
+    MIN_AGE: 19,
+    MAX_AGE: 27,
+    BASE_SKILL_MEAN: 35,
+    SKILL_SPREAD: 14,
+  },
+
+  // ---------------------------------------------------------------------
+  // RECRUITMENT_MARKET — the permanent, always-open recruitment pool the
+  // player can browse from the Effectif tab any week (see
+  // engine/DraftEngine.js#generateRecruitmentPool, web/app.js's
+  // _showRecruitmentMarketModal) — distinct from ACADEMY_DRAFT's
+  // once-a-year FREE pick and from TRANSFER_MARKET's autonomous rival-gym
+  // activity: this is the player paying, on demand, any week.
+  // ---------------------------------------------------------------------
+  RECRUITMENT_MARKET: {
+    POOL_SIZE: 6,
+    MIN_AGE: 19,
+    MAX_AGE: 30,
+    BASE_SKILL_MEAN: 30,
+    SKILL_SPREAD: 15,
+    /** Skill-mean bonus per point of GYM.reputation (0-100) — mirrors ACADEMY_DRAFT's own precedent: a bigger-name gym attracts sharper free-agent talent too. */
+    REPUTATION_SKILL_MEAN_BONUS_PER_POINT: 0.15,
+    /** Signing cost = BASE_COST + PER_SKILL_POINT * (fighter's mean skill) — a rough but legible "you get what you pay for" price tag, no hidden formula. */
+    BASE_COST: 500,
+    COST_PER_SKILL_POINT: 25,
+  },
 };
 
 export default deepFreeze(BALANCE);

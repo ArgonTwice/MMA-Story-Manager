@@ -181,6 +181,8 @@ export class WeeklyFlowController {
     const { event, fighter } = this._dramaSelection;
     return {
       eventId: event.id,
+      title: event.title,
+      description: event.description,
       category: event.category,
       fighterId: fighter.identity.id,
       fighterName: fighter.identity.name,
