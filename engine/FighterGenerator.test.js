@@ -10,7 +10,7 @@ import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
 import { generatePersonality } from './FighterGenerator.js';
 
-test('generatePersonality always returns a valid archetype and 1..MAX_TRAITS unique, valid traits', () => {
+test('generatePersonality always returns a valid archetype and MIN_TRAITS..MAX_TRAITS unique, valid traits', () => {
   const archetypeKeys = new Set(Object.keys(BALANCE.PERSONALITY.ARCHETYPES));
   const traitKeys = new Set(Object.keys(BALANCE.PERSONALITY.TRAITS));
   const cfg = BALANCE.PERSONALITY.GENERATION;
@@ -27,7 +27,7 @@ test('generatePersonality always returns a valid archetype and 1..MAX_TRAITS uni
 });
 
 test('generatePersonality is deterministic given a fixed rng, and produces a Fighter-ready shape', () => {
-  const queue = [0, 0, 0]; // archetype pick, trait-count pick, trait pick
+  const queue = [0, 0, 0, 0]; // archetype pick, trait-count pick, then one pick per trait (MIN_TRAITS=2)
   const rng = () => queue.shift() ?? 0.9;
 
   const personality = generatePersonality(rng);
@@ -35,7 +35,7 @@ test('generatePersonality is deterministic given a fixed rng, and produces a Fig
   const traitKeys = Object.keys(BALANCE.PERSONALITY.TRAITS);
 
   assert.equal(personality.archetype, archetypeKeys[0]);
-  assert.deepEqual(personality.traits, [traitKeys[0]]);
+  assert.deepEqual(personality.traits, [traitKeys[0], traitKeys[1]]);
 
   // Must be directly usable as Fighter construction input, with no further massaging.
   const fighter = new Fighter({ identity: { name: 'Generated' }, psychology: { personality } });

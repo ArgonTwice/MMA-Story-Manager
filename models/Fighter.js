@@ -230,6 +230,8 @@ export class Fighter {
       longestWinStreak: config.career?.longestWinStreak ?? 0,
       titles: config.career?.titles ? [...config.career.titles] : [],
       hallOfFameStatus: config.career?.hallOfFameStatus ?? 'none',
+      /** Phase 4.6: one row per (year, orgId) this fighter fought in — see recordFightResult()'s seasonContext param. Empty until this fighter's first tracked fight. */
+      seasonHistory: config.career?.seasonHistory ? config.career.seasonHistory.map((row) => ({ ...row })) : [],
     };
 
     /** Business relationships. */
@@ -321,6 +323,27 @@ export class Fighter {
 
     const rating = base * performanceMultiplier * formMultiplier;
     return Math.round(Math.min(BALANCE.PROGRESSION.SKILL_MAX, rating) * 10) / 10;
+  }
+
+  /**
+   * Weighted composite of the six skills for a given combat distance, using
+   * the exact same weights CombatEngine itself uses to resolve a round at
+   * that distance (see BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS) — a
+   * genuine technical-profile reading, not an invented stat. Unlike
+   * getOverallRating(), this is NOT adjusted by current form/moral: it
+   * describes trained ability, not momentary condition (already covered
+   * separately by getReadiness()).
+   * @param {('STRIKING'|'CLINCH'|'GROUND')} distanceKey
+   * @returns {number} 0-100, rounded to the nearest integer.
+   */
+  getDistanceRating(distanceKey) {
+    const weights = BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS[distanceKey];
+    if (!weights) {
+      throw new TypeError(`Fighter.getDistanceRating: invalid distance "${distanceKey}".`);
+    }
+    const { skills } = this.attributes;
+    const rating = Object.keys(weights).reduce((total, skillKey) => total + skills[skillKey] * weights[skillKey], 0);
+    return Math.round(Math.min(BALANCE.PROGRESSION.SKILL_MAX, rating));
   }
 
   /**
@@ -463,8 +486,14 @@ export class Fighter {
    * @param {boolean} [result.comeback=false] - Phase 4.2: true if this win came
    *   despite this fighter being out-struck on raw damage (see
    *   CombatEngine#_processPostMatchRewards) — feeds the PHOENIX nickname rule.
+   * @param {Object} [result.seasonContext] - Phase 4.6: when provided, also
+   *   upserts a career.seasonHistory row for { year, orgId } — omitted by
+   *   most call sites (e.g. direct model tests) that don't care about the
+   *   season-by-season career table, so this stays fully backward-compatible.
+   * @param {number} [result.seasonContext.year] - WorldState.year at fight time.
+   * @param {string} [result.seasonContext.orgId] - The promotion the fight was booked under.
    */
-  recordFightResult({ outcome, byFinish = false, finishMethod, titleWon, comeback = false }) {
+  recordFightResult({ outcome, byFinish = false, finishMethod, titleWon, comeback = false, seasonContext = null }) {
     if (outcome === 'win') {
       this.career.wins += 1;
       if (byFinish) {
@@ -491,7 +520,40 @@ export class Fighter {
       throw new TypeError(`Fighter.recordFightResult: unknown outcome "${outcome}".`);
     }
 
+    if (seasonContext) {
+      this._recordSeasonHistory(seasonContext, { outcome, byFinish, finishMethod });
+    }
+
     this.evaluateNickname();
+  }
+
+  /**
+   * Upserts the career.seasonHistory row for { year, orgId }, creating it on
+   * this fighter's first tracked fight of that year/org. Groups KO/TKO/
+   * Doctor Stoppage together as "koWins" (mirrors the lifetime koWins+tkoWins
+   * grouping evaluateNickname() and the mobile profile's KO/Subs column both
+   * use) and Submission separately as "subWins".
+   * @param {{ year: number, orgId: string }} seasonContext
+   * @param {{ outcome: string, byFinish: boolean, finishMethod: string|undefined }} result
+   */
+  _recordSeasonHistory({ year, orgId }, { outcome, byFinish, finishMethod }) {
+    let row = this.career.seasonHistory.find((entry) => entry.year === year && entry.orgId === orgId);
+    if (!row) {
+      row = { year, orgId, wins: 0, losses: 0, draws: 0, koWins: 0, subWins: 0 };
+      this.career.seasonHistory.push(row);
+    }
+
+    if (outcome === 'win') {
+      row.wins += 1;
+      if (byFinish) {
+        if (finishMethod === 'KO' || finishMethod === 'TKO' || finishMethod === 'DOCTOR_STOPPAGE') row.koWins += 1;
+        else if (finishMethod === 'SUBMISSION') row.subWins += 1;
+      }
+    } else if (outcome === 'loss') {
+      row.losses += 1;
+    } else if (outcome === 'draw') {
+      row.draws += 1;
+    }
   }
 
   /**
@@ -720,7 +782,7 @@ export class Fighter {
           traits: [...this.psychology.personality.traits],
         },
       },
-      career: { ...this.career, titles: [...this.career.titles] },
+      career: { ...this.career, titles: [...this.career.titles], seasonHistory: this.career.seasonHistory.map((row) => ({ ...row })) },
       contracts: {
         currentContract: this.contracts.currentContract,
         blacklist: [...this.contracts.blacklist],

@@ -1427,9 +1427,9 @@ const BALANCE = {
     MORALE_SWING_REFERENCE: 4,
     INSOLVENCY_MORALE_REFERENCE: 3,
 
-    /** How many traits engine/FighterGenerator.js assigns to an automatically generated fighter. */
+    /** How many traits engine/FighterGenerator.js assigns to an automatically generated fighter — every fighter gets at least 2 visible traits (see web/app.js's Fighter Profile view). */
     GENERATION: {
-      MIN_TRAITS: 1,
+      MIN_TRAITS: 2,
       MAX_TRAITS: 3,
     },
   },

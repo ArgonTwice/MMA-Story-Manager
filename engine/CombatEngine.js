@@ -623,6 +623,7 @@ export class CombatEngine {
         finishMethod: finish.method,
         comeback,
         titleWon: wonTitle ? `${c.orgId} ${fighter.identity.weightClass}` : undefined,
+        seasonContext: this.worldState ? { year: this.worldState.year, orgId: c.orgId } : null,
       });
 
       if (outcome === 'win') {

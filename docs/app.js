@@ -21,6 +21,7 @@ import SaveManager from '../core/SaveManager.js';
 import { GameState } from '../state/GameState.js';
 import { WORLD_EVENTS } from '../state/WorldState.js';
 import BALANCE from '../data/balance.js';
+import { getTraitDisplay } from '../data/traits.js';
 import Fighter from '../models/Fighter.js';
 import { generatePersonality } from '../engine/FighterGenerator.js';
 import { CombatEngine, COMBAT_STATES } from '../engine/CombatEngine.js';
@@ -74,6 +75,41 @@ const SKILL_LABELS = Object.freeze({
   cardio: 'Cardio',
   intelligence: 'Intelligence',
 });
+
+/** Purely decorative per-style emoji for the profile avatar — not a BALANCE-owned gameplay concept. */
+const STYLE_AVATARS = Object.freeze({
+  Boxe: '\u{1F94A}',
+  'Muay Thai': '\u{1F9B5}',
+  Lutte: '\u{1F93C}',
+  'Jiu-Jitsu Bresilien': '\u{1F94B}',
+  Freestyle: '\u{1F300}',
+  Kickboxing: '\u{1F9B6}',
+});
+
+/** Trend-arrow thresholds for the profile's Forme/Moral week-over-week delta — UI-only, mirrors gaugeClass()'s own local-threshold precedent. */
+function trendArrow(delta) {
+  if (delta > 8) return { symbol: '\u{2191}', cls: 'trend-up' };
+  if (delta > 2) return { symbol: '\u{2197}', cls: 'trend-up' };
+  if (delta < -8) return { symbol: '\u{2193}', cls: 'trend-down' };
+  if (delta < -2) return { symbol: '\u{2198}', cls: 'trend-down' };
+  return { symbol: '\u{2192}', cls: 'trend-flat' };
+}
+
+/**
+ * Derived "loyalty" gauge (0-100) for the profile view: reuses the exact
+ * same archetype/trait salaryDemandMultiplier values engine/StoryEngine.js's
+ * own contract-demand logic already applies (see its
+ * computeSalaryDemandMultiplier) — a low-maintenance, low-salary-demand
+ * fighter reads as more loyal to the gym. Purely a UI reading of existing
+ * public BALANCE data; not a new persisted stat.
+ */
+function computeLoyalty(fighter) {
+  const { archetype, traits } = fighter.psychology.personality;
+  let multiplier = BALANCE.PERSONALITY.ARCHETYPES[archetype]?.salaryDemandMultiplier ?? 1;
+  for (const trait of traits) multiplier *= BALANCE.PERSONALITY.TRAITS[trait]?.salaryDemandMultiplier ?? 1;
+  const loyalty = 100 - (multiplier - 0.6) * 100;
+  return Math.max(0, Math.min(100, Math.round(loyalty)));
+}
 
 // ---- small DOM helpers -------------------------------------------------------
 
@@ -189,6 +225,8 @@ class WebApp {
     this.gameplanChoices = { A: {}, B: {} };
     this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
     this.academyPool = [];
+    /** { [fighterId]: { forme, moral } } snapshot taken at the start of the current week — see _startNewWeek()/_showFighterProfile()'s trend arrows. Runtime-only, never persisted. */
+    this.weekStartSnapshot = {};
     this.dom = {};
   }
 
@@ -564,6 +602,13 @@ class WebApp {
       gaugeRow('Fatigue P', fighter.physicalFatigue, { invert: true }),
       gaugeRow('Fatigue M', fighter.mentalFatigue, { invert: true }),
     ]);
+    card.appendChild(
+      el('button', {
+        class: 'btn btn-outline btn-sm',
+        text: '\u{1F4CB} Fiche',
+        onclick: () => this._showFighterProfile(this.gameState.playerState.getFighter(fighter.id)),
+      })
+    );
     return card;
   }
 
@@ -612,6 +657,14 @@ class WebApp {
       el('p', { class: 'fighter-meta', text: `Legacy : ${fighter.getLegacyStage()} — Plan : ${fighter.weeklyPlan.slots.map((a) => ACTIVITY_LABELS[a] ?? '—').join(', ') || 'vide'}` }),
     ]);
 
+    card.appendChild(
+      el('button', {
+        class: 'btn btn-outline btn-sm',
+        text: '\u{1F4CB} Fiche',
+        onclick: () => this._showFighterProfile(fighter),
+      })
+    );
+
     if (fighter.isRetirementEligible()) {
       card.appendChild(
         el('button', {
@@ -645,6 +698,141 @@ class WebApp {
       ]),
     ]);
     this._showModal(card, { blocking: true });
+  }
+
+  // ---- FIGHTER PROFILE ("fiche combattant") --------------------------------------
+
+  _showFighterProfile(fighter) {
+    if (!fighter) return;
+
+    const snapshot = this.weekStartSnapshot[fighter.identity.id] ?? {
+      forme: fighter.attributes.forme,
+      moral: fighter.attributes.moral,
+    };
+    const formeTrend = trendArrow(fighter.attributes.forme - snapshot.forme);
+    const moralTrend = trendArrow(fighter.attributes.moral - snapshot.moral);
+
+    const { archetype, traits } = fighter.psychology.personality;
+    const traitBadges = [
+      el('span', { class: 'trait-badge trait-gold', text: archetype }),
+      ...traits.map((trait) => {
+        const display = getTraitDisplay(trait);
+        return el('span', { class: `trait-badge trait-${display.color}`, text: trait, title: display.description });
+      }),
+    ];
+
+    const trophyRows = this._buildTrophyRows(fighter);
+
+    const content = el('div', {}, [
+      el('div', { class: 'profile-header' }, [
+        el('div', { class: 'profile-avatar', text: STYLE_AVATARS[fighter.identity.style] ?? '\u{1F94A}' }),
+        el('div', {}, [
+          el(
+            'div',
+            { class: 'profile-name' },
+            [fighter.identity.name, fighter.identity.nickname ? ` "${fighter.identity.nickname}"` : ''].filter(Boolean)
+          ),
+          el('div', {
+            class: 'fighter-meta',
+            text: `${fighter.identity.age} ans — ${fighter.identity.weightClass} — ${fighter.getRecordString()} — ${fighter.getLegacyStage()}`,
+          }),
+        ]),
+      ]),
+      el('p', { class: 'fighter-meta' }, [
+        'Forme ',
+        el('span', { class: `trend-arrow ${formeTrend.cls}`, text: formeTrend.symbol }),
+        '   Moral ',
+        el('span', { class: `trend-arrow ${moralTrend.cls}`, text: moralTrend.symbol }),
+      ]),
+      gaugeRow('Loyaute envers le gym', computeLoyalty(fighter)),
+      el('div', { class: 'trait-list' }, traitBadges),
+
+      trophyRows.length > 0 ? el('div', { class: 'card' }, [el('div', { class: 'card-title', text: 'Palmares' }), ...trophyRows]) : null,
+
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Attributs' }),
+        gaugeRow('Striking', fighter.getDistanceRating('STRIKING')),
+        gaugeRow('Clinch', fighter.getDistanceRating('CLINCH')),
+        gaugeRow('Grappling', fighter.getDistanceRating('GROUND')),
+        gaugeRow('Mental', fighter.attributes.skills.intelligence),
+        gaugeRow('Physique', Math.round((fighter.attributes.skills.boxe + fighter.attributes.skills.jambes) / 2)),
+        gaugeRow('Endurance', fighter.attributes.skills.cardio),
+      ]),
+
+      this._buildCareerTable(fighter),
+
+      el('button', { class: 'btn btn-gold btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+
+    this._showModal(content);
+  }
+
+  _buildTrophyRows(fighter) {
+    const rows = [];
+    for (const title of fighter.career.titles) {
+      rows.push(el('div', { class: 'trophy-row', text: `\u{1F3C6} Ceinture : ${title}` }));
+    }
+    if (fighter.career.hallOfFameStatus && fighter.career.hallOfFameStatus !== 'none') {
+      rows.push(el('div', { class: 'trophy-row', text: `\u{2728} Hall of Fame (${fighter.career.hallOfFameStatus})` }));
+    }
+
+    const recordLabels = {
+      fastestKO: 'KO le plus rapide',
+      longestTitleReign: 'Plus long regne de titre',
+      mostTitles: 'Plus de titres en carriere',
+      biggestFight: 'Plus grosse bourse combinee',
+      youngestChampion: 'Plus jeune champion',
+      longestWinStreak: 'Plus longue serie de victoires',
+    };
+    for (const [key, record] of Object.entries(this.gameState.worldState.records ?? {})) {
+      const meta = record?.meta;
+      if (!meta) continue;
+      const holds = meta.fighterId === fighter.identity.id || meta.fighterAId === fighter.identity.id || meta.fighterBId === fighter.identity.id;
+      if (holds) rows.push(el('div', { class: 'trophy-row', text: `\u{1F947} Record du monde : ${recordLabels[key] ?? key}` }));
+    }
+
+    return rows;
+  }
+
+  _buildCareerTable(fighter) {
+    const rows = fighter.career.seasonHistory;
+    if (rows.length === 0) {
+      return el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Carriere par saison' }),
+        el('p', { text: 'Aucun combat dispute pour le moment.' }),
+      ]);
+    }
+
+    const bodyRows = rows.map((row) => {
+      const total = row.wins + row.losses + row.draws;
+      const performance =
+        total === 0 ? 0 : Math.max(0, Math.min(100, Math.round(((row.wins - row.losses) / total + 1) * 50 + (row.koWins + row.subWins) * 4)));
+      return el('tr', {}, [
+        el('td', { text: `${row.year}` }),
+        el('td', { text: row.orgId }),
+        el('td', { text: `${row.wins}-${row.losses}-${row.draws}` }),
+        el('td', { text: `${row.koWins}K/${row.subWins}S` }),
+        el('td', { text: `${performance}` }),
+      ]);
+    });
+
+    return el('div', { class: 'card' }, [
+      el('div', { class: 'card-title', text: 'Carriere par saison' }),
+      el('div', { class: 'table-scroll' }, [
+        el('table', { class: 'career-table' }, [
+          el('thead', {}, [
+            el('tr', {}, [
+              el('th', { text: 'Saison' }),
+              el('th', { text: 'Org' }),
+              el('th', { text: 'V-D-N' }),
+              el('th', { text: 'KO/Sub' }),
+              el('th', { text: 'Perf.' }),
+            ]),
+          ]),
+          el('tbody', {}, bodyRows),
+        ]),
+      ]),
+    ]);
   }
 
   // ---- PLANNING panel -----------------------------------------------------------
@@ -708,6 +896,12 @@ class WebApp {
 
   _startNewWeek() {
     this.weeklyFlow = new WeeklyFlowController({ gameState: this.gameState, rng: this.rng });
+    this.weekStartSnapshot = Object.fromEntries(
+      this.gameState.playerState.roster.map((fighter) => [
+        fighter.identity.id,
+        { forme: fighter.attributes.forme, moral: fighter.attributes.moral },
+      ])
+    );
   }
 
   _resolveWeek() {

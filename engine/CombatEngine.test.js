@@ -132,6 +132,47 @@ test('a heavily mismatched, aggressive match ends in a KO before the scheduled d
   assert.ok(events[0][1].purses.A.gymShare > 0);
 });
 
+test('a finished match records a career.seasonHistory row for both fighters when a worldState is attached', () => {
+  const world = new WorldState();
+  world.advanceDay(10);
+
+  const a = makeFighter('Season A', 40);
+  const b = makeFighter('Season B', 40);
+
+  const engine = new CombatEngine({ rng: createSeededRng(1), worldState: world });
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  for (const fighter of [a, b]) {
+    assert.equal(fighter.career.seasonHistory.length, 1);
+    const row = fighter.career.seasonHistory[0];
+    assert.equal(row.year, world.year);
+    assert.equal(row.orgId, 'WFC');
+    assert.equal(row.wins + row.losses + row.draws, 1);
+  }
+  const winnerKey = result.winner;
+  if (winnerKey) {
+    const winner = winnerKey === 'A' ? a : b;
+    assert.equal(winner.career.seasonHistory[0].wins, 1);
+  }
+});
+
+test('a finished match with no worldState attached leaves career.seasonHistory empty (backward-compatible no-op)', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const a = makeFighter('No World A', 40);
+  const b = makeFighter('No World B', 40);
+
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.simulateFullMatch();
+
+  assert.deepEqual(a.career.seasonHistory, []);
+  assert.deepEqual(b.career.seasonHistory, []);
+});
+
 test('missing weight on a title fight forfeits the title and applies a fight-local form penalty', () => {
   const alwaysMissWeight = () => 0.001; // beats every WEIGH_IN.PROFILES[*].missChance
   const engine = new CombatEngine({ rng: alwaysMissWeight });

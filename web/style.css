@@ -794,6 +794,138 @@ input[type='text'] {
   padding: 10px;
 }
 
+/* ---- fighter profile ("fiche combattant") ---------------------------------- */
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--bg-tile);
+  border: 2px solid var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  flex-shrink: 0;
+}
+
+.profile-name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  text-transform: uppercase;
+}
+
+.trend-arrow {
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+.trend-up {
+  color: var(--green-bright);
+}
+
+.trend-down {
+  color: var(--red-bright);
+}
+
+.trend-flat {
+  color: var(--text-muted);
+}
+
+.trait-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.trait-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid;
+  background: var(--bg-void);
+}
+
+.trait-badge.trait-blue {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: rgba(74, 144, 217, 0.12);
+}
+
+.trait-badge.trait-red {
+  color: var(--red-bright);
+  border-color: var(--red-bright);
+  background: rgba(255, 91, 77, 0.12);
+}
+
+.trait-badge.trait-orange {
+  color: var(--orange-bright);
+  border-color: var(--orange-bright);
+  background: rgba(240, 169, 78, 0.12);
+}
+
+.trait-badge.trait-green {
+  color: var(--green-bright);
+  border-color: var(--green-bright);
+  background: rgba(95, 214, 143, 0.12);
+}
+
+.trait-badge.trait-gold {
+  color: var(--gold-bright);
+  border-color: var(--gold-bright);
+  background: rgba(240, 199, 94, 0.12);
+}
+
+.trophy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.trophy-row:last-child {
+  border-bottom: none;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.career-table {
+  width: 100%;
+  min-width: 380px;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.career-table th,
+.career-table td {
+  padding: 6px 4px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.career-table th {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 /* ---- modal ------------------------------------------------------------------- */
 
 .modal-overlay {

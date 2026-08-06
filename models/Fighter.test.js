@@ -274,3 +274,87 @@ test('toJSON/fromJSON round-trips the Phase 4.2 identity/career fields', () => {
   assert.equal(rebuilt.career.longestWinStreak, 5);
   assert.equal(rebuilt.career.currentWinStreak, 5);
 });
+
+test('a new fighter starts with an empty career.seasonHistory', () => {
+  const fighter = makeFighter();
+  assert.deepEqual(fighter.career.seasonHistory, []);
+});
+
+test('recordFightResult without seasonContext (most call sites) never touches seasonHistory', () => {
+  const fighter = makeFighter();
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO' });
+  fighter.recordFightResult({ outcome: 'loss' });
+  assert.deepEqual(fighter.career.seasonHistory, []);
+});
+
+test('recordFightResult with seasonContext upserts a single (year, orgId) row, accumulating wins/losses/draws/koWins/subWins', () => {
+  const fighter = makeFighter();
+  const seasonContext = { year: 1, orgId: 'WFC' };
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO', seasonContext });
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'SUBMISSION', seasonContext });
+  fighter.recordFightResult({ outcome: 'loss', seasonContext });
+  fighter.recordFightResult({ outcome: 'draw', seasonContext });
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, seasonContext }); // decision win: no KO/sub credit
+
+  assert.equal(fighter.career.seasonHistory.length, 1);
+  const row = fighter.career.seasonHistory[0];
+  assert.deepEqual(row, { year: 1, orgId: 'WFC', wins: 3, losses: 1, draws: 1, koWins: 1, subWins: 1 });
+});
+
+test('TKO and DOCTOR_STOPPAGE both credit seasonHistory.koWins (same grouping as evaluateNickname\'s lifetime koWins/tkoWins)', () => {
+  const fighter = makeFighter();
+  const seasonContext = { year: 2, orgId: 'WFC' };
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'TKO', seasonContext });
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'DOCTOR_STOPPAGE', seasonContext });
+  assert.equal(fighter.career.seasonHistory[0].koWins, 2);
+  assert.equal(fighter.career.seasonHistory[0].subWins, 0);
+});
+
+test('recordFightResult with seasonContext creates separate rows per distinct year and per distinct orgId', () => {
+  const fighter = makeFighter();
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, seasonContext: { year: 1, orgId: 'WFC' } });
+  fighter.recordFightResult({ outcome: 'win', byFinish: false, seasonContext: { year: 2, orgId: 'WFC' } });
+  fighter.recordFightResult({ outcome: 'loss', seasonContext: { year: 2, orgId: 'Apex MMA' } });
+
+  assert.equal(fighter.career.seasonHistory.length, 3);
+  assert.equal(fighter.career.seasonHistory.find((r) => r.year === 1 && r.orgId === 'WFC').wins, 1);
+  assert.equal(fighter.career.seasonHistory.find((r) => r.year === 2 && r.orgId === 'WFC').wins, 1);
+  assert.equal(fighter.career.seasonHistory.find((r) => r.year === 2 && r.orgId === 'Apex MMA').losses, 1);
+});
+
+test('career.seasonHistory round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'KO', seasonContext: { year: 1, orgId: 'WFC' } });
+
+  const rebuilt = Fighter.fromJSON(fighter.toJSON());
+  assert.deepEqual(rebuilt.career.seasonHistory, [{ year: 1, orgId: 'WFC', wins: 1, losses: 0, draws: 0, koWins: 1, subWins: 0 }]);
+});
+
+test('getDistanceRating uses BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS to weight the six skills, matching getOverallRating\'s own weighted-sum pattern', () => {
+  const fighter = makeFighter({
+    attributes: { skills: { boxe: 80, jambes: 60, sol: 20, soumission: 10, cardio: 50, intelligence: 40 } },
+  });
+
+  const weights = BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS.STRIKING;
+  const expected = Math.round(
+    Object.keys(weights).reduce((total, key) => total + fighter.attributes.skills[key] * weights[key], 0)
+  );
+  assert.equal(fighter.getDistanceRating('STRIKING'), expected);
+});
+
+test('getDistanceRating throws on an invalid distance key', () => {
+  const fighter = makeFighter();
+  assert.throws(() => fighter.getDistanceRating('NOT_A_DISTANCE'), TypeError);
+});
+
+test('getDistanceRating is NOT adjusted by form/moral (unlike getOverallRating) — a burnt-out fighter reads the same technical rating', () => {
+  const fighter = makeFighter({ attributes: { skills: { boxe: 70, jambes: 70, sol: 70, soumission: 70, cardio: 70, intelligence: 70 } } });
+  const ratingAtFullForm = fighter.getDistanceRating('GROUND');
+
+  fighter.adjustForm(-999);
+  fighter.adjustMorale(-999);
+  const ratingAfterCrash = fighter.getDistanceRating('GROUND');
+
+  assert.equal(ratingAfterCrash, ratingAtFullForm);
+});
