@@ -403,6 +403,15 @@ class WebApp {
         const { savedAt } = SaveManager.load(AUTOSAVE_SLOT);
         this.dom.continueMeta.textContent = `Derniere sauvegarde : ${new Date(savedAt).toLocaleString('fr-FR')}`;
       } catch {
+        // An incompatible (e.g. pre-v1/unmigratable) or corrupted autosave
+        // must never block "Nouvelle Partie" — that flow never reads this
+        // slot at all (see _wireStartScreen's btnNewGame handler, which
+        // calls gameState.newGame() directly). Actively delete the dead
+        // slot here too, rather than only hiding "Continuer": leaving it in
+        // localStorage forever would keep failing this same load on every
+        // future boot for no benefit, and SaveManager.listSlots()/
+        // isCompatible() give no other cleanup path for it.
+        SaveManager.deleteSlot(AUTOSAVE_SLOT);
         this.dom.continueBlock.classList.add('hidden');
       }
     }

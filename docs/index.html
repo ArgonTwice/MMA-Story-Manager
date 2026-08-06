@@ -90,6 +90,19 @@
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('[web] Service worker registration failed:', error));
         });
+
+        // A tab left open across a deploy is still running the OLD app.js
+        // even after a new service worker takes control (self.clients.claim()
+        // in sw.js only affects future fetches, not already-executing code).
+        // Reload once when that happens so this tab actually picks up the
+        // new version instead of silently continuing to run stale JS —
+        // guarded against a reload loop with a one-shot flag.
+        let reloadedForNewServiceWorker = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloadedForNewServiceWorker) return;
+          reloadedForNewServiceWorker = true;
+          window.location.reload();
+        });
       }
     </script>
   </body>
