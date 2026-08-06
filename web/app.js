@@ -452,18 +452,27 @@ class WebApp {
 
   _wireStartScreen() {
     this.dom.btnNewGame.addEventListener('click', () => {
-      this.gameState.newGame({
-        gymName: this.dom.newGymName.value || undefined,
-        country: this.dom.newGymCountry.value || undefined,
-      });
-      bootstrapRoster(this.gameState.playerState, this.rng);
-      for (let i = 0; i < STARTING_ROSTER_STYLES.length; i += 1) telemetry.recordFighterRecruited();
-      this.gameState.worldState.addRivalGym({ name: 'Iron Fist Academy', reputation: 55 });
-      this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
-      this._isBrandNewGame = true;
-      this._enterGame();
-      this._autosave();
-      this._maybeShowFirstStepsOnboarding();
+      try {
+        this.gameState.newGame({
+          gymName: this.dom.newGymName.value || undefined,
+          country: this.dom.newGymCountry.value || undefined,
+        });
+        bootstrapRoster(this.gameState.playerState, this.rng);
+        for (let i = 0; i < STARTING_ROSTER_STYLES.length; i += 1) telemetry.recordFighterRecruited();
+        this.gameState.worldState.addRivalGym({ name: 'Iron Fist Academy', reputation: 55 });
+        this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
+        this._isBrandNewGame = true;
+        this._enterGame();
+        this._autosave();
+        this._maybeShowFirstStepsOnboarding();
+      } catch (error) {
+        // A failure here used to fail completely silently: the click handler
+        // would throw, the start screen would just sit there, and nothing in
+        // the UI ever told the player (or us) why "Commencer" appeared to do
+        // nothing. Surface it loudly instead of leaving the button inert.
+        console.error('[web] Echec de la creation de partie:', error);
+        window.alert(`Impossible de creer la partie : ${error?.message ?? error}`);
+      }
     });
 
     this.dom.btnContinue.addEventListener('click', () => {

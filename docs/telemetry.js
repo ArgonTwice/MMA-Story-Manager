@@ -35,7 +35,7 @@
  * ---------------------------------------------------------------------------
  */
 
-import BALANCE from '../data/balance.js';
+import BALANCE from './data/balance.js';
 
 const STORAGE_KEY = 'mma_gym_manager.telemetry';
 const TELEMETRY_VERSION = 1;

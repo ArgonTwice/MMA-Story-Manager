@@ -16,37 +16,37 @@
  * ---------------------------------------------------------------------------
  */
 
-import EventBus from '../core/EventBus.js';
-import SaveManager from '../core/SaveManager.js';
-import { GameState } from '../state/GameState.js';
-import { WORLD_EVENTS } from '../state/WorldState.js';
-import BALANCE from '../data/balance.js';
-import { getTraitDisplay } from '../data/traits.js';
-import Fighter from '../models/Fighter.js';
-import { generatePersonality } from '../engine/FighterGenerator.js';
-import { CombatEngine, COMBAT_STATES } from '../engine/CombatEngine.js';
-import { PersonalityEngine } from '../engine/PersonalityEngine.js';
-import { RelationshipEngine } from '../engine/RelationshipEngine.js';
-import { StoryEngine } from '../engine/StoryEngine.js';
-import { NarrativeEngine } from '../engine/NarrativeEngine.js';
-import { WorldMemory } from '../engine/WorldMemory.js';
-import { HistoryEngine } from '../engine/HistoryEngine.js';
-import { SocialEngine } from '../engine/SocialEngine.js';
+import EventBus from './core/EventBus.js';
+import SaveManager from './core/SaveManager.js';
+import { GameState } from './state/GameState.js';
+import { WORLD_EVENTS } from './state/WorldState.js';
+import BALANCE from './data/balance.js';
+import { getTraitDisplay } from './data/traits.js';
+import Fighter from './models/Fighter.js';
+import { generatePersonality } from './engine/FighterGenerator.js';
+import { CombatEngine, COMBAT_STATES } from './engine/CombatEngine.js';
+import { PersonalityEngine } from './engine/PersonalityEngine.js';
+import { RelationshipEngine } from './engine/RelationshipEngine.js';
+import { StoryEngine } from './engine/StoryEngine.js';
+import { NarrativeEngine } from './engine/NarrativeEngine.js';
+import { WorldMemory } from './engine/WorldMemory.js';
+import { HistoryEngine } from './engine/HistoryEngine.js';
+import { SocialEngine } from './engine/SocialEngine.js';
 
-import { generateAcademyPool, isAcademyDraftAvailable } from '../engine/AcademyEngine.js';
-import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from '../engine/StoryAnalyzer.js';
+import { generateAcademyPool, isAcademyDraftAvailable } from './engine/AcademyEngine.js';
+import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from './engine/StoryAnalyzer.js';
 
-import { GymHub } from '../ui/GymHub.js';
-import { WeeklyFlowController, WEEKLY_FLOW_PHASES } from '../ui/WeeklyFlowController.js';
-import { FightNightView } from '../ui/FightNightView.js';
-import { WorldFeed } from '../ui/WorldFeed.js';
-import { SeasonSummary } from '../ui/SeasonSummary.js';
+import { GymHub } from './ui/GymHub.js';
+import { WeeklyFlowController, WEEKLY_FLOW_PHASES } from './ui/WeeklyFlowController.js';
+import { FightNightView } from './ui/FightNightView.js';
+import { WorldFeed } from './ui/WorldFeed.js';
+import { SeasonSummary } from './ui/SeasonSummary.js';
 
 import telemetry from './telemetry.js';
 import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExporter.js';
 
-import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from '../engine/UndergroundEngine.js';
-import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from '../engine/GymStipulations.js';
+import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from './engine/UndergroundEngine.js';
+import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from './engine/GymStipulations.js';
 
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
@@ -452,18 +452,27 @@ class WebApp {
 
   _wireStartScreen() {
     this.dom.btnNewGame.addEventListener('click', () => {
-      this.gameState.newGame({
-        gymName: this.dom.newGymName.value || undefined,
-        country: this.dom.newGymCountry.value || undefined,
-      });
-      bootstrapRoster(this.gameState.playerState, this.rng);
-      for (let i = 0; i < STARTING_ROSTER_STYLES.length; i += 1) telemetry.recordFighterRecruited();
-      this.gameState.worldState.addRivalGym({ name: 'Iron Fist Academy', reputation: 55 });
-      this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
-      this._isBrandNewGame = true;
-      this._enterGame();
-      this._autosave();
-      this._maybeShowFirstStepsOnboarding();
+      try {
+        this.gameState.newGame({
+          gymName: this.dom.newGymName.value || undefined,
+          country: this.dom.newGymCountry.value || undefined,
+        });
+        bootstrapRoster(this.gameState.playerState, this.rng);
+        for (let i = 0; i < STARTING_ROSTER_STYLES.length; i += 1) telemetry.recordFighterRecruited();
+        this.gameState.worldState.addRivalGym({ name: 'Iron Fist Academy', reputation: 55 });
+        this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
+        this._isBrandNewGame = true;
+        this._enterGame();
+        this._autosave();
+        this._maybeShowFirstStepsOnboarding();
+      } catch (error) {
+        // A failure here used to fail completely silently: the click handler
+        // would throw, the start screen would just sit there, and nothing in
+        // the UI ever told the player (or us) why "Commencer" appeared to do
+        // nothing. Surface it loudly instead of leaving the button inert.
+        console.error('[web] Echec de la creation de partie:', error);
+        window.alert(`Impossible de creer la partie : ${error?.message ?? error}`);
+      }
     });
 
     this.dom.btnContinue.addEventListener('click', () => {
