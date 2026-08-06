@@ -32,6 +32,8 @@ import { WorldMemory } from '../engine/WorldMemory.js';
 import { HistoryEngine } from '../engine/HistoryEngine.js';
 import { SocialEngine } from '../engine/SocialEngine.js';
 
+import { generateAcademyPool, isAcademyDraftAvailable } from '../engine/AcademyEngine.js';
+
 import { GymHub } from '../ui/GymHub.js';
 import { WeeklyFlowController, WEEKLY_FLOW_PHASES } from '../ui/WeeklyFlowController.js';
 import { FightNightView } from '../ui/FightNightView.js';
@@ -180,11 +182,13 @@ class WebApp {
     this.yearStartMoney = 0;
     this.yearStartDay = 1;
     this._yearChangedUnsub = null;
+    this._yearChangedPending = false;
     this.lastWeekEconomy = null;
     this.journalTab = 'world';
     this.fightSetupDone = false;
     this.gameplanChoices = { A: {}, B: {} };
     this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
+    this.academyPool = [];
     this.dom = {};
   }
 
@@ -250,11 +254,13 @@ class WebApp {
       this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
       this._enterGame();
       this._autosave();
+      this._maybeOpenAcademyDraft();
     });
 
     this.dom.btnContinue.addEventListener('click', () => {
       this.gameState.load(AUTOSAVE_SLOT);
       this._enterGame();
+      this._maybeOpenAcademyDraft();
     });
 
     this.dom.btnShowSlots.addEventListener('click', () => {
@@ -273,6 +279,7 @@ class WebApp {
               onclick: () => {
                 this.gameState.load(slot);
                 this._enterGame();
+                this._maybeOpenAcademyDraft();
               },
             }),
           ])
@@ -312,9 +319,13 @@ class WebApp {
     this.selectedFighterIds = [];
     this.fightView = null;
     this.fightSetupDone = false;
+    this.academyPool = [];
 
+    this._yearChangedPending = false;
     this._yearChangedUnsub?.();
-    this._yearChangedUnsub = EventBus.subscribe(WORLD_EVENTS.YEAR_CHANGED, () => this._showSeasonSummary());
+    this._yearChangedUnsub = EventBus.subscribe(WORLD_EVENTS.YEAR_CHANGED, () => {
+      this._yearChangedPending = true;
+    });
 
     this.dom.startScreen.classList.add('hidden');
     this.dom.gameShell.classList.remove('hidden');
@@ -755,6 +766,11 @@ class WebApp {
     bits.push(`Semaine resolue — jour ${this.gameState.worldState.currentDay}. Solde net ${net >= 0 ? '+' : ''}${net}$.`);
     this._showToast(bits.join(' '));
     this._showPanel('hub');
+
+    if (this._yearChangedPending) {
+      this._yearChangedPending = false;
+      this._showSeasonSummary({ afterYearChange: true });
+    }
   }
 
   // ---- FIGHT NIGHT panel ----------------------------------------------------------
@@ -1063,7 +1079,7 @@ class WebApp {
     }
   }
 
-  _showSeasonSummary() {
+  _showSeasonSummary({ afterYearChange = false } = {}) {
     const seasonSummary = new SeasonSummary({ playerState: this.gameState.playerState, worldState: this.gameState.worldState });
     const summary = seasonSummary.build({
       weeklyResults: this.weeklyResultsThisYear,
@@ -1075,7 +1091,14 @@ class WebApp {
     const card = el('div', {}, [
       el('h2', { class: 'section-title', text: '\u{1F3C6} Bilan de saison' }),
       el('pre', { style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: seasonSummary.toText(summary) }),
-      el('button', { class: 'btn btn-gold btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: 'Fermer',
+        onclick: () => {
+          this._hideModal();
+          if (afterYearChange) this._maybeOpenAcademyDraft();
+        },
+      }),
     ]);
     this._showModal(card);
 
@@ -1083,6 +1106,77 @@ class WebApp {
     this.fightResultsThisYear = [];
     this.yearStartMoney = this.gameState.playerState.money;
     this.yearStartDay = this.gameState.worldState.currentDay;
+  }
+
+  // ---- ACADEMY DRAFT (free annual recruitment) -------------------------------------
+
+  _maybeOpenAcademyDraft() {
+    const { playerState, worldState } = this.gameState;
+    if (!isAcademyDraftAvailable(playerState, worldState.year)) return;
+    this.academyPool = generateAcademyPool({ playerState, rng: this.rng });
+    this._showAcademyDraftModal();
+  }
+
+  _showAcademyDraftModal() {
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F393} Draft Annuel de l\'Academie' }),
+      el('p', {
+        text: "Votre academie presente ses jeunes espoirs de l'annee. Promouvez-en un gratuitement dans votre effectif (1 choix par an), ou passez cette annee.",
+      }),
+      ...this.academyPool.map((candidate) => this._buildAcademyCandidateCard(candidate)),
+      el('button', {
+        class: 'btn btn-outline btn-block',
+        text: 'Passer cette annee',
+        onclick: () => this._resolveAcademyDraft(null),
+      }),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _buildAcademyCandidateCard(candidate) {
+    const { fighter, potentialLabel } = candidate;
+    const { playerState } = this.gameState;
+    const rosterFull = playerState.roster.length >= playerState.getRosterCapacity();
+
+    const skillsList = el(
+      'ul',
+      { class: 'skill-list' },
+      Object.entries(fighter.attributes.skills).map(([key, value]) => el('li', { class: 'skill-pill', text: `${SKILL_LABELS[key] ?? key} ${Math.round(value)}` }))
+    );
+
+    return el('div', { class: 'card' }, [
+      el('div', { class: 'fighter-head' }, [
+        el('div', {}, [
+          el('div', { class: 'fighter-name', text: fighter.identity.name }),
+          el('div', {
+            class: 'fighter-meta',
+            text: `${fighter.identity.style} — ${fighter.identity.age} ans — ${fighter.psychology.personality.archetype}`,
+          }),
+        ]),
+        el('span', { class: 'badge badge-nickname', text: potentialLabel }),
+      ]),
+      gaugeRow('Potentiel global', fighter.getOverallRating()),
+      skillsList,
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: rosterFull ? 'Effectif complet' : 'Promouvoir gratuitement (1/1)',
+        disabled: rosterFull ? 'disabled' : null,
+        onclick: () => this._resolveAcademyDraft(fighter),
+      }),
+    ]);
+  }
+
+  _resolveAcademyDraft(chosenFighter) {
+    const { playerState, worldState } = this.gameState;
+    if (chosenFighter) {
+      playerState.addFighter(chosenFighter);
+      this._showToast(`\u{1F393} ${chosenFighter.identity.name} rejoint votre effectif (draft academie).`);
+    }
+    playerState.recordAcademyDraftOffer(worldState.year);
+    this.academyPool = [];
+    this._hideModal();
+    this._renderAll();
+    this._autosave();
   }
 
   // ---- modal / toast -----------------------------------------------------------------

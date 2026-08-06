@@ -976,6 +976,42 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
+  // ACADEMY_DRAFT — free annual recruitment pool ("Draft Annuel de l'Academie")
+  // ---------------------------------------------------------------------
+  ACADEMY_DRAFT: {
+    /** How many academy prospects are generated each year (inclusive range). */
+    POOL_SIZE_MIN: 2,
+    POOL_SIZE_MAX: 3,
+
+    /** Free promotions the player may make from the pool per year — see engine/AcademyEngine.js. */
+    FREE_PICKS_PER_YEAR: 1,
+
+    MIN_AGE: 18,
+    MAX_AGE: 22,
+
+    /** Baseline skill mean before Reputation/facility bonuses — mirrors PROGRESSION.DEFAULT_STARTING_SKILL_VALUE. */
+    BASE_SKILL_MEAN: 30,
+    /** Random +/- spread applied per skill around the computed mean. */
+    SKILL_SPREAD: 12,
+
+    /** Skill-mean bonus per point of GYM.reputation (0-100) — a prestigious gym attracts sharper prospects. */
+    REPUTATION_SKILL_MEAN_BONUS_PER_POINT: 0.2,
+    /** Skill-mean bonus per PlayerState.equipLevel — better facilities train sharper prospects too. */
+    FACILITY_LEVEL_SKILL_MEAN_BONUS: 3,
+
+    /**
+     * Potential tiers rolled per prospect (highest tier whose minRoll the
+     * roll clears wins) — a display/generation concept only, never
+     * persisted on the Fighter itself (see engine/AcademyEngine.js).
+     */
+    POTENTIAL_TIERS: {
+      PROMETTEUR: { label: 'Prometteur', minRoll: 0, skillMeanBonus: 0 },
+      SOLIDE: { label: 'Solide', minRoll: 0.55, skillMeanBonus: 8 },
+      ELITE: { label: 'Elite', minRoll: 0.88, skillMeanBonus: 16 },
+    },
+  },
+
+  // ---------------------------------------------------------------------
   // FORM — fighter physical condition ("forme"), distinct from TRAINING.FATIGUE
   // ---------------------------------------------------------------------
   FORM: {

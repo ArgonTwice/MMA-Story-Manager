@@ -36,6 +36,7 @@ export const PLAYER_EVENTS = Object.freeze({
   STAFF_COACH_ADDED: 'staff:coach_added',
   STAFF_COACH_REMOVED: 'staff:coach_removed',
   SOCIAL_FEED_ENTRY_ADDED: 'social:feed_entry_added',
+  ACADEMY_DRAFT_OFFERED: 'academy:draft_offered',
 });
 
 let idCounter = 0;
@@ -61,6 +62,7 @@ export class PlayerState {
    * @param {(Fighter|Object)[]} [config.roster]
    * @param {Object[]} [config.coaches]
    * @param {Object[]} [config.socialFeed]
+   * @param {number|null} [config.lastAcademyDraftYear]
    */
   constructor(config = {}) {
     this.gymName = config.gymName ?? 'New Gym';
@@ -88,6 +90,9 @@ export class PlayerState {
 
     this.coaches = config.coaches ? config.coaches.map((coach) => ({ ...coach })) : [];
     this.socialFeed = config.socialFeed ? config.socialFeed.map((entry) => ({ ...entry })) : [];
+
+    /** Year (WorldState.year) the Academy Draft was last offered — see engine/AcademyEngine.js#isAcademyDraftAvailable. null before the first offer. */
+    this.lastAcademyDraftYear = config.lastAcademyDraftYear ?? null;
   }
 
   // ---- roster -----------------------------------------------------------
@@ -277,6 +282,20 @@ export class PlayerState {
     return true;
   }
 
+  // ---- academy draft ------------------------------------------------------------
+
+  /**
+   * Marks this year's Academy Draft window as used — whether the player
+   * promoted a prospect or skipped the offer — so it isn't presented again
+   * until the next year change. See engine/AcademyEngine.js#isAcademyDraftAvailable.
+   *
+   * @param {number} year - The current WorldState.year.
+   */
+  recordAcademyDraftOffer(year) {
+    this.lastAcademyDraftYear = year;
+    EventBus.publish(PLAYER_EVENTS.ACADEMY_DRAFT_OFFERED, { year });
+  }
+
   // ---- social feed ------------------------------------------------------------
 
   /**
@@ -319,6 +338,7 @@ export class PlayerState {
       roster: this.roster.map((fighter) => fighter.toJSON()),
       coaches: this.coaches.map((coach) => ({ ...coach })),
       socialFeed: this.socialFeed.map((entry) => ({ ...entry })),
+      lastAcademyDraftYear: this.lastAcademyDraftYear,
     };
   }
 
