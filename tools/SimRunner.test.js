@@ -200,7 +200,13 @@ test('combat telemetry is faithfully aggregated from every fight\'s CombatEngine
   assert.ok(c.takedownSuccess <= c.takedownAttempts);
   assert.equal(c.takedownDefended, c.takedownAttempts - c.takedownSuccess, 'every non-landed attempt across the run is defended by the opponent');
   assert.ok(c.takedownDefended > 0, 'sanity: a real contest should produce at least some defended attempts over 60 seasons');
-  assert.equal(c.submissionAttempts, c.takedownSuccess);
+
+  // Phase 4.1 ("Trinite des Styles"): a landed Clinch->Sol transition is
+  // ALSO a submission-eligible takedown (see CombatEngine#_computeRoundOffense's
+  // submission gating), so submissionAttempts now tracks BOTH GROUND-distance
+  // takedownSuccess and CLINCH-distance clinchTransitionSuccess, not
+  // takedownSuccess alone.
+  assert.equal(c.submissionAttempts, c.takedownSuccess + c.clinchTransitionSuccess);
   assert.ok(c.submissionSuccess <= c.submissionAttempts);
   assert.equal(
     c.countersTriggered,
@@ -211,6 +217,19 @@ test('combat telemetry is faithfully aggregated from every fight\'s CombatEngine
   assert.ok(c.decisionFights <= result.fights.total);
   assert.ok(c.groundDominantDecisionFights <= c.decisionFights);
 
+  // Phase 4.1 CLINCH telemetry: attempts/success/defended are internally
+  // consistent with the round counts, mirroring the GROUND assertions above.
+  assert.equal(c.clinchAttempts, c.clinchRounds, 'every CLINCH-distance round attempts exactly one Clinch->Sol transition');
+  assert.ok(c.clinchTransitionSuccess <= c.clinchAttempts);
+  assert.equal(
+    c.clinchDefended,
+    c.clinchAttempts - c.clinchTransitionSuccess,
+    'every non-landed clinch transition across the run is defended by the opponent'
+  );
+  assert.ok(c.clinchAttempts > 0, 'sanity: the coach-AI should sometimes pick CLINCH over 60 seasons');
+  assert.ok(c.decidedFights <= result.fights.total);
+  assert.ok(c.clinchWinFights <= c.decidedFights);
+
   for (const rate of [
     c.takedownSuccessRate,
     c.takedownDefenseRate,
@@ -220,6 +239,9 @@ test('combat telemetry is faithfully aggregated from every fight\'s CombatEngine
     c.clinchTimeShare,
     c.groundTimeShare,
     c.groundDominantWinRate,
+    c.clinchTransitionSuccessRate,
+    c.clinchEngagementRate,
+    c.clinchWinRate,
   ]) {
     assert.ok(rate === null || (rate >= 0 && rate <= 1), `rate ${rate} should be null or within [0, 1]`);
   }

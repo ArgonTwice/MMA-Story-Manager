@@ -486,6 +486,111 @@ test('final result payload carries A3 telemetry: takedownDefended is real data, 
   );
 });
 
+// ---- Phase 4.1: "Integration du Moteur de Clinch & Trinite des Styles" ----
+
+/**
+ * Same shape as makeMismatchedGrapplers, for the CLINCH->Sol transition
+ * contest specifically. seed=1 is empirically confirmed to fail A's very
+ * first Clinch->Sol transition against this sol(0) vs sol(100) mismatch;
+ * seed=5 is empirically confirmed to land it instead.
+ */
+function makeMismatchedClinchers() {
+  const wrestler = makeFighter('Whiffing Clincher', 40, { attributes: { skills: { sol: 0 } } });
+  const sprawler = makeFighter('Elite Sprawler', 40, { attributes: { skills: { sol: 100 } } });
+  return { wrestler, sprawler };
+}
+
+test('4.1: a CLINCH round always attempts a Clinch->Sol transition, and deals damage even when that transition fails', () => {
+  const { wrestler, sprawler } = makeMismatchedClinchers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+
+  const { log } = stepUntilRoundSimulated(engine);
+
+  assert.equal(engine.context.combatMetrics.A.clinchAttempts, 1);
+  assert.equal(engine.context.combatMetrics.A.clinchTransitionSuccess, 0, 'seed=1 with this skill gap is confirmed to whiff the transition round 1');
+  assert.ok(
+    log.damageDealt.A > 0,
+    'unlike a failed GROUND takedown (which zeroes rawDamage), a CLINCH round keeps dealing knees/elbows damage even on a failed transition'
+  );
+});
+
+test('4.1: a landed Clinch->Sol transition counts as a takedown for judge scoring and unlocks a submission attempt, just like a landed GROUND takedown', () => {
+  const { wrestler, sprawler } = makeMismatchedClinchers();
+  const engine = new CombatEngine({ rng: createSeededRng(5) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+
+  stepUntilRoundSimulated(engine);
+
+  assert.equal(engine.context.combatMetrics.A.clinchTransitionSuccess, 1, 'seed=5 with this skill gap is confirmed to land the transition round 1');
+  assert.equal(engine.context.combatMetrics.A.submissionAttempts, 1, 'a landed clinch transition gates a submission attempt exactly like a landed GROUND takedown');
+});
+
+test('4.1: a defended Clinch->Sol transition builds the SAME cumulative sprawl-defense stack (live.takedownDefenseBonus) that a stuffed GROUND takedown does', () => {
+  const { wrestler, sprawler } = makeMismatchedClinchers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+
+  assert.equal(engine.context.live.B.takedownDefenseBonus, 0);
+  stepUntilRoundSimulated(engine);
+
+  assert.ok(engine.context.live.B.takedownDefenseBonus > 0, 'defending a clinch transition should stack B\'s shared takedown-defense bonus');
+  assert.equal(engine.context.combatMetrics.B.clinchDefended, 1);
+  assert.equal(engine.context.live.B.counterWindowActive, true, 'a stuffed clinch transition grants the same one-round counter window a stuffed GROUND takedown does');
+});
+
+test('4.1: BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS gives Muay Thai a real, isolated output bonus while clinching, on top of (not instead of) the pre-existing STYLE_BONUSES layer', () => {
+  function avgClinchDamage(style, seeds) {
+    let total = 0;
+    for (const seed of seeds) {
+      const a = makeFighter('A', 50, { identity: { style } });
+      const b = makeFighter('B', 50, {});
+      const engine = new CombatEngine({ rng: createSeededRng(seed) });
+      engine.setupMatch(a, b, 'WFC', false);
+      engine.setGameplan('A', { target: 'HEAD', distance: 'CLINCH', tempo: 'BALANCED' });
+      engine.setGameplan('B', { target: 'HEAD', distance: 'CLINCH', tempo: 'BALANCED' });
+      stepUntilRoundSimulated(engine);
+      total += engine.context.combatMetrics.A.clinchDamageDealt;
+    }
+    return total / seeds.length;
+  }
+
+  const seeds = Array.from({ length: 150 }, (_, i) => i + 1);
+  const muayThaiAvg = avgClinchDamage('Muay Thai', seeds);
+  const freestyleAvg = avgClinchDamage('Freestyle', seeds);
+  const expectedMultiplier = BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS['Muay Thai'];
+
+  assert.ok(
+    Math.abs(muayThaiAvg / freestyleAvg - expectedMultiplier) < 0.02,
+    `expected Muay Thai's average clinch damage to be ~${expectedMultiplier}x Freestyle's, got ${muayThaiAvg / freestyleAvg}`
+  );
+});
+
+test('4.1: final result payload carries Clinch telemetry (clinchAttempts/clinchTransitionSuccess/clinchDefended) alongside the pre-existing GROUND fields, without altering them', () => {
+  const { wrestler, sprawler } = makeMismatchedClinchers();
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+
+  engine.setupMatch(wrestler, sprawler, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  assert.ok(result.combatMetrics.A.clinchAttempts >= 0);
+  assert.ok(result.combatMetrics.A.clinchTransitionSuccess <= result.combatMetrics.A.clinchAttempts);
+  assert.ok(result.combatMetrics.B.clinchDefended >= 0);
+  // B only ever picks GROUND in this scenario, so it should have zero clinch activity of its own.
+  assert.equal(result.combatMetrics.B.clinchAttempts, 0);
+});
+
 // ---------------------------------------------------------------------------
 // Phase 3.1 v1: Readiness gauge (staminaMax/momentum curve at weigh-in)
 // ---------------------------------------------------------------------------

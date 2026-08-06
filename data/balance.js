@@ -15,6 +15,7 @@
  *                           existing saves / stats comparisons).
  *   BALANCE.PROGRESSION  - fighter leveling, XP, attribute growth
  *   BALANCE.COMBAT       - fight simulation math (damage, stamina, odds)
+ *     BALANCE.COMBAT.CLINCH - Phase 4.1 Clinch position mechanics (Clinch->Sol transition rate, damage weight, fatigue cost, per-style bonuses)
  *   BALANCE.ECONOMY      - money, prices, salaries, gym running costs
  *   BALANCE.INJURIES     - injury chance, severity, recovery time
  *   BALANCE.MORALE       - morale gain/loss events and thresholds
@@ -77,7 +78,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.9.0',
+  VERSION: '1.10.0',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -348,6 +349,36 @@ const BALANCE = {
       'Jiu-Jitsu Bresilien': { distance: 'GROUND', outputMultiplier: 1.05, submissionChanceMultiplier: 1.3 },
       Freestyle: { outputMultiplier: 1.0 },
       DEFAULT: { outputMultiplier: 1.0 },
+    },
+
+    /**
+     * CLINCH — Phase 4.1 ("Integration du Moteur de Clinch & Trinite des
+     * Styles"): the intermediate position between STRIKING and GROUND.
+     * CLINCH already existed as a third GAMEPLAN.distance choice (its own
+     * skill weights/stamina-cost key/unconditional judge control-time
+     * credit) since Phase 3.0 — this section adds the position's own
+     * mechanics on top: a real Clinch->Sol transition contest
+     * (CombatEngine#_computeClinchTakedownChance, same shape as the
+     * existing GROUND takedown contest but its own base rate), a damage
+     * weight (knees/elbows read as denser than a stalled hold but less
+     * clean than open striking), an extra per-round fatigue cost, and
+     * style-specific output bonuses layered on top of STYLE_BONUSES above
+     * (Muay Thai/Lutte's own *primary* distance affinity stays
+     * STRIKING/GROUND respectively — these are a supplementary clinch-only
+     * multiplier, not a redefinition of their primary style).
+     */
+    CLINCH: {
+      /** Base chance a CLINCH round's grappling exchange transitions into a landed takedown/trip (Clinch -> Sol), before the same sol skill-delta scaling and cumulative sprawl defenseBonus the GROUND contest already uses. */
+      TAKEDOWN_CLINCH_SUCCESS_CHANCE: 0.6,
+      /** Multiplier on a CLINCH round's raw damage output (applied at the same point styleDistanceMultiplier is, in CombatEngine#_computeRoundOffense). */
+      CLINCH_DAMAGE_WEIGHT: 0.75,
+      /** Extra stamina cost per CLINCH round, on top of the existing STAMINA.COST_PER_GRAPPLE_EXCHANGE base — fight-local Stamina, distinct from Phase 3.1's weekly-persisted PHYSICAL_FATIGUE gauge (never touched mid-fight). */
+      CLINCH_FATIGUE_PER_ROUND: 15,
+      /** Supplementary output multiplier for a CLINCH round specifically, keyed by Fighter.identity.style — styles without an entry here get no bonus (multiplier 1). */
+      STYLE_CLINCH_MULTIPLIERS: {
+        'Muay Thai': 1.2,
+        Lutte: 1.15,
+      },
     },
 
     /**

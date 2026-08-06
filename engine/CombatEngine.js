@@ -740,6 +740,9 @@ export class CombatEngine {
       // Cumulative, fight-long defense bonus stacked one
       // SPRAWL_DEFENSE_BONUS_PER_STUFF at a time for every takedown this
       // fighter stuffs — never resets mid-match (anti-spam). See A3.3.
+      // Phase 4.1: also stacked for every stuffed Clinch->Sol transition —
+      // one shared "how hard is this fighter to take down, regardless of
+      // route" stat, not two separate ones.
       takedownDefenseBonus: 0,
     };
   }
@@ -882,6 +885,26 @@ export class CombatEngine {
   }
 
   /**
+   * Phase 4.1: the Clinch->Sol transition contest — same shape as
+   * _computeTakedownChance (same sol skill delta, same cumulative A3.3
+   * sprawl defenseBonus a defender builds regardless of which route an
+   * opponent tries to take them down from), but its own base rate
+   * (CLINCH.TAKEDOWN_CLINCH_SUCCESS_CHANCE) since a clinch-entered
+   * takedown/trip is mechanically distinct from a shot from distance.
+   * @param {Fighter} attacker
+   * @param {Fighter} defender
+   * @param {number} [defenseBonus=0]
+   * @returns {number}
+   */
+  _computeClinchTakedownChance(attacker, defender, defenseBonus = 0) {
+    const acc = BALANCE.COMBAT.ACCURACY;
+    const raw =
+      BALANCE.COMBAT.CLINCH.TAKEDOWN_CLINCH_SUCCESS_CHANCE +
+      acc.SKILL_DELTA_CHANCE_SCALING * (attacker.attributes.skills.sol - defender.attributes.skills.sol);
+    return clamp(raw - defenseBonus, acc.MIN_HIT_CHANCE, acc.MAX_HIT_CHANCE);
+  }
+
+  /**
    * Resolves one fighter's offensive output for the current round: raw
    * damage, stamina cost, KO-chance influence, and takedown/submission
    * attempt/result. Reads only pre-round state so A and B can be computed
@@ -912,6 +935,12 @@ export class CombatEngine {
     const styleBonus = this._getStyleBonus(attacker);
     const styleDistanceMultiplier = styleBonus.distance === plan.distance ? styleBonus.outputMultiplier ?? 1 : 1;
     const styleTargetMultiplier = styleBonus.targetMultipliers?.[plan.target] ?? 1;
+    // Phase 4.1: a supplementary CLINCH-only output bonus, layered on top
+    // of styleDistanceMultiplier above rather than replacing it — Muay
+    // Thai/Lutte's own *primary* distance affinity (STRIKING/GROUND) is
+    // untouched, this only applies while actually clinching.
+    const styleClinchMultiplier =
+      plan.distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS[attacker.identity.style] ?? 1 : 1;
 
     const tempoMods = BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS[plan.tempo];
     const formMultiplier = attackerLive.forme / BALANCE.FORM.MAX;
@@ -957,9 +986,24 @@ export class CombatEngine {
     }
     const takedownFailed = takedownAttempted && !takedownSuccess;
 
+    // Phase 4.1: a CLINCH round always throws knees/elbows (rawDamage is
+    // never zeroed out below, unlike a failed GROUND shot) — only the
+    // *transition* into a landed takedown is gated behind this roll, using
+    // the same defenseBonus sprawl stack GROUND's contest already builds.
+    let clinchAttempted = false;
+    let clinchTakedownLanded = false;
+    if (plan.distance === 'CLINCH') {
+      clinchAttempted = true;
+      const clinchChance = this._computeClinchTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
+      clinchTakedownLanded = this.rng() < clinchChance;
+    }
+    const clinchTransitionFailed = clinchAttempted && !clinchTakedownLanded;
+    const transitionFailed = takedownFailed || clinchTransitionFailed;
+
     const output =
       offenseRaw *
       styleDistanceMultiplier *
+      styleClinchMultiplier *
       styleTargetMultiplier *
       tempoMods.outputMultiplier *
       formMultiplier *
@@ -974,6 +1018,7 @@ export class CombatEngine {
     const overallGap = attacker.getOverallRating() - defender.getOverallRating();
     const advantageMultiplier = 1 + overallGap * BALANCE.COMBAT.DAMAGE.ATTRIBUTE_ADVANTAGE_SCALING;
     const defenderDamageTakenMultiplier = this._getPerkMultiplier(defender, 'damageTakenMultiplier');
+    const clinchDamageWeight = plan.distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_DAMAGE_WEIGHT : 1;
 
     const rawDamage = takedownFailed
       ? 0
@@ -981,6 +1026,7 @@ export class CombatEngine {
           0,
           output *
             BALANCE.COMBAT.GAMEPLAN.ROUND_DAMAGE_SCALING *
+            clinchDamageWeight *
             targetEffects.damageMultiplier *
             advantageMultiplier *
             tempoMods.damageTakenMultiplier *
@@ -991,12 +1037,14 @@ export class CombatEngine {
     const staminaCostKey = BALANCE.COMBAT.GAMEPLAN.DISTANCE_STAMINA_COST_KEY[plan.distance];
     const staminaCostBase = BALANCE.COMBAT.STAMINA[staminaCostKey];
     const perkStaminaMultiplier = this._getPerkMultiplier(attacker, 'staminaCostMultiplier');
-    const failureStaminaPenalty = takedownFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
-    const staminaCost = staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier + failureStaminaPenalty;
+    const failureStaminaPenalty = transitionFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
+    const clinchFatiguePenalty = plan.distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_FATIGUE_PER_ROUND : 0;
+    const staminaCost =
+      staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier + failureStaminaPenalty + clinchFatiguePenalty;
 
     let submissionAttempted = false;
     let submissionSuccess = false;
-    if (takedownAttempted && takedownSuccess) {
+    if ((takedownAttempted && takedownSuccess) || clinchTakedownLanded) {
       submissionAttempted = true;
       const sub = BALANCE.COMBAT.SUBMISSIONS;
       const attackerGrappling = (attacker.attributes.skills.sol + attacker.attributes.skills.soumission) / 2;
@@ -1026,10 +1074,12 @@ export class CombatEngine {
       submissionSuccess,
       takedownAttempted,
       takedownSuccess,
+      clinchAttempted,
+      clinchTakedownLanded,
       counterWindowConsumed: counterWindowActive,
-      momentumDelta: takedownFailed ? -risk.FAILURE_MOMENTUM_PENALTY : 0,
-      grantsCounterWindowToDefender: takedownFailed,
-      grantsSprawlBonusToDefender: takedownFailed,
+      momentumDelta: transitionFailed ? -risk.FAILURE_MOMENTUM_PENALTY : 0,
+      grantsCounterWindowToDefender: transitionFailed,
+      grantsSprawlBonusToDefender: transitionFailed,
     };
   }
 
@@ -1183,7 +1233,12 @@ export class CombatEngine {
   _computeScoreBreakdown(offenseSelf) {
     const scoring = BALANCE.COMBAT.SCORING;
     const scale = scoring.NON_STRIKE_METRIC_SCALE;
-    const takedownLanded = offenseSelf.distance === 'GROUND' && offenseSelf.takedownSuccess;
+    // Phase 4.1: a landed Clinch->Sol transition counts as a takedown for
+    // judge-scoring purposes too — a clinch trip/throw is mechanically a
+    // takedown, just entered via a different route than a GROUND shot.
+    const takedownLanded =
+      (offenseSelf.distance === 'GROUND' && offenseSelf.takedownSuccess) ||
+      (offenseSelf.distance === 'CLINCH' && offenseSelf.clinchTakedownLanded);
     const takedowns = takedownLanded ? 1 : 0;
     const controlTime = offenseSelf.distance === 'CLINCH' || takedownLanded ? 1 : 0;
     const submissionAttempts = offenseSelf.submissionAttempted ? 1 : 0;
@@ -1273,6 +1328,16 @@ export class CombatEngine {
       groundRounds: 0,
       standingDamageDealt: 0,
       groundDamageDealt: 0,
+      // Phase 4.1 ("Trinite des Styles") CLINCH telemetry, parallel to the
+      // GROUND fields above: clinchAttempts/clinchTransitionSuccess track
+      // the Clinch->Sol transition contest specifically (distinct from
+      // takedownAttempts/takedownSuccess, which stay GROUND-distance-only
+      // for backward comparability with the pre-existing "TAKEDOWNS &
+      // CONTROLE" telemetry); clinchDefended mirrors takedownDefended.
+      clinchDamageDealt: 0,
+      clinchAttempts: 0,
+      clinchTransitionSuccess: 0,
+      clinchDefended: 0,
       submissionAttempts: 0,
       submissionSuccess: 0,
       countersTriggered: 0,
@@ -1403,6 +1468,22 @@ export class CombatEngine {
       c.combatMetrics.A.counterWindowsGranted += 1;
       c.combatMetrics.A.sprawlStacksEarned += 1;
     }
+
+    // Phase 4.1: the same risk-loop mechanics (A3.1-A3.3), reused for a
+    // stuffed Clinch->Sol transition — tracked in its own clinchDefended
+    // counter, kept separate from takedownDefended (GROUND-distance only)
+    // for backward comparability with the pre-existing "TAKEDOWNS &
+    // CONTROLE" telemetry.
+    if (offenseA.clinchAttempted && !offenseA.clinchTakedownLanded) {
+      c.combatMetrics.B.clinchDefended += 1;
+      c.combatMetrics.B.counterWindowsGranted += 1;
+      c.combatMetrics.B.sprawlStacksEarned += 1;
+    }
+    if (offenseB.clinchAttempted && !offenseB.clinchTakedownLanded) {
+      c.combatMetrics.A.clinchDefended += 1;
+      c.combatMetrics.A.counterWindowsGranted += 1;
+      c.combatMetrics.A.sprawlStacksEarned += 1;
+    }
   }
 
   /**
@@ -1419,6 +1500,9 @@ export class CombatEngine {
       metrics.standingDamageDealt += offense.rawDamage;
     } else if (offense.distance === 'CLINCH') {
       metrics.clinchRounds += 1;
+      metrics.clinchDamageDealt += offense.rawDamage;
+      metrics.clinchAttempts += 1;
+      if (offense.clinchTakedownLanded) metrics.clinchTransitionSuccess += 1;
     } else if (offense.distance === 'GROUND') {
       metrics.groundRounds += 1;
       metrics.groundDamageDealt += offense.rawDamage;
@@ -1436,11 +1520,16 @@ export class CombatEngine {
     metrics.judgePointsFromDamage += breakdown.damagePoints;
     metrics.judgePointsFromGroundControl += breakdown.groundControlPoints;
 
-    const takedownLanded = offense.distance === 'GROUND' && offense.takedownSuccess;
-    const takedownFailed = offense.takedownAttempted && !offense.takedownSuccess;
+    // Phase 4.1: a landed Clinch->Sol transition counts as a takedown here
+    // too (see _computeScoreBreakdown's own identical extension); transitionFailed
+    // covers both a defended GROUND shot and a stuffed CLINCH transition.
+    const takedownLanded =
+      (offense.distance === 'GROUND' && offense.takedownSuccess) || (offense.distance === 'CLINCH' && offense.clinchTakedownLanded);
+    const transitionFailed =
+      (offense.takedownAttempted && !offense.takedownSuccess) || (offense.clinchAttempted && !offense.clinchTakedownLanded);
     const wonControl = offense.distance === 'CLINCH' || takedownLanded;
-    const staminaPenalty = takedownFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
-    const momentumPenalty = takedownFailed ? risk.FAILURE_MOMENTUM_PENALTY : 0;
+    const staminaPenalty = transitionFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
+    const momentumPenalty = transitionFailed ? risk.FAILURE_MOMENTUM_PENALTY : 0;
     const damageTaken = opponentOffense.rawDamage;
 
     // Test A3: GROUND rounds now carry a real pass/fail roll (takedownSuccess),
@@ -1477,7 +1566,7 @@ export class CombatEngine {
       );
     }
 
-    if (takedownFailed) metrics.momentumLost += momentumPenalty;
+    if (transitionFailed) metrics.momentumLost += momentumPenalty;
     if (offense.counterWindowConsumed) metrics.counterWindowsUsed += 1;
 
     const tempoBucket = metrics.tempoMetrics[offense.tempo];

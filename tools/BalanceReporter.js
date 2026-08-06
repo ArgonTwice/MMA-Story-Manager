@@ -167,6 +167,37 @@ function renderHealthSection(result) {
 /** Dead Week Rate target (Phase 3.2 spec). */
 const DEAD_WEEK_RATE_MAX = 0.15;
 
+/**
+ * Phase 4.1 ("Integration du Moteur de Clinch & Trinite des Styles") spec
+ * targets. WINRATE_MIN/MAX is the spec's own explicit "Clinch Winrate
+ * (Cible 10-15%)" band, checked against SimRunner#finalizeCombatMetrics's
+ * clinchWinRate (share of ALL decided fights where the eventual winner
+ * landed >=1 Clinch->Sol transition — see tools/SimRunner.js for why this
+ * framing was chosen over groundDominantWinRate's judge-points-dominance
+ * pattern).
+ *
+ * STYLE_NEUTRALITY_MIN/MAX is this reporter's own operationalization of the
+ * spec's qualitative "neutralite des autres styles" requirement — no exact
+ * numeric target was specified. It is deliberately a wide "no style
+ * collapsed or ran away with the metagame" floor/ceiling rather than a
+ * tight band centered on 50%: an empirical same-seed A/B (CLINCH_ENGAGEMENT_CHANCE
+ * forced to 0 vs its tuned 0.085/0.15 value, 5 seeds x 1000 seasons each,
+ * done during this feature's own tuning pass) showed every style's winrate
+ * already swings ~32%-60% run-to-run from ordinary matchmaking variance
+ * *before* Clinch is even reachable (Freestyle in particular already runs
+ * structurally low, ~38-44%, for reasons predating Phase 4.1 entirely) — a
+ * tight band would flag that pre-existing noise as a Clinch regression it
+ * isn't. 25%/70% is chosen instead as a genuine "something broke" floor/
+ * ceiling, exactly like DEAD_WEEK_RATE_MAX/EVENT_CHOICE_MAX_SHARE above are
+ * this file's own reasonable operationalizations of their own specs.
+ */
+const CLINCH_TARGETS = Object.freeze({
+  WINRATE_MIN: 0.1,
+  WINRATE_MAX: 0.15,
+  STYLE_NEUTRALITY_MIN: 0.25,
+  STYLE_NEUTRALITY_MAX: 0.7,
+});
+
 function renderFunDetectorSection(result) {
   const f = result.fun;
   const n = result.narrative;
@@ -195,6 +226,21 @@ function renderTakedownsSubsection(result) {
   lines.push(`Tentatives de takedown (distance GROUND choisie) : ${formatNumber(c.takedownAttempts)}`);
   lines.push(`Taux de reussite des takedowns                    : ${formatPercent(c.takedownSuccessRate)}`);
   lines.push(`Taux de defense des takedowns                     : ${formatPercent(c.takedownDefenseRate)}`);
+  return lines.join('\n');
+}
+
+/**
+ * Phase 4.1 ("Trinite des Styles"): the Clinch->Sol transition contest,
+ * same shape as renderTakedownsSubsection above but scoped to CLINCH-
+ * distance rounds specifically (see engine/CombatEngine.js#_computeClinchTakedownChance).
+ */
+function renderClinchSubsection(result) {
+  const c = result.combat;
+  const lines = [renderSectionTitle('\u{1F94A} CLINCH')];
+  lines.push(`Tentatives de transition Clinch -> Sol (distance CLINCH choisie) : ${formatNumber(c.clinchAttempts)}`);
+  lines.push(`Taux de reussite de la transition                                : ${formatPercent(c.clinchTransitionSuccessRate)}`);
+  lines.push(`Transitions defendues                                            : ${formatNumber(c.clinchDefended)}`);
+  lines.push(`Degats moyens par round de Clinch                                : ${formatDecimal(c.avgClinchDamagePerRound)}`);
   return lines.join('\n');
 }
 
@@ -257,6 +303,7 @@ function renderCombatTelemetrySection(result) {
   return [
     renderCombatTelemetryHeader(),
     renderTakedownsSubsection(result),
+    renderClinchSubsection(result),
     renderTimeSplitSubsection(result),
     renderSubmissionsSubsection(result),
     renderJudgeBiasSubsection(result),
@@ -744,6 +791,55 @@ function renderDramaEngineSection(result) {
   ].join('\n');
 }
 
+/**
+ * Phase 4.1 validation section — same shape as renderDramaValidationSubsection
+ * (Phase 3.2's own "PHASE X — VALIDATION" pattern): a PASS/FAIL table against
+ * the spec's own stated targets, plus a per-style neutrality check.
+ */
+function renderClinchValidationSection(result) {
+  const c = result.combat;
+  const metaHealth = result.metaHealth.overallIndex;
+
+  const winratePass = c.clinchWinRate !== null && c.clinchWinRate >= CLINCH_TARGETS.WINRATE_MIN && c.clinchWinRate <= CLINCH_TARGETS.WINRATE_MAX;
+  const metaHealthPass = metaHealth !== null && metaHealth >= DRAMA_TARGETS.META_HEALTH_MIN;
+
+  const lines = [renderSectionTitle('\u{1F94A} PHASE 4.1 — VALIDATION (Clinch & Meta Health)')];
+  const headers = ['Metrique', 'Mesure', 'Cible', 'Statut'];
+  const rows = [
+    [
+      'Clinch Winrate',
+      formatPercent(c.clinchWinRate, 1),
+      `${formatPercent(CLINCH_TARGETS.WINRATE_MIN, 0)} - ${formatPercent(CLINCH_TARGETS.WINRATE_MAX, 0)}`,
+      winratePass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+    ['Clinch Engagement Rate (% de rounds en Clinch)', formatPercent(c.clinchEngagementRate, 1), 'informatif (pas de cible chiffree)', 'N/A'],
+    [
+      'Meta Health Index',
+      metaHealth === null ? 'N/A' : `${formatNumber(metaHealth)}/100`,
+      `>= ${DRAMA_TARGETS.META_HEALTH_MIN}/100`,
+      metaHealthPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+  ];
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+
+  const styleRows = Object.entries(result.styles).map(([style, s]) => {
+    const total = s.wins + s.losses + s.draws;
+    const neutral =
+      s.winRate === null || total === 0
+        ? true
+        : s.winRate >= CLINCH_TARGETS.STYLE_NEUTRALITY_MIN && s.winRate <= CLINCH_TARGETS.STYLE_NEUTRALITY_MAX;
+    return [style, formatNumber(total), formatPercent(s.winRate), neutral ? 'NEUTRE' : 'A SURVEILLER'];
+  });
+  const stylePass = styleRows.every((row) => row[3] === 'NEUTRE');
+  lines.push(`Neutralite des styles (winrate attendu dans [${formatPercent(CLINCH_TARGETS.STYLE_NEUTRALITY_MIN, 0)}, ${formatPercent(CLINCH_TARGETS.STYLE_NEUTRALITY_MAX, 0)}]) :`);
+  lines.push(renderTable(['Style', 'Combats', 'Winrate', 'Statut'], styleRows));
+  lines.push('');
+  lines.push(`Bilan neutralite des styles : ${stylePass ? 'DANS LA CIBLE (aucun style destabilise)' : 'HORS CIBLE (voir styles A SURVEILLER ci-dessus)'}`);
+
+  return lines.join('\n');
+}
+
 function renderFightsSection(result) {
   const lines = [renderSectionTitle('COMBATS')];
   lines.push(`Total de combats simules : ${formatNumber(result.fights.total)}`);
@@ -1151,6 +1247,7 @@ export function formatReport(result) {
     renderMetaHealthDashboard(result),
     renderWeeklyPlanningSection(result),
     renderDramaEngineSection(result),
+    renderClinchValidationSection(result),
     renderVersionHistorySection(result),
     renderNotesSection(result),
     '',

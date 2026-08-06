@@ -101,6 +101,16 @@ const SIM_DEFAULTS = Object.freeze({
   FIGHT_CHANCE_PER_PAIR_PER_WEEK: 0.18,
   ORG_ID: 'WFC',
   HARD_TRAINING_CHANCE: 0.2,
+  /**
+   * Phase 4.1: base chance any style's coach-AI picks CLINCH for a given
+   * round instead of its style's primary distance (STRIKING/GROUND).
+   * Without this, BALANCE.COMBAT.STYLE_BONUSES[*].distance is always
+   * 'STRIKING' or 'GROUND' — never 'CLINCH' — so the entire Clinch feature
+   * would be mechanically unreachable by every simulated fight.
+   */
+  CLINCH_ENGAGEMENT_CHANCE: 0.085,
+  /** Boosted CLINCH pick chance for styles with a BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS entry (Muay Thai, Lutte) — they lean into the position more than a generalist would. */
+  CLINCH_ENGAGEMENT_CHANCE_SPECIALIST: 0.15,
 });
 
 function pick(rng, list) {
@@ -157,7 +167,11 @@ function generateSkills(rng, styleKey) {
  */
 function gameplanForStyle(styleKey, rng) {
   const styleBonus = BALANCE.COMBAT.STYLE_BONUSES[styleKey] ?? BALANCE.COMBAT.STYLE_BONUSES.DEFAULT;
-  const distance = styleBonus.distance ?? 'STRIKING';
+  const isClinchSpecialist = Boolean(BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS[styleKey]);
+  const clinchChance = isClinchSpecialist
+    ? SIM_DEFAULTS.CLINCH_ENGAGEMENT_CHANCE_SPECIALIST
+    : SIM_DEFAULTS.CLINCH_ENGAGEMENT_CHANCE;
+  const distance = rng() < clinchChance ? 'CLINCH' : styleBonus.distance ?? 'STRIKING';
 
   let target = 'HEAD';
   if (styleBonus.targetMultipliers) {
@@ -331,6 +345,13 @@ function emptyCombatMetricsAccumulator() {
     groundRounds: 0,
     standingDamageDealt: 0,
     groundDamageDealt: 0,
+    // Phase 4.1 ("Trinite des Styles") CLINCH telemetry.
+    clinchDamageDealt: 0,
+    clinchAttempts: 0,
+    clinchTransitionSuccess: 0,
+    clinchDefended: 0,
+    decidedFights: 0,
+    clinchWinFights: 0,
     submissionAttempts: 0,
     submissionSuccess: 0,
     countersTriggered: 0,
@@ -506,6 +527,10 @@ function recordCombatMetrics(stats, result) {
     combat.groundRounds += m.groundRounds;
     combat.standingDamageDealt += m.standingDamageDealt;
     combat.groundDamageDealt += m.groundDamageDealt;
+    combat.clinchDamageDealt += m.clinchDamageDealt;
+    combat.clinchAttempts += m.clinchAttempts;
+    combat.clinchTransitionSuccess += m.clinchTransitionSuccess;
+    combat.clinchDefended += m.clinchDefended;
     combat.submissionAttempts += m.submissionAttempts;
     combat.submissionSuccess += m.submissionSuccess;
     combat.countersTriggered += m.countersTriggered;
@@ -542,6 +567,21 @@ function recordCombatMetrics(stats, result) {
       combat.groundDominantDecisionFights += 1;
       const groundDominantKey = groundControlA > groundControlB ? 'A' : 'B';
       if (result.winner === groundDominantKey) combat.groundDominantWins += 1;
+    }
+  }
+
+  // Phase 4.1 "Clinch Winrate": share of ALL decided fights (any method,
+  // not just decisions) where the eventual winner landed at least one
+  // successful Clinch->Sol transition during the fight — "how often did
+  // the Clinch position meaningfully contribute to this specific win",
+  // distinct from groundDominantWinRate's judge-points-dominance framing
+  // above (that pattern typically runs 40-90%, implausible for the spec's
+  // stated 10-15% target; this framing is far more likely to land there
+  // for a supplementary tactical option no style is built around).
+  if (result.winner !== null) {
+    combat.decidedFights += 1;
+    if (result.combatMetrics[result.winner].clinchTransitionSuccess > 0) {
+      combat.clinchWinFights += 1;
     }
   }
 }
@@ -989,6 +1029,26 @@ function finalizeCombatMetrics(combat) {
     groundDominantDecisionFights: combat.groundDominantDecisionFights,
     groundDominantWinRate:
       combat.groundDominantDecisionFights > 0 ? combat.groundDominantWins / combat.groundDominantDecisionFights : null,
+    // Phase 4.1 ("Trinite des Styles"): Clinch-specific telemetry, parallel
+    // to the takedown/ground fields above but scoped to CLINCH-distance
+    // rounds only. clinchEngagementRate is an explicit alias of the
+    // pre-existing clinchTimeShare above ("% de rounds passant par le
+    // Clinch" from the spec), surfaced under the name the spec's own
+    // BalanceReporter section asks for. clinchWinRate uses the
+    // decidedFights/clinchWinFights accumulator (see SimRunner#recordCombatMetrics)
+    // rather than groundDominantWinRate's judge-points-dominance framing,
+    // since that pattern runs 40-90% historically — implausible for the
+    // spec's stated 10-15% Clinch Winrate target.
+    clinchDamageDealt: combat.clinchDamageDealt,
+    clinchAttempts: combat.clinchAttempts,
+    clinchTransitionSuccess: combat.clinchTransitionSuccess,
+    clinchDefended: combat.clinchDefended,
+    clinchTransitionSuccessRate: combat.clinchAttempts > 0 ? combat.clinchTransitionSuccess / combat.clinchAttempts : null,
+    avgClinchDamagePerRound: combat.clinchRounds > 0 ? combat.clinchDamageDealt / combat.clinchRounds : null,
+    clinchEngagementRate: totalRounds > 0 ? combat.clinchRounds / totalRounds : null,
+    decidedFights: combat.decidedFights,
+    clinchWinFights: combat.clinchWinFights,
+    clinchWinRate: combat.decidedFights > 0 ? combat.clinchWinFights / combat.decidedFights : null,
     actionMetrics: finalizeActionMetrics(combat.actionMetrics),
     tempoMetrics: finalizeTempoMetrics(combat.tempoMetrics),
   };
