@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="description" content="MMA Gym Manager — gerez votre salle de MMA sur mobile." />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="MMA Gym" />
+    <title>MMA Gym Manager — Mobile</title>
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A5%8A%3C/text%3E%3C/svg%3E" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.svg" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ================= START SCREEN ================= -->
+      <section id="startScreen" class="screen">
+        <div class="start-panel">
+          <div class="brand-mark">🥊</div>
+          <h1 class="brand">MMA GYM MANAGER</h1>
+          <p class="tagline">Batissez votre dynastie, un combat a la fois.</p>
+
+          <div id="continueBlock" class="start-block hidden">
+            <button id="btnContinue" class="btn btn-gold btn-block">Continuer la partie</button>
+            <p id="continueMeta" class="start-meta"></p>
+          </div>
+
+          <div class="start-block">
+            <h2 class="section-title">Nouvelle partie</h2>
+            <input id="newGymName" type="text" placeholder="Nom de la salle" autocomplete="off" />
+            <input id="newGymCountry" type="text" placeholder="Pays" autocomplete="off" />
+            <button id="btnNewGame" class="btn btn-outline btn-block">Commencer</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= GAME SHELL ================= -->
+      <div id="gameShell" class="hidden">
+        <header id="topbar">
+          <div class="topbar-row">
+            <span id="tbGymName" class="tb-gym">Gym</span>
+            <span id="tbDay" class="tb-day">Jour 1</span>
+          </div>
+          <div class="topbar-row tb-stats">
+            <span class="tb-stat tb-money" id="tbMoney">0$</span>
+            <span class="tb-stat tb-rep">🏆 <span id="tbRep">0</span></span>
+            <span class="tb-stat tb-hype">🔥 <span id="tbHype">0</span></span>
+          </div>
+        </header>
+
+        <main id="panels">
+          <section id="panel-hub" class="panel active" data-panel="hub"></section>
+          <section id="panel-roster" class="panel" data-panel="roster"></section>
+          <section id="panel-planning" class="panel" data-panel="planning"></section>
+          <section id="panel-fight" class="panel" data-panel="fight"></section>
+          <section id="panel-journal" class="panel" data-panel="journal"></section>
+        </main>
+
+        <nav id="bottomnav">
+          <button class="nav-btn active" data-panel="hub"><span class="nav-icon">🏠</span><span class="nav-label">Hub</span></button>
+          <button class="nav-btn" data-panel="roster"><span class="nav-icon">👥</span><span class="nav-label">Effectif</span></button>
+          <button class="nav-btn" data-panel="planning"><span class="nav-icon">📅</span><span class="nav-label">Planning</span></button>
+          <button class="nav-btn" data-panel="fight"><span class="nav-icon">🥊</span><span class="nav-label">Combat</span></button>
+          <button class="nav-btn" data-panel="journal"><span class="nav-icon">📰</span><span class="nav-label">Journal</span></button>
+        </nav>
+      </div>
+
+      <!-- ================= MODAL / OVERLAY ================= -->
+      <div id="modalOverlay" class="modal-overlay hidden">
+        <div id="modalCard" class="modal-card"></div>
+      </div>
+
+      <!-- ================= TOAST ================= -->
+      <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('[web] Service worker registration failed:', error));
+        });
+      }
+    </script>
+  </body>
+</html>

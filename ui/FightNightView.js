@@ -160,6 +160,17 @@ export class FightNightView {
     return [...this._roundLogs];
   }
 
+  /**
+   * Public accessor for the structured result banner (winner, method,
+   * dramaticBanner, recordsBroken, headline, purses, injuries...) once the
+   * fight is finished — the same data toResultText() renders as plain text,
+   * exposed for a UI that wants to build its own presentation instead.
+   * @returns {Object|null} null if the fight hasn't finished yet.
+   */
+  getResultBanner() {
+    return this._buildResultBanner();
+  }
+
   // ---- view-model builders ----------------------------------------------------
 
   _buildFighterCardEntry(fighter) {
@@ -264,7 +275,7 @@ export class FightNightView {
 
   /** @returns {string} The final result banner, as plain text (empty string if the fight isn't finished yet) — a dramatic finish and any world record broken this fight get their own lines. */
   toResultText() {
-    const banner = this._buildResultBanner();
+    const banner = this.getResultBanner();
     if (!banner) return '';
 
     const lines = [];
