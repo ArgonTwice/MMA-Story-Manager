@@ -48,6 +48,7 @@
  *   BALANCE.TRANSFER_MARKET  - Phase V2.7 autonomous rival-gym roster management (engine/TransferMarket.js)
  *   BALANCE.PROSPECT_GENERATOR - Phase V2.7 themed prospect wave generation (engine/ProspectGenerator.js)
  *   BALANCE.TELEMETRY      - Phase Beta anonymous local behavioral telemetry thresholds (web/telemetry.js)
+ *   BALANCE.UNDERGROUND    - Underground Circuit modes/rulesets/gym-stipulation coefficients (engine/UndergroundEngine.js, engine/GymStipulations.js, CombatEngine.js's setupMatch() rules param)
  *
  *   (COMBAT additionally carries GAMEPLAN, STYLE_BONUSES and TAKEDOWN_RISK
  *   sub-sections consumed by engine/CombatEngine.js: per-target/distance/
@@ -1807,6 +1808,88 @@ const BALANCE = {
     LOW_MORALE_STREAK_WEEKS_THRESHOLD: 3,
     /** Max raw entries kept per bounded log (dramaChoices/frustrationEvents) — oldest trimmed, same discipline as WORLD.GLOBAL_EVENT_HISTORY_LIMIT/RELATIONSHIP.HISTORY_LIMIT. */
     LOG_HISTORY_LIMIT: 300,
+  },
+
+  // ---------------------------------------------------------------------
+  // UNDERGROUND — Underground Circuit, Special Rulesets & Gym-Stipulation
+  // Matches (engine/UndergroundEngine.js, engine/GymStipulations.js,
+  // engine/CombatEngine.js's optional 5th `rules` param on setupMatch()).
+  // ---------------------------------------------------------------------
+  UNDERGROUND: {
+    ROUNDS: {
+      /**
+       * Engine-safety cap used whenever a mode/ruleset requests "no round
+       * limit" (Vale Tudo) — CombatEngine's state machine and
+       * simulateFullMatch()'s own step budget both derive from maxRounds,
+       * so a literal Infinity would risk a runaway loop; this is generous
+       * enough (3x a normal main event) to read as unlimited in practice
+       * while keeping the engine's own safety guarantees intact.
+       */
+      NO_LIMIT_SAFETY_CAP: 15,
+    },
+
+    VALE_TUDO: {
+      INJURY_RISK_MULTIPLIER: 3,
+      PURSE_MULTIPLIER: 3,
+      /**
+       * Trait/archetype-driven morale reaction to fighting in an
+       * unregulated brawl, applied post-fight to every participant
+       * regardless of win/loss (see engine/CombatEngine.js's
+       * _processPostMatchRewards). Two of the three concepts the spec
+       * names map to real BALANCE.PERSONALITY entries; "Pacifiste" does
+       * not exist as a trait or archetype anywhere in this codebase — the
+       * closest existing proxy is the Calme trait (low moraleVolatility,
+       * composed temperament), used here rather than inventing a new
+       * trait outside this phase's scope. See
+       * engine/UndergroundEngine.js's own note on this mapping.
+       */
+      TRAIT_MORALE_DELTA: {
+        AGRESSIF: 6,
+        SHOWMAN_ARCHETYPE: 6,
+        CALME_PACIFISTE_PROXY: -6,
+      },
+    },
+
+    GAUNTLET: {
+      MIN_OPPONENTS: 3,
+      MAX_OPPONENTS: 5,
+      /** Fraction of the stamina DEFICIT (staminaMax - endingStamina) recovered between consecutive gauntlet fights — a partial breather, not a full reset. */
+      STAMINA_RECOVERY_FRACTION: 0.2,
+    },
+
+    OPEN_WEIGHT: {
+      /**
+       * Purse bonus for a genuine underdog win (winner's pre-fight
+       * getOverallRating() below the loser's) — the closest honest "David
+       * vs Goliath" signal available: no Fighter carries a literal weight
+       * stat (identity.weightClass is a display label only, never
+       * enforced by matchmaking anywhere in this codebase — see
+       * engine/CombatEngine.js's own note), so the rating gap already
+       * used by engine/StoryAnalyzer.js's Upset of the Year trophy is
+       * reused here rather than inventing a weight number with no
+       * gameplay behind it.
+       */
+      UPSET_BONUS_PER_RATING_POINT: 0.03,
+      UPSET_BONUS_MAX_MULTIPLIER: 2,
+    },
+
+    SUBMISSION_ONLY: {
+      /** Bonus added directly to submission success chance per cumulative point of strike damage the DEFENDER has already taken this fight — "les degats de frappe reduisent la resistance au sol." Kept small: cumulative damage across a whole fight easily reaches 60-100+ points, and BALANCE.COMBAT.SUBMISSIONS.MAX_CHANCE still caps the total. */
+      DAMAGE_TO_SUBMISSION_CHANCE_SCALING: 0.0015,
+    },
+
+    GYM_STIPULATIONS: {
+      COACHS_HONOUR: {
+        REPUTATION_WIN_BONUS: 8,
+        LOYALTY_WIN_BONUS: 10,
+        /** Applied multiplicatively to each roster fighter's CURRENT loyalty (a flat -20 would be disproportionate for a fighter already near 0). */
+        LOYALTY_LOSS_FRACTION: 0.2,
+      },
+      SPONSORSHIP_RAID: {
+        WEEKLY_AMOUNT: 2000,
+        WEEKS: 10,
+      },
+    },
   },
 };
 

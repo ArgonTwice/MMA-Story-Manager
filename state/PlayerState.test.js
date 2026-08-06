@@ -48,3 +48,42 @@ test('a coach with no awards yet serializes without an awards field', () => {
   const snapshot = player.toJSON();
   assert.equal('awards' in snapshot.coaches[0], false);
 });
+
+test('seizeFacilityLevel decrements equipLevel by 1 with no cost, floors at 0, and no-ops (returns false) once already at 0', () => {
+  const player = new PlayerState({ equipLevel: 2 });
+  const moneyBefore = player.money;
+
+  assert.equal(player.seizeFacilityLevel(), true);
+  assert.equal(player.equipLevel, 1);
+  assert.equal(player.money, moneyBefore, 'seizure is free — it never touches money, unlike upgradeFacility');
+
+  assert.equal(player.seizeFacilityLevel(), true);
+  assert.equal(player.equipLevel, 0);
+
+  assert.equal(player.seizeFacilityLevel(), false, 'nothing left to seize at equipLevel 0');
+  assert.equal(player.equipLevel, 0);
+});
+
+test('addActiveDeal/removeActiveDeal manage playerState.activeDeals, and toJSON/fromJSON round-trips them as independent copies', () => {
+  const player = new PlayerState();
+  assert.deepEqual(player.activeDeals, []);
+
+  const deal = player.addActiveDeal({ type: 'SPONSORSHIP_RAID', weeklyAmount: 2000, weeksRemaining: 10 });
+  assert.equal(player.activeDeals.length, 1);
+  assert.ok(deal.id, 'addActiveDeal must assign an id when none is provided');
+
+  const snapshot = player.toJSON();
+  assert.deepEqual(snapshot.activeDeals, [deal]);
+
+  assert.equal(player.removeActiveDeal(deal.id), true);
+  assert.equal(player.activeDeals.length, 0);
+  assert.equal(player.removeActiveDeal('nonexistent-deal-id'), false);
+
+  // The earlier snapshot must be unaffected by the later removal (independent copy, not a shared array reference).
+  assert.equal(snapshot.activeDeals.length, 1);
+
+  const rebuilt = PlayerState.fromJSON(snapshot);
+  assert.deepEqual(rebuilt.activeDeals, [deal]);
+  rebuilt.removeActiveDeal(deal.id);
+  assert.equal(snapshot.activeDeals.length, 1, 'mutating the rebuilt copy must never reach back into the original snapshot');
+});

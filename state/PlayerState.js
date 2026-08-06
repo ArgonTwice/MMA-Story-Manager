@@ -33,10 +33,14 @@ export const PLAYER_EVENTS = Object.freeze({
   GYM_FACILITY_UPGRADED: 'gym:facility_upgraded',
   GYM_FACILITY_UPGRADE_REJECTED: 'gym:facility_upgrade_rejected',
   GYM_EQUIPMENT_ADDED: 'gym:equipment_added',
+  GYM_FACILITY_SEIZED: 'gym:facility_seized',
   STAFF_COACH_ADDED: 'staff:coach_added',
   STAFF_COACH_REMOVED: 'staff:coach_removed',
   SOCIAL_FEED_ENTRY_ADDED: 'social:feed_entry_added',
   ACADEMY_DRAFT_OFFERED: 'academy:draft_offered',
+  /** Underground Circuit gym-stipulation matches (engine/GymStipulations.js): a timed recurring deal (e.g. a captured Sponsorship Raid contract) was added/expired. */
+  ACTIVE_DEAL_ADDED: 'deals:active_deal_added',
+  ACTIVE_DEAL_REMOVED: 'deals:active_deal_removed',
 });
 
 let idCounter = 0;
@@ -63,6 +67,7 @@ export class PlayerState {
    * @param {Object[]} [config.coaches]
    * @param {Object[]} [config.socialFeed]
    * @param {number|null} [config.lastAcademyDraftYear]
+   * @param {Object[]} [config.activeDeals]
    */
   constructor(config = {}) {
     this.gymName = config.gymName ?? 'New Gym';
@@ -93,6 +98,15 @@ export class PlayerState {
 
     /** Year (WorldState.year) the Academy Draft was last offered — see engine/AcademyEngine.js#isAcademyDraftAvailable. null before the first offer. */
     this.lastAcademyDraftYear = config.lastAcademyDraftYear ?? null;
+
+    /**
+     * Timed recurring deals (Underground Circuit gym-stipulation matches —
+     * see engine/GymStipulations.js#processActiveDeals, called weekly by
+     * web/app.js). Shape: { id, type, weeklyAmount, weeksRemaining }.
+     * Plain data only — the weekly payout/countdown logic lives in Engine,
+     * never here, exactly like every other State array in this file.
+     */
+    this.activeDeals = config.activeDeals ? config.activeDeals.map((deal) => ({ ...deal })) : [];
   }
 
   // ---- roster -----------------------------------------------------------
@@ -249,11 +263,53 @@ export class PlayerState {
   }
 
   /**
+   * Forcibly removes one facility level with no cost/refund — the "Gym
+   * Takeover" stipulation's defeat consequence (engine/GymStipulations.js):
+   * a rival gym seizes equipment, the inverse of upgradeFacility() winning
+   * one honestly. No-ops at equipLevel 0 (nothing left to seize).
+   *
+   * @returns {boolean} True if a level was actually seized.
+   */
+  seizeFacilityLevel() {
+    if (this.equipLevel <= 0) return false;
+
+    this.equipLevel -= 1;
+    EventBus.publish(PLAYER_EVENTS.GYM_FACILITY_SEIZED, { equipLevel: this.equipLevel });
+    return true;
+  }
+
+  /**
    * @param {Object} item
    */
   addEquipmentItem(item) {
     this.equipment.push(item);
     EventBus.publish(PLAYER_EVENTS.GYM_EQUIPMENT_ADDED, { item });
+  }
+
+  // ---- active deals (Underground Circuit gym-stipulation matches) -----------------
+
+  /**
+   * @param {Object} deal - { type, weeklyAmount, weeksRemaining }.
+   * @returns {Object} The stored deal record, with an id assigned if missing.
+   */
+  addActiveDeal(deal) {
+    const record = { id: deal.id ?? generateId('deal'), ...deal };
+    this.activeDeals.push(record);
+    EventBus.publish(PLAYER_EVENTS.ACTIVE_DEAL_ADDED, { deal: record });
+    return record;
+  }
+
+  /**
+   * @param {string} dealId
+   * @returns {boolean} True if a deal was removed.
+   */
+  removeActiveDeal(dealId) {
+    const index = this.activeDeals.findIndex((deal) => deal.id === dealId);
+    if (index === -1) return false;
+
+    this.activeDeals.splice(index, 1);
+    EventBus.publish(PLAYER_EVENTS.ACTIVE_DEAL_REMOVED, { dealId });
+    return true;
   }
 
   // ---- staff ----------------------------------------------------------------
@@ -357,6 +413,7 @@ export class PlayerState {
       ),
       socialFeed: this.socialFeed.map((entry) => ({ ...entry })),
       lastAcademyDraftYear: this.lastAcademyDraftYear,
+      activeDeals: this.activeDeals.map((deal) => ({ ...deal })),
     };
   }
 

@@ -24,6 +24,8 @@
   --green: #3fa66a;
   --green-bright: #5fd68f;
   --blue: #4a90d9;
+  --purple: #7d5ba6;
+  --purple-bright: #a583d1;
 
   --text-primary: #e8e6e1;
   --text-secondary: #a8aeb8;
@@ -515,6 +517,46 @@ input[type='text'] {
   background: rgba(192, 57, 43, 0.18);
   color: var(--red-bright);
   border: 1px solid rgba(192, 57, 43, 0.4);
+}
+
+/* ---- Underground Circuit risk badges (Phase Underground) ------------------ */
+
+.badge-red {
+  background: rgba(192, 57, 43, 0.2);
+  color: var(--red-bright);
+  border: 1px solid rgba(192, 57, 43, 0.45);
+}
+
+.badge-orange {
+  background: rgba(217, 138, 52, 0.2);
+  color: var(--orange-bright);
+  border: 1px solid rgba(217, 138, 52, 0.45);
+}
+
+.badge-purple {
+  background: rgba(125, 91, 166, 0.22);
+  color: var(--purple-bright);
+  border: 1px solid rgba(125, 91, 166, 0.5);
+}
+
+.badge-blue {
+  background: rgba(74, 144, 217, 0.2);
+  color: var(--blue);
+  border: 1px solid rgba(74, 144, 217, 0.45);
+}
+
+.badge-green {
+  background: rgba(63, 166, 106, 0.2);
+  color: var(--green-bright);
+  border: 1px solid rgba(63, 166, 106, 0.45);
+}
+
+.underground-card {
+  cursor: pointer;
+}
+
+.underground-card:active {
+  transform: scale(0.98);
 }
 
 .gauge-row {

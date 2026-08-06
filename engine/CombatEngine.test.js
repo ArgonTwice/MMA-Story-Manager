@@ -731,3 +731,231 @@ test('the final result payload snapshots each corner\'s weigh-in Readiness onto 
   assert.ok(typeof result.combatMetrics.B.readiness === 'number');
   assert.ok(result.combatMetrics.A.readiness > result.combatMetrics.B.readiness, 'the less-fatigued fighter should read a higher Readiness');
 });
+
+// =============================================================================
+// Underground Circuit rules (setupMatch's optional 5th `rules` param)
+// =============================================================================
+
+test('Underground rules default to null/omitted: setupMatch behaves exactly as before (DEFAULT_RULES is a true no-op)', () => {
+  // matchId/fighters carry a global, call-order-dependent id counter (see
+  // generateId()) — irrelevant to whether the RULES themselves changed
+  // anything, so they're stripped before comparing.
+  const strip = (result) => {
+    const { matchId, fighters, ...rest } = result;
+    return rest;
+  };
+
+  const withoutRules = new CombatEngine({ rng: createSeededRng(42) });
+  withoutRules.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'WFC', false);
+  const resultWithout = withoutRules.simulateFullMatch();
+
+  const withNullRules = new CombatEngine({ rng: createSeededRng(42) });
+  withNullRules.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'WFC', false, null);
+  const resultWithNull = withNullRules.simulateFullMatch();
+
+  assert.deepEqual(strip(resultWithout), strip(resultWithNull));
+});
+
+test('noRoundLimit uses BALANCE.UNDERGROUND.ROUNDS.NO_LIMIT_SAFETY_CAP instead of the normal MAIN_EVENT/UNDERCARD round count', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  engine.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'UNDERGROUND', false, { noRoundLimit: true });
+  assert.equal(engine.context.maxRounds, BALANCE.UNDERGROUND.ROUNDS.NO_LIMIT_SAFETY_CAP);
+});
+
+test('noTakedowns (Striking Standup): a GROUND gameplan resolves as pure striking — no takedown is ever attempted, and no round is ever counted as GROUND', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(11) });
+  const a = makeFighter('Grappler A', 40);
+  const b = makeFighter('Grappler B', 40);
+
+  engine.setupMatch(a, b, 'UNDERGROUND', false, { noTakedowns: true });
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  for (const key of ['A', 'B']) {
+    const m = result.combatMetrics[key];
+    assert.equal(m.groundRounds, 0, 'noTakedowns must remap every GROUND round to STRIKING');
+    assert.equal(m.standingRounds, result.round);
+    assert.equal(m.takedownAttempts, 0);
+  }
+});
+
+test('noTakedowns (Striking Standup): a CLINCH gameplan still strikes normally, but never lands a takedown', () => {
+  const withoutRule = new CombatEngine({ rng: createSeededRng(7) });
+  withoutRule.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'WFC', false);
+  withoutRule.setGameplan('A', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  withoutRule.setGameplan('B', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  const resultWithout = withoutRule.simulateFullMatch();
+  const someClinchTakedownLandedNormally =
+    resultWithout.combatMetrics.A.clinchTransitionSuccess > 0 || resultWithout.combatMetrics.B.clinchTransitionSuccess > 0;
+  assert.ok(someClinchTakedownLandedNormally, 'sanity: this seed must normally land at least one Clinch->Sol transition');
+
+  const withRule = new CombatEngine({ rng: createSeededRng(7) });
+  withRule.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'UNDERGROUND', false, { noTakedowns: true });
+  withRule.setGameplan('A', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  withRule.setGameplan('B', { target: 'BODY', distance: 'CLINCH', tempo: 'CONSERVATIVE' });
+  const resultWith = withRule.simulateFullMatch();
+
+  assert.equal(resultWith.combatMetrics.A.clinchTransitionSuccess, 0);
+  assert.equal(resultWith.combatMetrics.B.clinchTransitionSuccess, 0);
+  assert.ok(resultWith.combatMetrics.A.clinchAttempts > 0, 'clinch striking itself must still happen');
+});
+
+test('submissionOnly: KO/TKO/DOCTOR_STOPPAGE never end the fight, even when a fighter is driven far past the KO health threshold', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(3) });
+  const striker = makeFighter('Striker', 90);
+  const punchingBag = makeFighter('Punching Bag', 5);
+
+  engine.setupMatch(striker, punchingBag, 'UNDERGROUND', false, { submissionOnly: true, noRoundLimit: true });
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  assert.ok(
+    [FINISH_METHODS.SUBMISSION, FINISH_METHODS.DRAW].includes(result.method),
+    `submissionOnly must never produce ${result.method} even under a massive skill mismatch`
+  );
+  assert.ok(result.method !== FINISH_METHODS.KO && result.method !== FINISH_METHODS.TKO && result.method !== FINISH_METHODS.DOCTOR_STOPPAGE);
+});
+
+test('submissionOnly: a fight can still legitimately end by SUBMISSION when both fighters commit to grappling', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(11) });
+  const a = makeFighter('Grappler A', 60);
+  const b = makeFighter('Grappler B', 30);
+
+  engine.setupMatch(a, b, 'UNDERGROUND', false, { submissionOnly: true, noRoundLimit: true });
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  assert.ok(
+    [FINISH_METHODS.SUBMISSION, FINISH_METHODS.DRAW].includes(result.method),
+    `expected SUBMISSION or a safety-cap DRAW, got ${result.method}`
+  );
+});
+
+test('submissionOnly: accumulated strike damage taken raises the defender\'s submission chance (higher than an otherwise-identical fresh fight)', () => {
+  const cfg = BALANCE.UNDERGROUND.SUBMISSION_ONLY;
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  engine.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'UNDERGROUND', false, { submissionOnly: true });
+  engine.executeNextStep(); // INIT -> WEIGH_IN
+  engine.executeNextStep(); // WEIGH_IN -> INTRO
+  engine.executeNextStep(); // INTRO -> ROUND_START
+  engine.context.damageTally.B = { face: 30, body: 20, legs: 10 }; // 60 cumulative damage on B
+  engine.setGameplan('A', { target: 'BODY', distance: 'GROUND', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+
+  const offense = engine._computeRoundOffense('A', 'B');
+  assert.ok(offense.takedownAttempted, 'sanity: A must have attempted a takedown for a submission roll to even be possible');
+
+  const sub = BALANCE.COMBAT.SUBMISSIONS;
+  const expectedBonus = 60 * cfg.DAMAGE_TO_SUBMISSION_CHANCE_SCALING;
+  assert.ok(expectedBonus > 0, 'sanity: the bonus must be a real positive number for this test to mean anything');
+  assert.ok(expectedBonus < sub.MAX_CHANCE, 'sanity: the bonus alone should not already saturate the clamp for this test to be meaningful');
+});
+
+test('noDecision (KO / No Judges): reaching the round limit without a finish is a no-purse DRAW instead of a judges decision', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const a = makeFighter('A', 30);
+  const b = makeFighter('B', 30);
+
+  engine.setupMatch(a, b, 'UNDERGROUND', false, { noDecision: true });
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  const result = engine.simulateFullMatch();
+
+  if (![FINISH_METHODS.KO, FINISH_METHODS.TKO, FINISH_METHODS.SUBMISSION, FINISH_METHODS.DOCTOR_STOPPAGE].includes(result.method)) {
+    assert.equal(result.method, FINISH_METHODS.DRAW);
+    assert.equal(result.winner, null);
+    for (const key of ['A', 'B']) {
+      assert.deepEqual(result.purses[key], { gross: 0, net: 0, fighterShare: 0, gymShare: 0, managerShare: 0 });
+    }
+  }
+});
+
+test('purseMultiplier (Vale Tudo x3) triples both fighters\' base purse, still on top of the normal win bonus', () => {
+  const normal = new CombatEngine({ rng: createSeededRng(5) });
+  normal.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'WFC', false);
+  const normalResult = normal.simulateFullMatch();
+
+  const tripled = new CombatEngine({ rng: createSeededRng(5) });
+  tripled.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'UNDERGROUND', false, { purseMultiplier: 3 });
+  const tripledResult = tripled.simulateFullMatch();
+
+  for (const key of ['A', 'B']) {
+    assert.equal(tripledResult.purses[key].gross, normalResult.purses[key].gross * 3);
+  }
+});
+
+test('injuryRiskMultiplier scales the injury roll: an absurdly high multiplier guarantees an injury that would not otherwise have occurred', () => {
+  const baseline = new CombatEngine({ rng: createSeededRng(9) });
+  baseline.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'WFC', false);
+  const baselineResult = baseline.simulateFullMatch();
+  assert.equal(baselineResult.injuries.A, null, 'sanity: this seed must not injure A under normal odds');
+
+  const guaranteed = new CombatEngine({ rng: createSeededRng(9) });
+  guaranteed.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'UNDERGROUND', false, { injuryRiskMultiplier: 1000 });
+  const guaranteedResult = guaranteed.simulateFullMatch();
+  assert.ok(guaranteedResult.injuries.A !== null, 'a 1000x multiplier must push the chance past 1 and guarantee an injury');
+});
+
+test('openWeight: a genuine underdog win earns an extra purse multiplier on top of the normal win bonus', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  const underdog = makeFighter('Underdog', 20);
+  const favorite = makeFighter('Favorite', 80);
+
+  engine.setupMatch(underdog, favorite, 'UNDERGROUND', false, { openWeight: true, noRoundLimit: true, noDecision: false });
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  const withRule = engine.simulateFullMatch();
+
+  if (withRule.winner === 'A') {
+    // A (the underdog) won: replay the exact same seed WITHOUT openWeight and confirm A's purse is strictly smaller there.
+    const control = new CombatEngine({ rng: createSeededRng(1) });
+    control.setupMatch(makeFighter('Underdog', 20), makeFighter('Favorite', 80), 'UNDERGROUND', false, { noRoundLimit: true });
+    control.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+    control.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+    const withoutRule = control.simulateFullMatch();
+
+    assert.equal(withoutRule.winner, 'A', 'same seed, same rng draws minus the purse math: must produce the same winner');
+    assert.ok(withRule.purses.A.gross > withoutRule.purses.A.gross, 'openWeight must add a real bonus on top of the normal win purse for a true underdog win');
+  }
+});
+
+test('valeTudo: Agressif trait and Showman archetype boost morale, Calme (the Pacifiste proxy) lowers it, applied regardless of win/loss', () => {
+  const aggressiveShowman = new Fighter({
+    identity: { name: 'Brawler', age: 28, style: 'Freestyle', weightClass: 'Lightweight' },
+    attributes: { skills: { boxe: 50, jambes: 50, sol: 50, soumission: 50, cardio: 50, intelligence: 50 }, moral: 50 },
+    psychology: { personality: { archetype: 'Showman', traits: ['Agressif'] } },
+  });
+  const calmOpponent = new Fighter({
+    identity: { name: 'Zen Fighter', age: 28, style: 'Freestyle', weightClass: 'Lightweight' },
+    attributes: { skills: { boxe: 50, jambes: 50, sol: 50, soumission: 50, cardio: 50, intelligence: 50 }, moral: 50 },
+    psychology: { personality: { archetype: 'Guerrier', traits: ['Calme'] } },
+  });
+
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  engine.setupMatch(aggressiveShowman, calmOpponent, 'UNDERGROUND', false, { valeTudo: true });
+  const result = engine.simulateFullMatch();
+
+  const cfg = BALANCE.UNDERGROUND.VALE_TUDO.TRAIT_MORALE_DELTA;
+  const expectedBrawlerDelta = cfg.AGRESSIF + cfg.SHOWMAN_ARCHETYPE;
+  const winLossDelta =
+    result.winner === 'A' ? BALANCE.MORALE.EVENTS.WIN_FIGHT : result.winner === 'B' ? BALANCE.MORALE.EVENTS.LOSE_FIGHT : 0;
+  assert.equal(aggressiveShowman.attributes.moral, 50 + winLossDelta + expectedBrawlerDelta);
+
+  const zenWinLossDelta =
+    result.winner === 'B' ? BALANCE.MORALE.EVENTS.WIN_FIGHT : result.winner === 'A' ? BALANCE.MORALE.EVENTS.LOSE_FIGHT : 0;
+  assert.equal(calmOpponent.attributes.moral, 50 + zenWinLossDelta + cfg.CALME_PACIFISTE_PROXY);
+});
+
+test('startingStaminaOverride lets a corner start weigh-in below full stamina, as a fraction of that fight\'s own staminaMax (Gauntlet Survival carry-over)', () => {
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  engine.setupMatch(makeFighter('A', 50), makeFighter('B', 50), 'UNDERGROUND', false);
+  engine.context.rules.startingStaminaOverride.A = 0.5;
+  engine.executeNextStep(); // INIT -> WEIGH_IN
+  engine.executeNextStep(); // WEIGH_IN -> INTRO
+
+  assert.ok(Math.abs(engine.context.live.A.stamina - engine.context.live.A.staminaMax * 0.5) < 1e-9);
+  assert.equal(engine.context.live.B.stamina, engine.context.live.B.staminaMax, 'B has no override and must start at full stamina as usual');
+});

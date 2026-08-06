@@ -45,9 +45,161 @@ import { SeasonSummary } from '../ui/SeasonSummary.js';
 import telemetry from './telemetry.js';
 import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExporter.js';
 
+import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from '../engine/UndergroundEngine.js';
+import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from '../engine/GymStipulations.js';
+
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 const STARTING_ROSTER_STYLES = Object.freeze(['Boxe', 'Muay Thai', 'Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle', 'Kickboxing']);
+
+// ---- Underground Circuit: challenge catalog (Phase Underground) -----------------
+
+const UNDERGROUND_FILTERS = Object.freeze([
+  { key: 'ALL', label: 'Tous' },
+  { key: 'MODE', label: 'Modes' },
+  { key: 'RULESET', label: 'Regles Speciales' },
+  { key: 'STIPULATION', label: 'Enjeux Gym' },
+]);
+
+/**
+ * Preset challenge cards the player picks from — each one is a fixed
+ * (mode, ruleset, stipulation) combination rather than a free-form builder,
+ * matching the spec's own "selecteur de defis avec cartes d'affrontements."
+ * Only `mode` OR `stipulation` alone actually needs a rival-gym opponent
+ * fought at all — a pure ruleset card still needs one too, Underground
+ * fights always being against a rival gym (see _renderUndergroundSetupModal).
+ */
+const UNDERGROUND_CHALLENGES = Object.freeze([
+  {
+    id: 'VALE_TUDO',
+    category: 'MODE',
+    mode: UNDERGROUND_MODES.VALE_TUDO,
+    ruleset: null,
+    stipulation: null,
+    icon: '\u{1FA78}',
+    title: 'Vale Tudo',
+    desc: 'Combat sans limite de rounds. Risque de blessure x3, primes x3.',
+    badgeLabel: 'RISQUE ELEVE',
+    badgeClass: 'badge-red',
+  },
+  {
+    id: 'GAUNTLET',
+    category: 'MODE',
+    mode: UNDERGROUND_MODES.GAUNTLET,
+    ruleset: null,
+    stipulation: null,
+    icon: '\u{2694}\u{FE0F}',
+    title: 'Gauntlet Survival',
+    desc: '3 a 5 combats consecutifs contre le roster d\'un gym rival, recuperation partielle de stamina entre chaque.',
+    badgeLabel: 'ENDURANCE',
+    badgeClass: 'badge-orange',
+  },
+  {
+    id: 'OPEN_WEIGHT',
+    category: 'MODE',
+    mode: UNDERGROUND_MODES.OPEN_WEIGHT,
+    ruleset: null,
+    stipulation: null,
+    icon: '\u{2696}\u{FE0F}',
+    title: 'Open Weight',
+    desc: 'Aucune restriction de categorie. Bourse bonus en cas de victoire David contre Goliath.',
+    badgeLabel: 'DAVID VS GOLIATH',
+    badgeClass: 'badge-blue',
+  },
+  {
+    id: 'SUBMISSION_ONLY',
+    category: 'RULESET',
+    mode: null,
+    ruleset: UNDERGROUND_RULESETS.SUBMISSION_ONLY,
+    stipulation: null,
+    icon: '\u{1F512}',
+    title: 'Submission Only',
+    desc: 'Victoire uniquement par soumission — les degats de frappe reduisent la resistance au sol.',
+    badgeLabel: 'SUBMISSION ONLY',
+    badgeClass: 'badge-purple',
+  },
+  {
+    id: 'KO_NO_JUDGES',
+    category: 'RULESET',
+    mode: null,
+    ruleset: UNDERGROUND_RULESETS.KO_NO_JUDGES,
+    stipulation: null,
+    icon: '\u{1F94A}',
+    title: 'KO / No Judges',
+    desc: 'Aucune decision aux points. Match nul sans prime si personne n\'est fini.',
+    badgeLabel: 'KO OBLIGATOIRE',
+    badgeClass: 'badge-purple',
+  },
+  {
+    id: 'STRIKING_STANDUP',
+    category: 'RULESET',
+    mode: null,
+    ruleset: UNDERGROUND_RULESETS.STRIKING_STANDUP,
+    stipulation: null,
+    icon: '\u{1F9CD}',
+    title: 'Striking Standup',
+    desc: 'Amener au sol desactive. Combat 100% debout.',
+    badgeLabel: 'DEBOUT UNIQUEMENT',
+    badgeClass: 'badge-purple',
+  },
+  {
+    id: 'GYM_TAKEOVER',
+    category: 'STIPULATION',
+    mode: null,
+    ruleset: null,
+    stipulation: GYM_STIPULATIONS.GYM_TAKEOVER,
+    icon: '\u{1F3DA}\u{FE0F}',
+    title: 'Gym Takeover',
+    desc: 'Victoire = equipement haut de gamme gratuit. Defaite = perte d\'un niveau d\'installation.',
+    badgeLabel: 'SAISIE DE MATERIEL',
+    badgeClass: 'badge-red',
+  },
+  {
+    id: 'COACHS_HONOUR',
+    category: 'STIPULATION',
+    mode: null,
+    ruleset: null,
+    stipulation: GYM_STIPULATIONS.COACHS_HONOUR,
+    icon: '\u{1F396}\u{FE0F}',
+    title: "Coach's Honour",
+    desc: 'Victoire = Reputation et Loyaute du roster en hausse. Defaite = Loyaute du roster en chute.',
+    badgeLabel: 'HONNEUR DU STAFF',
+    badgeClass: 'badge-orange',
+  },
+  {
+    id: 'PINK_SLIP',
+    category: 'STIPULATION',
+    mode: null,
+    ruleset: null,
+    stipulation: GYM_STIPULATIONS.PINK_SLIP,
+    icon: '\u{1F4C4}',
+    title: 'Pink Slip',
+    desc: 'Le perdant cede immediatement son combattant au gym adverse, sans indemnite.',
+    badgeLabel: 'CONTRAT EN JEU',
+    badgeClass: 'badge-red',
+  },
+  {
+    id: 'SPONSORSHIP_RAID',
+    category: 'STIPULATION',
+    mode: null,
+    ruleset: null,
+    stipulation: GYM_STIPULATIONS.SPONSORSHIP_RAID,
+    icon: '\u{1F4B0}',
+    title: 'Sponsorship Raid',
+    desc: 'Victoire = contrat de sponsor exclusif (2 000$/semaine pendant 10 semaines).',
+    badgeLabel: 'RAID SPONSOR',
+    badgeClass: 'badge-green',
+  },
+]);
+
+function shuffleAndTake(list, count, rng) {
+  const copy = [...list];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, count);
+}
 
 const ACTIVITY_LABELS = Object.freeze({
   TECHNIQUE: 'Technique',
@@ -229,6 +381,12 @@ class WebApp {
     this.weekStartSnapshot = {};
     /** Set true only by the "Nouvelle Partie" flow (never Continuer/load) — gates the first-steps onboarding to a truly brand-new save, see _maybeShowFirstStepsOnboarding(). */
     this._isBrandNewGame = false;
+    /** 'normal' | 'underground' — which sub-tab the Combat panel shows (see _renderFight()). */
+    this.fightTab = 'normal';
+    /** Which UNDERGROUND_FILTERS category is active on the Underground hub. */
+    this.undergroundFilter = 'ALL';
+    /** In-progress Underground Circuit setup ({ challenge, fighterId, gymId, opponentId }), or null — see _showUndergroundSetupModal(). Runtime-only, never persisted. */
+    this._undergroundSetup = null;
     this.dom = {};
   }
 
@@ -363,6 +521,9 @@ class WebApp {
     this.fightView = null;
     this.fightSetupDone = false;
     this.academyPool = [];
+    this.fightTab = 'normal';
+    this.undergroundFilter = 'ALL';
+    this._undergroundSetup = null;
 
     this._yearChangedPending = false;
     this._yearChangedUnsub?.();
@@ -981,6 +1142,7 @@ class WebApp {
     this.lastWeekEconomy = result.weekSummary.economyReport;
     telemetry.recordWeekResolved();
     telemetry.checkFrustrationSignals(this.gameState.playerState);
+    processActiveDeals(this.gameState.playerState);
     this._startNewWeek();
     this._renderAll();
     this._autosave();
@@ -1032,6 +1194,32 @@ class WebApp {
     }
     if (this.fightView && this.combatEngine.state && this.combatEngine.state !== COMBAT_STATES.IDLE && this.combatEngine.state !== COMBAT_STATES.FINISHED) {
       this._renderFightInProgress(panel);
+      return;
+    }
+
+    panel.appendChild(
+      el('div', { class: 'subtab-row' }, [
+        el('button', {
+          class: `subtab-btn${this.fightTab === 'normal' ? ' active' : ''}`,
+          text: 'Combat',
+          onclick: () => {
+            this.fightTab = 'normal';
+            this._renderFight();
+          },
+        }),
+        el('button', {
+          class: `subtab-btn${this.fightTab === 'underground' ? ' active' : ''}`,
+          text: '\u{1F573}\u{FE0F} Underground',
+          onclick: () => {
+            this.fightTab = 'underground';
+            this._renderFight();
+          },
+        }),
+      ])
+    );
+
+    if (this.fightTab === 'underground') {
+      this._renderUndergroundHub(panel);
       return;
     }
 
@@ -1095,6 +1283,302 @@ class WebApp {
     this.gameplanChoices = { A: {}, B: {} };
     this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
     this._renderFight();
+  }
+
+  // ---- UNDERGROUND CIRCUIT (Phase Underground) ---------------------------------------
+
+  _renderUndergroundHub(panel) {
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F573}\u{FE0F} Underground Circuit' }));
+    panel.appendChild(
+      el('p', {
+        text: 'Modes de jeu alternatifs a haut risque / haute recompense, contre le roster d\'un gym rival — hors sanction officielle.',
+      })
+    );
+
+    panel.appendChild(
+      el(
+        'div',
+        { class: 'subtab-row' },
+        UNDERGROUND_FILTERS.map((filter) =>
+          el('button', {
+            class: `subtab-btn${this.undergroundFilter === filter.key ? ' active' : ''}`,
+            text: filter.label,
+            onclick: () => {
+              this.undergroundFilter = filter.key;
+              this._renderFight();
+            },
+          })
+        )
+      )
+    );
+
+    const visible =
+      this.undergroundFilter === 'ALL'
+        ? UNDERGROUND_CHALLENGES
+        : UNDERGROUND_CHALLENGES.filter((challenge) => challenge.category === this.undergroundFilter);
+
+    for (const challenge of visible) {
+      panel.appendChild(
+        el('div', { class: 'card underground-card', onclick: () => this._showUndergroundSetupModal(challenge) }, [
+          el('div', { class: 'fighter-head' }, [
+            el('div', {}, [
+              el('div', { class: 'fighter-name', text: `${challenge.icon} ${challenge.title}` }),
+              el('div', { class: 'fighter-meta', text: challenge.desc }),
+            ]),
+            el('span', { class: `badge ${challenge.badgeClass}`, text: challenge.badgeLabel }),
+          ]),
+        ])
+      );
+    }
+  }
+
+  _showUndergroundSetupModal(challenge) {
+    this._undergroundSetup = { challenge, fighterId: null, gymId: null, opponentId: null };
+    this._renderUndergroundSetupModal();
+  }
+
+  _renderUndergroundSetupModal() {
+    const setup = this._undergroundSetup;
+    const { playerState, worldState } = this.gameState;
+    const isGauntlet = setup.challenge.mode === UNDERGROUND_MODES.GAUNTLET;
+
+    const available = playerState.roster.filter((f) => !f.isInjured(worldState.currentDay));
+    const selectedGym = worldState.rivalGyms.find((gym) => gym.id === setup.gymId) ?? null;
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `${setup.challenge.icon} ${setup.challenge.title}` }),
+      el('p', { text: setup.challenge.desc }),
+      el('div', { class: 'card-title', text: 'Votre combattant' }),
+    ]);
+
+    if (available.length === 0) {
+      content.appendChild(el('p', { text: 'Aucun combattant disponible (non blesse).' }));
+    }
+    for (const fighter of available) {
+      content.appendChild(
+        el('div', {
+          class: `fighter-card selectable${setup.fighterId === fighter.identity.id ? ' selected' : ''}`,
+          onclick: () => {
+            setup.fighterId = fighter.identity.id;
+            this._renderUndergroundSetupModal();
+          },
+        }, [
+          el('div', { class: 'fighter-name', text: fighter.identity.name }),
+          el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.getRecordString()}` }),
+        ])
+      );
+    }
+
+    content.appendChild(el('div', { class: 'card-title', text: isGauntlet ? 'Gym adverse (pioche 3 a 5 adversaires)' : 'Gym adverse' }));
+    if (worldState.rivalGyms.length === 0) {
+      content.appendChild(el('p', { text: 'Aucun gym rival recense.' }));
+    }
+    for (const gym of worldState.rivalGyms) {
+      const rosterSize = gym.roster?.length ?? 0;
+      content.appendChild(
+        el('div', {
+          class: `fighter-card selectable${setup.gymId === gym.id ? ' selected' : ''}`,
+          onclick: () => {
+            setup.gymId = gym.id;
+            setup.opponentId = null;
+            this._renderUndergroundSetupModal();
+          },
+        }, [
+          el('div', { class: 'fighter-name', text: gym.name ?? gym.id }),
+          el('div', { class: 'fighter-meta', text: `Reputation ${Math.round(gym.reputation ?? 0)} — ${rosterSize} combattant(s) recense(s)` }),
+        ])
+      );
+    }
+
+    if (selectedGym && !isGauntlet) {
+      content.appendChild(el('div', { class: 'card-title', text: 'Leur combattant' }));
+      const roster = selectedGym.roster ?? [];
+      if (roster.length === 0) {
+        content.appendChild(el('p', { text: 'Ce gym n\'a pas encore de combattant recrute.' }));
+      }
+      for (const entry of roster) {
+        content.appendChild(
+          el('div', {
+            class: `fighter-card selectable${setup.opponentId === entry.identity.id ? ' selected' : ''}`,
+            onclick: () => {
+              setup.opponentId = entry.identity.id;
+              this._renderUndergroundSetupModal();
+            },
+          }, [
+            el('div', { class: 'fighter-name', text: entry.identity.name }),
+            el('div', { class: 'fighter-meta', text: `${entry.identity.style} — ${entry.career.wins}-${entry.career.losses}-${entry.career.draws}` }),
+          ])
+        );
+      }
+    }
+
+    if (selectedGym && isGauntlet) {
+      const rosterSize = selectedGym.roster?.length ?? 0;
+      const minOpponents = BALANCE.UNDERGROUND.GAUNTLET.MIN_OPPONENTS;
+      if (rosterSize < minOpponents) {
+        content.appendChild(
+          el('p', { text: `Il faut au moins ${minOpponents} combattants recenses dans ce gym pour lancer un Gauntlet (actuellement ${rosterSize}).` })
+        );
+      }
+    }
+
+    content.appendChild(
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: 'Lancer le combat Underground',
+        disabled: this._isUndergroundSetupReady() ? null : 'disabled',
+        onclick: () => this._resolveUndergroundFight(),
+      })
+    );
+    content.appendChild(el('button', { class: 'btn btn-outline btn-block', text: 'Annuler', onclick: () => this._hideModal() }));
+
+    this._showModal(content, { blocking: true });
+  }
+
+  _isUndergroundSetupReady() {
+    const setup = this._undergroundSetup;
+    if (!setup || !setup.fighterId || !setup.gymId) return false;
+
+    const { worldState } = this.gameState;
+    const gym = worldState.rivalGyms.find((g) => g.id === setup.gymId);
+    if (!gym) return false;
+
+    if (setup.challenge.mode === UNDERGROUND_MODES.GAUNTLET) {
+      return (gym.roster?.length ?? 0) >= BALANCE.UNDERGROUND.GAUNTLET.MIN_OPPONENTS;
+    }
+    return Boolean(setup.opponentId);
+  }
+
+  /** Writes a (possibly mutated, e.g. after fighting) hydrated opponent Fighter back onto its rival gym's plain-JSON roster — see engine/TransferMarket.js's own precedent for this roster-storage discipline. */
+  _writeBackRivalFighter(gymId, fighter) {
+    const { worldState } = this.gameState;
+    const gym = worldState.rivalGyms.find((g) => g.id === gymId);
+    if (!gym) return;
+    const nextRoster = (gym.roster ?? []).map((entry) => (entry.identity.id === fighter.identity.id ? fighter.toJSON() : entry));
+    worldState.updateRivalGym(gymId, { roster: nextRoster });
+  }
+
+  _resolveUndergroundFight() {
+    const setup = this._undergroundSetup;
+    const { playerState, worldState } = this.gameState;
+    const playerFighter = playerState.getFighter(setup.fighterId);
+    const gym = worldState.rivalGyms.find((g) => g.id === setup.gymId);
+
+    if (setup.challenge.mode === UNDERGROUND_MODES.GAUNTLET) {
+      const cfg = BALANCE.UNDERGROUND.GAUNTLET;
+      const roster = (gym.roster ?? []).map((entry) => Fighter.fromJSON(entry));
+      const count = Math.min(cfg.MAX_OPPONENTS, roster.length);
+      const opponents = shuffleAndTake(roster, count, this.rng);
+
+      const run = runGauntlet({
+        runner: playerFighter,
+        opponents,
+        ruleset: setup.challenge.ruleset,
+        playerState,
+        worldState,
+        rng: this.rng,
+      });
+
+      for (const opponent of opponents) this._writeBackRivalFighter(gym.id, opponent);
+
+      this._hideModal();
+      this._showUndergroundResultModal({ kind: 'GAUNTLET', run, challenge: setup.challenge });
+    } else {
+      const opponentEntry = (gym.roster ?? []).find((entry) => entry.identity.id === setup.opponentId);
+      const opponentFighter = Fighter.fromJSON(opponentEntry);
+
+      const result = runUndergroundFight({
+        fighterA: playerFighter,
+        fighterB: opponentFighter,
+        mode: setup.challenge.mode,
+        ruleset: setup.challenge.ruleset,
+        playerState,
+        worldState,
+        rng: this.rng,
+      });
+
+      let stipulationOutcome = null;
+      if (setup.challenge.stipulation) {
+        const playerCorner = result.fighters.A === playerFighter.identity.id ? 'A' : 'B';
+        const playerWon = result.winner === playerCorner;
+        stipulationOutcome = resolveGymStipulation(setup.challenge.stipulation, {
+          playerWon,
+          playerFighter,
+          opponentFighter,
+          opponentGymId: gym.id,
+          playerState,
+          worldState,
+        });
+      }
+
+      // PINK_SLIP may already have moved one of these fighters to a different roster entirely — writing back a stale gym membership would re-add them where they no longer belong.
+      if (stipulationOutcome?.type !== 'FIGHTER_ACQUIRED' && stipulationOutcome?.type !== 'FIGHTER_LOST') {
+        this._writeBackRivalFighter(gym.id, opponentFighter);
+      }
+
+      this._hideModal();
+      this._showUndergroundResultModal({ kind: 'SINGLE', result, stipulationOutcome, challenge: setup.challenge, playerFighter, opponentFighter });
+    }
+
+    this._undergroundSetup = null;
+    this._renderAll();
+    this._autosave();
+  }
+
+  _describeStipulationOutcome(outcome) {
+    if (!outcome) return null;
+    switch (outcome.type) {
+      case 'EQUIPMENT_GAINED':
+        return `\u{1F381} Equipement gagne : ${outcome.label}.`;
+      case 'NOTHING_TO_GAIN':
+        return `\u{1F937} ${outcome.detail}`;
+      case 'FACILITY_LEVEL_SEIZED':
+        return `\u{1F4C9} Un niveau d'installation a ete saisi (niveau ${outcome.newEquipLevel}).`;
+      case 'NOTHING_TO_LOSE':
+        return `\u{1F937} ${outcome.detail}`;
+      case 'HONOUR_UPHELD':
+        return `\u{1F3C6} Reputation +${outcome.reputationDelta}, Loyaute du roster +${outcome.loyaltyDelta}.`;
+      case 'HONOUR_LOST':
+        return '\u{1F4C9} La Loyaute de tout le roster s\'effondre.';
+      case 'FIGHTER_ACQUIRED':
+        return `\u{1F4C4} ${outcome.fighterName} rejoint votre effectif, sans indemnite.`;
+      case 'ROSTER_FULL':
+        return `\u{1F937} ${outcome.detail}`;
+      case 'FIGHTER_LOST':
+        return `\u{1F4C4} ${outcome.fighterName} rejoint le gym adverse, sans indemnite.`;
+      case 'SPONSOR_CAPTURED':
+        return `\u{1F4B0} Contrat de sponsor capture : +${outcome.deal.weeklyAmount}$/semaine pendant ${outcome.deal.weeksRemaining} semaines.`;
+      case 'RAID_FAILED':
+        return '\u{1F937} Le raid de sponsoring a echoue.';
+      default:
+        return null;
+    }
+  }
+
+  _showUndergroundResultModal({ kind, result, run, stipulationOutcome, challenge }) {
+    const lines = [];
+
+    if (kind === 'GAUNTLET') {
+      lines.push(`${run.survived ? '\u{1F3C6} Gauntlet survecu !' : '\u{1F480} Le Gauntlet s\'arrete ici.'}`);
+      lines.push(`Adversaires vaincus : ${run.opponentsDefeated} / ${run.totalOpponents}`);
+      run.fightResults.forEach((fightResult, index) => {
+        const won = fightResult.winner === fightResult.gauntletRunnerCorner;
+        lines.push(`  Combat ${index + 1} : ${won ? 'Victoire' : fightResult.winner === null ? 'Nul' : 'Defaite'} (${fightResult.method})`);
+      });
+    } else {
+      lines.push(`${result.method} — ${result.winner === null ? 'Match nul' : `Victoire de ${result.names[result.winner]}`}`);
+      lines.push(`Bourse (part gym) : ${result.purses.A.gymShare + result.purses.B.gymShare}$`);
+    }
+
+    const stipulationText = this._describeStipulationOutcome(stipulationOutcome);
+    if (stipulationText) lines.push('', stipulationText);
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `${challenge.icon} ${challenge.title} — Resultat` }),
+      el('pre', { style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: lines.join('\n') }),
+      el('button', { class: 'btn btn-gold btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content, { blocking: true });
   }
 
   _renderFightSetup(panel) {

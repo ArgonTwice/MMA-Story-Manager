@@ -103,6 +103,34 @@ const INJURY_BODY_PARTS = Object.freeze([
   'Epaule',
 ]);
 
+/**
+ * Default (no-op) match rules — every match that doesn't pass a `rules`
+ * override to setupMatch() behaves exactly as it always has. See
+ * engine/UndergroundEngine.js for the Underground Circuit modes/rulesets
+ * that actually populate these, and BALANCE.UNDERGROUND for the tuned
+ * coefficients behind each flag.
+ */
+const DEFAULT_RULES = Object.freeze({
+  /** Vale Tudo: use BALANCE.UNDERGROUND.ROUNDS.NO_LIMIT_SAFETY_CAP instead of ROUNDS_PER_FIGHT.MAIN_EVENT/UNDERCARD. */
+  noRoundLimit: false,
+  /** Striking Standup: a GROUND gameplan resolves as STRIKING instead (see _computeRoundOffense), and a landed Clinch->Sol transition never happens (see the CLINCH branch there). */
+  noTakedowns: false,
+  /** Submission Only: KO/TKO/DOCTOR_STOPPAGE are never checked (see _checkFinishConditions) — only SUBMISSION can end the fight — the defender's accumulated strike damage boosts submission chance (see _computeRoundOffense), and reaching maxRounds without one is a no-purse draw, same as noDecision (see _processDecisionStoppage). */
+  submissionOnly: false,
+  /** KO / No Judges: reaching maxRounds without a finish produces a no-purse DRAW instead of a judges' decision (see _processDecisionStoppage/_computePurses). */
+  noDecision: false,
+  /** Open Weight: a genuine underdog win (see preFightRatings) earns an extra purse multiplier (see _computePurses). */
+  openWeight: false,
+  /** Vale Tudo: an extra trait/archetype-driven morale swing applied to both fighters post-fight, independent of win/loss (see _processPostMatchRewards). */
+  valeTudo: false,
+  /** Vale Tudo: multiplies _rollPostFightInjury's chance. */
+  injuryRiskMultiplier: 1,
+  /** Vale Tudo: multiplies both fighters' base purse in _computePurses. */
+  purseMultiplier: 1,
+  /** Gauntlet Survival: { A: fraction|null, B: fraction|null } — overrides a corner's starting stamina (as a fraction of staminaMax) at weigh-in, set by engine/UndergroundEngine.js AFTER setupMatch() (once it knows which corner its gauntlet runner landed in — see _organizeCorners), but before the match is actually simulated. */
+  startingStaminaOverride: Object.freeze({ A: null, B: null }),
+});
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -183,9 +211,13 @@ export class CombatEngine {
    * @param {Fighter} fighterB
    * @param {string} orgId
    * @param {boolean} [isTitle=false]
+   * @param {Object|null} [rules=null] - Underground Circuit rule overrides
+   *   (see DEFAULT_RULES for every valid key) — omit for a normal,
+   *   sanctioned match. Unknown/omitted keys fall back to DEFAULT_RULES,
+   *   so callers only need to set the flags they actually want to change.
    * @returns {CombatEngine} this, for chaining.
    */
-  setupMatch(fighterA, fighterB, orgId, isTitle = false) {
+  setupMatch(fighterA, fighterB, orgId, isTitle = false, rules = null) {
     if (this.state !== COMBAT_STATES.IDLE && this.state !== COMBAT_STATES.FINISHED) {
       throw new Error(
         `CombatEngine.setupMatch: cannot start a new match while a match is in progress (state "${this.state}"). Call reset() first if you intend to abort it.`
@@ -198,9 +230,17 @@ export class CombatEngine {
       throw new TypeError('CombatEngine.setupMatch: a fighter cannot be matched against themselves.');
     }
 
-    const maxRounds = isTitle
-      ? BALANCE.COMBAT.ROUNDS_PER_FIGHT.MAIN_EVENT
-      : BALANCE.COMBAT.ROUNDS_PER_FIGHT.UNDERCARD;
+    const effectiveRules = {
+      ...DEFAULT_RULES,
+      ...rules,
+      startingStaminaOverride: { ...DEFAULT_RULES.startingStaminaOverride, ...rules?.startingStaminaOverride },
+    };
+
+    const maxRounds = effectiveRules.noRoundLimit
+      ? BALANCE.UNDERGROUND.ROUNDS.NO_LIMIT_SAFETY_CAP
+      : isTitle
+        ? BALANCE.COMBAT.ROUNDS_PER_FIGHT.MAIN_EVENT
+        : BALANCE.COMBAT.ROUNDS_PER_FIGHT.UNDERCARD;
 
     const redCornerKey = this._organizeCorners(fighterA, fighterB);
 
@@ -212,6 +252,11 @@ export class CombatEngine {
       titleForfeitedBy: null,
       maxRounds,
       currentRound: 0,
+      // Underground Circuit: see DEFAULT_RULES above. A plain mutable
+      // object (not frozen) — engine/UndergroundEngine.js may still poke
+      // startingStaminaOverride on it after setupMatch() returns, once it
+      // knows which corner ("A"/"B") its gauntlet runner landed in.
+      rules: effectiveRules,
       fighters: { A: fighterA, B: fighterB },
       corners: { red: redCornerKey, blue: OTHER_FIGHTER_KEY[redCornerKey] },
       // Skills are fixed for the duration of a fight, so this is a one-time
@@ -483,6 +528,15 @@ export class CombatEngine {
       );
       live.stamina = live.staminaMax;
 
+      // Gauntlet Survival: engine/UndergroundEngine.js may have set this
+      // AFTER setupMatch() but before simulation started — a partial
+      // stamina carry-over from this same fighter's previous gauntlet
+      // bout, expressed as a fraction of THIS fight's own staminaMax.
+      const staminaOverrideFraction = c.rules.startingStaminaOverride[key];
+      if (staminaOverrideFraction != null) {
+        live.stamina = clamp(live.staminaMax * staminaOverrideFraction, 0, live.staminaMax);
+      }
+
       if (cut.missedWeight) {
         cut.purseForfeitPercent = BALANCE.WEIGH_IN.MISSED_WEIGHT_PURSE_PENALTY_PERCENT;
         if (c.isTitle) {
@@ -583,11 +637,31 @@ export class CombatEngine {
     const c = this.context;
 
     if (!c.finish) {
-      c.finish = this._computeJudgesDecision();
+      // KO / No Judges: no judges' scorecards exist under this ruleset —
+      // reaching the round limit without a finish is a no-purse draw
+      // instead (see _computePurses' finish.noPurse handling). Submission
+      // Only implies the exact same thing: "victoire uniquement par
+      // soumission" leaves no legal decision to hand out either, so it
+      // shares the same no-purse-draw fallback rather than silently
+      // allowing a judges' decision to award a win with zero submissions.
+      c.finish = c.rules.noDecision || c.rules.submissionOnly ? this._buildNoDecisionDraw() : this._computeJudgesDecision();
     }
 
     this._transition(COMBAT_STATES.POST_MATCH_REWARDS);
     return { state: this.state, finish: { ...c.finish } };
+  }
+
+  _buildNoDecisionDraw() {
+    const c = this.context;
+    return {
+      method: FINISH_METHODS.DRAW,
+      round: c.maxRounds,
+      timeSeconds: BALANCE.COMBAT.ROUND_DURATION_SECONDS,
+      timeLabel: this._formatTime(BALANCE.COMBAT.ROUND_DURATION_SECONDS),
+      winnerKey: null,
+      loserKey: null,
+      noPurse: true,
+    };
   }
 
   _processPostMatchRewards() {
@@ -640,6 +714,10 @@ export class CombatEngine {
       } else if (outcome === 'loss') {
         fighter.adjustMorale(BALANCE.MORALE.EVENTS.LOSE_FIGHT);
       }
+
+      // Vale Tudo: an extra trait/archetype-driven morale swing from having
+      // fought in an unregulated brawl at all — independent of win/loss.
+      if (c.rules.valeTudo) this._applyValeTudoTraitMorale(fighter);
 
       if (
         outcome === 'win' &&
@@ -734,6 +812,26 @@ export class CombatEngine {
     EventBus.publish(COMBAT_EVENTS.FINISHED, { ...c.result });
 
     return { state: this.state, result: c.result };
+  }
+
+  /**
+   * Vale Tudo: "impact direct sur le moral selon les Traits" — a fighter's
+   * psychological reaction to having fought in an unregulated brawl,
+   * independent of the result. Two of the spec's three named concepts map
+   * to real BALANCE.PERSONALITY entries (Agressif is a trait, Showman is
+   * an archetype); "Pacifiste" doesn't exist anywhere in this codebase's
+   * 20 traits/10 archetypes — Calme (low moraleVolatility, composed
+   * temperament) is used as the closest honest proxy rather than inventing
+   * a new trait outside this phase's scope. See BALANCE.UNDERGROUND.VALE_TUDO.
+   * @param {Fighter} fighter
+   */
+  _applyValeTudoTraitMorale(fighter) {
+    const cfg = BALANCE.UNDERGROUND.VALE_TUDO.TRAIT_MORALE_DELTA;
+    let delta = 0;
+    if (fighter.psychology.personality.traits.includes('Agressif')) delta += cfg.AGRESSIF;
+    if (fighter.psychology.personality.archetype === 'Showman') delta += cfg.SHOWMAN_ARCHETYPE;
+    if (fighter.psychology.personality.traits.includes('Calme')) delta += cfg.CALME_PACIFISTE_PROXY;
+    if (delta !== 0) fighter.adjustMorale(delta);
   }
 
   // ==========================================================================
@@ -955,21 +1053,29 @@ export class CombatEngine {
     const defenderLive = c.live[defenderKey];
     const plan = c.gameplans[attackerKey];
 
-    const skillWeights = BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS[plan.distance];
+    // Striking Standup: a GROUND gameplan resolves as STRIKING for this
+    // round's entire computation — the player/AI's chosen `plan.distance`
+    // is left untouched (so their intent is still visible in the UI), only
+    // the RESOLUTION below uses this effective override. A CLINCH gameplan
+    // is unaffected (clinch fighting is still standing); only its
+    // takedown-*landing* roll is separately suppressed below.
+    const distance = c.rules.noTakedowns && plan.distance === 'GROUND' ? 'STRIKING' : plan.distance;
+
+    const skillWeights = BALANCE.COMBAT.GAMEPLAN.DISTANCE_SKILL_WEIGHTS[distance];
     const offenseRaw = Object.keys(skillWeights).reduce(
       (total, skillKey) => total + attacker.attributes.skills[skillKey] * skillWeights[skillKey],
       0
     );
 
     const styleBonus = this._getStyleBonus(attacker);
-    const styleDistanceMultiplier = styleBonus.distance === plan.distance ? styleBonus.outputMultiplier ?? 1 : 1;
+    const styleDistanceMultiplier = styleBonus.distance === distance ? styleBonus.outputMultiplier ?? 1 : 1;
     const styleTargetMultiplier = styleBonus.targetMultipliers?.[plan.target] ?? 1;
     // Phase 4.1: a supplementary CLINCH-only output bonus, layered on top
     // of styleDistanceMultiplier above rather than replacing it — Muay
     // Thai/Lutte's own *primary* distance affinity (STRIKING/GROUND) is
     // untouched, this only applies while actually clinching.
     const styleClinchMultiplier =
-      plan.distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS[attacker.identity.style] ?? 1 : 1;
+      distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.STYLE_CLINCH_MULTIPLIERS[attacker.identity.style] ?? 1 : 1;
 
     const tempoMods = BALANCE.COMBAT.GAMEPLAN.TEMPO_MODIFIERS[plan.tempo];
     const formMultiplier = attackerLive.forme / BALANCE.FORM.MAX;
@@ -1008,7 +1114,7 @@ export class CombatEngine {
     // hands out to both corners.
     let takedownAttempted = false;
     let takedownSuccess = false;
-    if (plan.distance === 'GROUND') {
+    if (distance === 'GROUND') {
       takedownAttempted = true;
       const chance = this._computeTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
       takedownSuccess = this.rng() < chance;
@@ -1019,12 +1125,16 @@ export class CombatEngine {
     // never zeroed out below, unlike a failed GROUND shot) — only the
     // *transition* into a landed takedown is gated behind this roll, using
     // the same defenseBonus sprawl stack GROUND's contest already builds.
+    // Striking Standup: that transition never happens at all — a clinch
+    // stays a clinch, it never lands on the mat.
     let clinchAttempted = false;
     let clinchTakedownLanded = false;
-    if (plan.distance === 'CLINCH') {
+    if (distance === 'CLINCH') {
       clinchAttempted = true;
-      const clinchChance = this._computeClinchTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
-      clinchTakedownLanded = this.rng() < clinchChance;
+      if (!c.rules.noTakedowns) {
+        const clinchChance = this._computeClinchTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
+        clinchTakedownLanded = this.rng() < clinchChance;
+      }
     }
     const clinchTransitionFailed = clinchAttempted && !clinchTakedownLanded;
     const transitionFailed = takedownFailed || clinchTransitionFailed;
@@ -1047,7 +1157,7 @@ export class CombatEngine {
     const overallGap = attacker.getOverallRating() - defender.getOverallRating();
     const advantageMultiplier = 1 + overallGap * BALANCE.COMBAT.DAMAGE.ATTRIBUTE_ADVANTAGE_SCALING;
     const defenderDamageTakenMultiplier = this._getPerkMultiplier(defender, 'damageTakenMultiplier');
-    const clinchDamageWeight = plan.distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_DAMAGE_WEIGHT : 1;
+    const clinchDamageWeight = distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_DAMAGE_WEIGHT : 1;
 
     const rawDamage = takedownFailed
       ? 0
@@ -1063,11 +1173,11 @@ export class CombatEngine {
             counterDamageMultiplier
         );
 
-    const staminaCostKey = BALANCE.COMBAT.GAMEPLAN.DISTANCE_STAMINA_COST_KEY[plan.distance];
+    const staminaCostKey = BALANCE.COMBAT.GAMEPLAN.DISTANCE_STAMINA_COST_KEY[distance];
     const staminaCostBase = BALANCE.COMBAT.STAMINA[staminaCostKey];
     const perkStaminaMultiplier = this._getPerkMultiplier(attacker, 'staminaCostMultiplier');
     const failureStaminaPenalty = transitionFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
-    const clinchFatiguePenalty = plan.distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_FATIGUE_PER_ROUND : 0;
+    const clinchFatiguePenalty = distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_FATIGUE_PER_ROUND : 0;
     const staminaCost =
       staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier + failureStaminaPenalty + clinchFatiguePenalty;
 
@@ -1080,10 +1190,22 @@ export class CombatEngine {
       const defenderGrappling = (defender.attributes.skills.sol + defender.attributes.skills.soumission) / 2;
       const styleSubMultiplier = styleBonus.submissionChanceMultiplier ?? 1;
       const perkSubMultiplier = this._getPerkMultiplier(attacker, 'submissionChanceMultiplier');
+      // Submission Only: "les degats de frappe reduisent la resistance au
+      // sol" — every point of strike damage the DEFENDER has already
+      // absorbed this fight (accumulated in PREVIOUS rounds only; this
+      // round's own simultaneous damage hasn't been applied to
+      // c.damageTally yet — see _processRoundSimulation's call order)
+      // chips a small, additive amount off their ground resistance,
+      // before the existing MIN/MAX_CHANCE clamp still bounds the total.
+      const groundResistanceDamageBonus = c.rules.submissionOnly
+        ? (c.damageTally[defenderKey].face + c.damageTally[defenderKey].body + c.damageTally[defenderKey].legs) *
+          BALANCE.UNDERGROUND.SUBMISSION_ONLY.DAMAGE_TO_SUBMISSION_CHANCE_SCALING
+        : 0;
       const chance = clamp(
         (sub.BASE_SUCCESS_CHANCE + sub.SKILL_DELTA_CHANCE_SCALING * (attackerGrappling - defenderGrappling)) *
           styleSubMultiplier *
-          perkSubMultiplier,
+          perkSubMultiplier +
+          groundResistanceDamageBonus,
         sub.MIN_CHANCE,
         sub.MAX_CHANCE
       );
@@ -1094,7 +1216,7 @@ export class CombatEngine {
 
     return {
       target: plan.target,
-      distance: plan.distance,
+      distance,
       tempo: plan.tempo,
       rawDamage,
       staminaCost,
@@ -1187,9 +1309,14 @@ export class CombatEngine {
       ['B', 'A', offenseB, offenseA],
     ];
 
-    for (const [attackerKey, defenderKey] of pairs) {
-      if (c.live[defenderKey].health <= BALANCE.COMBAT.HEALTH.KO_THRESHOLD) {
-        return this._buildFinish(FINISH_METHODS.KO, round, attackerKey, defenderKey);
+    // Submission Only: KO/TKO/DOCTOR_STOPPAGE are never even checked — the
+    // spec's "victoire uniquement par soumission" — so a fight under this
+    // ruleset structurally cannot end any other way (see DEFAULT_RULES).
+    if (!c.rules.submissionOnly) {
+      for (const [attackerKey, defenderKey] of pairs) {
+        if (c.live[defenderKey].health <= BALANCE.COMBAT.HEALTH.KO_THRESHOLD) {
+          return this._buildFinish(FINISH_METHODS.KO, round, attackerKey, defenderKey);
+        }
       }
     }
 
@@ -1199,24 +1326,26 @@ export class CombatEngine {
       }
     }
 
-    let tkoFinish = null;
-    for (const [attackerKey, defenderKey, offenseAttacker, offenseDefender] of pairs) {
-      const dominant =
-        offenseAttacker.rawDamage >= offenseDefender.rawDamage * BALANCE.COMBAT.HEALTH.TKO_DAMAGE_STREAK_THRESHOLD;
-      c.live[defenderKey].tkoStreak = dominant ? c.live[defenderKey].tkoStreak + 1 : 0;
+    if (!c.rules.submissionOnly) {
+      let tkoFinish = null;
+      for (const [attackerKey, defenderKey, offenseAttacker, offenseDefender] of pairs) {
+        const dominant =
+          offenseAttacker.rawDamage >= offenseDefender.rawDamage * BALANCE.COMBAT.HEALTH.TKO_DAMAGE_STREAK_THRESHOLD;
+        c.live[defenderKey].tkoStreak = dominant ? c.live[defenderKey].tkoStreak + 1 : 0;
 
-      if (!tkoFinish && c.live[defenderKey].tkoStreak >= BALANCE.COMBAT.HEALTH.TKO_CHECK_STREAK_LENGTH) {
-        const chance = BALANCE.COMBAT.HEALTH.TKO_CHANCE_PER_CHECK * offenseAttacker.koChanceMultiplier;
-        if (this.rng() < chance) {
-          tkoFinish = this._buildFinish(FINISH_METHODS.TKO, round, attackerKey, defenderKey);
+        if (!tkoFinish && c.live[defenderKey].tkoStreak >= BALANCE.COMBAT.HEALTH.TKO_CHECK_STREAK_LENGTH) {
+          const chance = BALANCE.COMBAT.HEALTH.TKO_CHANCE_PER_CHECK * offenseAttacker.koChanceMultiplier;
+          if (this.rng() < chance) {
+            tkoFinish = this._buildFinish(FINISH_METHODS.TKO, round, attackerKey, defenderKey);
+          }
         }
       }
-    }
-    if (tkoFinish) return tkoFinish;
+      if (tkoFinish) return tkoFinish;
 
-    for (const [attackerKey, defenderKey] of pairs) {
-      if (c.damageTally[defenderKey].face >= BALANCE.COMBAT.HEALTH.DOCTOR_STOPPAGE_FACE_DAMAGE_THRESHOLD) {
-        return this._buildFinish(FINISH_METHODS.DOCTOR_STOPPAGE, round, attackerKey, defenderKey);
+      for (const [attackerKey, defenderKey] of pairs) {
+        if (c.damageTally[defenderKey].face >= BALANCE.COMBAT.HEALTH.DOCTOR_STOPPAGE_FACE_DAMAGE_THRESHOLD) {
+          return this._buildFinish(FINISH_METHODS.DOCTOR_STOPPAGE, round, attackerKey, defenderKey);
+        }
       }
     }
 
@@ -1715,15 +1844,37 @@ export class CombatEngine {
   _computePurses(finish, isDraw, byFinish) {
     const c = this.context;
     const econ = BALANCE.ECONOMY;
+
+    // KO / No Judges: a draw forced by reaching the round limit with no
+    // finish pays nothing at all — "match nul sans prime".
+    if (finish.noPurse) {
+      const zero = Object.freeze({ gross: 0, net: 0, fighterShare: 0, gymShare: 0, managerShare: 0 });
+      return { A: { ...zero }, B: { ...zero } };
+    }
+
     const tierKey = c.originalIsTitle ? 'TITLE_FIGHT' : 'REGIONAL';
     const basePurse = econ.BASE_FIGHT_PURSE[tierKey];
 
-    const gross = { A: basePurse, B: basePurse };
+    const gross = { A: basePurse * c.rules.purseMultiplier, B: basePurse * c.rules.purseMultiplier };
 
     if (!isDraw) {
       gross[finish.winnerKey] *= econ.WIN_BONUS_MULTIPLIER;
       if (byFinish && this.rng() < econ.PERFORMANCE_BONUS_CHANCE) {
         gross[finish.winnerKey] *= econ.PERFORMANCE_BONUS_MULTIPLIER;
+      }
+
+      // Open Weight: an extra bonus for a genuine underdog win, scaled by
+      // how big the pre-fight rating gap actually was (see
+      // BALANCE.UNDERGROUND.OPEN_WEIGHT's own note on why rating gap is
+      // used in place of a weight stat this game doesn't model).
+      if (c.rules.openWeight) {
+        const cfg = BALANCE.UNDERGROUND.OPEN_WEIGHT;
+        const loserKey = OTHER_FIGHTER_KEY[finish.winnerKey];
+        const ratingGap = c.preFightRatings[loserKey] - c.preFightRatings[finish.winnerKey];
+        if (ratingGap > 0) {
+          const upsetMultiplier = Math.min(cfg.UPSET_BONUS_MAX_MULTIPLIER, 1 + ratingGap * cfg.UPSET_BONUS_PER_RATING_POINT);
+          gross[finish.winnerKey] *= upsetMultiplier;
+        }
       }
     }
 
@@ -1758,7 +1909,7 @@ export class CombatEngine {
 
     const staminaFraction = live.stamina / live.staminaMax;
     const fatigueMultiplier = 1 + (1 - staminaFraction) * (inj.FATIGUE_RISK_MULTIPLIER_MAX - 1);
-    const chance = inj.BASE_CHANCE_PER_FIGHT * fatigueMultiplier;
+    const chance = inj.BASE_CHANCE_PER_FIGHT * fatigueMultiplier * c.rules.injuryRiskMultiplier;
 
     if (this.rng() >= chance) return null;
 
