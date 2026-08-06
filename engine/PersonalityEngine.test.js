@@ -10,7 +10,7 @@ import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
 import PlayerState from '../state/PlayerState.js';
-import { PersonalityEngine, computeCombinedModifiers, PERSONALITY_EVENTS } from './PersonalityEngine.js';
+import { PersonalityEngine, computeCombinedModifiers, computeActivityWeights, PERSONALITY_EVENTS } from './PersonalityEngine.js';
 
 function makeFighter(name, overrides = {}) {
   return new Fighter({
@@ -51,6 +51,37 @@ test('computeCombinedModifiers multiplies archetype and every trait together', (
   assert.ok(Math.abs(modifiers.moraleVolatility - expected('moraleVolatility')) < 1e-9);
   assert.ok(Math.abs(modifiers.progressionMultiplier - expected('progressionMultiplier')) < 1e-9);
   assert.ok(Math.abs(modifiers.salaryDemandMultiplier - expected('salaryDemandMultiplier')) < 1e-9);
+});
+
+test('computeActivityWeights (Phase 3.1 v2.1): PHYSIO_REST never drops below its minAttractionShare floor, for every archetype, with no traits', () => {
+  const minShare = BALANCE.WEEKLY_PLANNING.ACTIVITIES.PHYSIO_REST.minAttractionShare;
+  for (const archetype of Object.keys(BALANCE.PERSONALITY.ARCHETYPES)) {
+    const fighter = makeFighter(archetype, { psychology: { personality: { archetype, traits: [] } } });
+    const weights = computeActivityWeights(fighter);
+    const total = Object.values(weights).reduce((sum, w) => sum + w, 0);
+    const share = weights.PHYSIO_REST / total;
+    assert.ok(share >= minShare - 1e-9, `${archetype}: PHYSIO_REST share ${share} should be >= the ${minShare} floor`);
+  }
+});
+
+test('computeActivityWeights (Phase 3.1 v2.1): the floor only raises PHYSIO_REST\'s weight, never the other 4 activities\' relative proportions to each other', () => {
+  // Guerrier's base weights: TECHNIQUE 2, SPARRING 5, VIDEO_PREP 1, MEDIA_SPONSORS 1, PHYSIO_REST 1 (well under the floor).
+  const fighter = makeFighter('Guerrier', { psychology: { personality: { archetype: 'Guerrier', traits: [] } } });
+  const weights = computeActivityWeights(fighter);
+  const base = BALANCE.PERSONALITY.ARCHETYPES.Guerrier.activityWeights;
+
+  assert.equal(weights.TECHNIQUE, base.TECHNIQUE);
+  assert.equal(weights.SPARRING, base.SPARRING);
+  assert.equal(weights.VIDEO_PREP, base.VIDEO_PREP);
+  assert.equal(weights.MEDIA_SPONSORS, base.MEDIA_SPONSORS);
+  assert.ok(weights.PHYSIO_REST > base.PHYSIO_REST, 'the floor should have raised PHYSIO_REST above its base weight');
+});
+
+test('computeActivityWeights (Phase 3.1 v2.1): an archetype already at/above the floor (Cameleon, base 20%) is left untouched', () => {
+  const fighter = makeFighter('Cameleon', { psychology: { personality: { archetype: 'Cameleon', traits: [] } } });
+  const weights = computeActivityWeights(fighter);
+  const base = BALANCE.PERSONALITY.ARCHETYPES.Cameleon.activityWeights;
+  assert.deepEqual(weights, { ...base });
 });
 
 test('training:progression applies a silent extra skill/form nudge sized by the fighter personality', () => {

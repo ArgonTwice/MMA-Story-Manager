@@ -600,6 +600,49 @@ function renderDecisionQualitySubsection(result) {
   return lines.join('\n');
 }
 
+/** Phase 3.1 v2.1 ("Test A/B") explicit validation targets — narrower/healthier than v1's original 75-85 Readiness band, chosen after v2's regression to ~51-53. */
+const V2_1_READINESS_TARGET = Object.freeze({ MIN: 65, MAX: 70 });
+const V2_1_META_HEALTH_MIN = 90;
+/** Frozen v2 baseline (official unseeded run, before this test's PHYSIO_REST floor/recovery changes), for the comparatif below — never edit these once recorded, exactly like the Version History Tracker's own past rows. */
+const V2_BASELINE = Object.freeze({ averageReadinessOnFightDay: 52.7, metaHealthIndex: 87 });
+
+function renderV21ValidationSubsection(result) {
+  const wp = result.weeklyPlanning;
+  const readiness = wp.averageReadinessOnFightDay;
+  const metaHealth = result.metaHealth.overallIndex;
+  const readinessPass = readiness !== null && readiness >= V2_1_READINESS_TARGET.MIN && readiness <= V2_1_READINESS_TARGET.MAX;
+  const metaHealthPass = metaHealth !== null && metaHealth >= V2_1_META_HEALTH_MIN;
+
+  const lines = [renderSectionTitle('\u{1F3AF} TEST A/B v2.1 — VALIDATION (Readiness & Meta Health)')];
+  const headers = ['Metrique', 'v2 (reference)', 'v2.1 (mesure)', 'Cible v2.1', 'Statut'];
+  const rows = [
+    [
+      'Readiness moyenne (jour de combat)',
+      formatDecimal(V2_BASELINE.averageReadinessOnFightDay, 1),
+      formatDecimal(readiness, 1),
+      `${V2_1_READINESS_TARGET.MIN}-${V2_1_READINESS_TARGET.MAX}`,
+      readiness === null ? 'N/A' : readinessPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+    [
+      'Meta Health Index',
+      `${formatNumber(V2_BASELINE.metaHealthIndex)}/100`,
+      metaHealth === null ? 'N/A' : `${formatNumber(metaHealth)}/100`,
+      `>= ${V2_1_META_HEALTH_MIN}/100`,
+      metaHealthPass ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ],
+  ];
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  lines.push(
+    '(v2 (reference) est un enregistrement fige du run officiel non-graine rapporte a la fin du test precedent —' +
+      ' pas recalcule ici. Le plancher PHYSIO_REST.minAttractionShare et la recuperation relevee (-25% -> -30%)' +
+      ' sont les deux seuls leviers testes ; aucun autre systeme n\'a ete retune. Si le Meta Health Index reste' +
+      ' sous 90 malgre une Readiness dans sa cible, la cause n\'est plus le surmenage — voir le detail par' +
+      ' sous-score dans la section META HEALTH INDEX plus haut (Diversite/Equilibre/Sante financiere/Fun).)'
+  );
+  return lines.join('\n');
+}
+
 function renderWeeklyPlanningSection(result) {
   return [
     renderWeeklyPlanningHeader(),
@@ -607,6 +650,7 @@ function renderWeeklyPlanningSection(result) {
     renderArchetypeActivityDistributionSubsection(result),
     renderAverageReadinessSubsection(result),
     renderFatigueBreakdownSubsection(result),
+    renderV21ValidationSubsection(result),
     renderDecisionQualitySubsection(result),
   ].join('\n');
 }

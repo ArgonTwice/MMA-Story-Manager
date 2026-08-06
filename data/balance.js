@@ -76,7 +76,7 @@ function deepFreeze(obj) {
 
 const BALANCE = {
   /** Bump on any numeric change that could invalidate stat comparisons. */
-  VERSION: '1.8.0',
+  VERSION: '1.8.1',
 
   // ---------------------------------------------------------------------
   // PROGRESSION — fighter XP, levels, attribute growth
@@ -475,7 +475,18 @@ const BALANCE = {
   // MEDIA_SPONSORS' v1 spec text itself already called it "fatigue
   // mentale"), and gated SPARRING's injury roll behind a causal Physical
   // Fatigue threshold instead of v1's unconditional flat chance (see
-  // causalInjuryFatigueThreshold).
+  // causalInjuryFatigueThreshold). Phase 3.1 v2.1 ("Test A/B") raised
+  // PHYSIO_REST's recovery (-25% -> -30% on both gauges) and gave it
+  // minAttractionShare — see engine/PersonalityEngine.js#computeActivityWeights,
+  // which enforces this floor on every archetype's *combined* (archetype x
+  // trait) activity weights, not just the base archetype table — a v2
+  // regression showed Average Readiness on fight day collapsing to ~51-53
+  // (well under the ~65-70 healthy zone) once v2 removed v1's scripted
+  // forced-rest override in favor of "non-scriptees" archetype-driven
+  // probabilities: some archetypes (e.g. Guerrier) had such a low
+  // PHYSIO_REST weight relative to their other 4 activities that they
+  // essentially never chose to rest. The floor keeps that choice
+  // probabilistic (never forced), just guarantees it is never negligible.
   // ---------------------------------------------------------------------
   WEEKLY_PLANNING: {
     SLOTS_PER_WEEK: 3,
@@ -491,7 +502,13 @@ const BALANCE = {
       },
       VIDEO_PREP: { charge: 1, tacticalBonus: 0.05, mentalFatigueCost: 5 },
       MEDIA_SPONSORS: { charge: 1, mentalFatigueCost: 8, reputationGain: 1, hypeGain: 3, moneyGain: 250 },
-      PHYSIO_REST: { charge: 0, physicalFatigueDelta: -25, mentalFatigueDelta: -25 },
+      PHYSIO_REST: {
+        charge: 0,
+        physicalFatigueDelta: -30,
+        mentalFatigueDelta: -30,
+        /** Phase 3.1 v2.1: minimum share of a fighter's combined (archetype x trait) activity-attraction weight that PHYSIO_REST must hold onto, enforced by computeActivityWeights — see this section's doc comment above. */
+        minAttractionShare: 0.2,
+      },
     },
   },
 

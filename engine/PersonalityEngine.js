@@ -75,6 +75,17 @@ export function computeCombinedModifiers(fighter) {
  * consumed by tools/SimRunner.js's coach-AI for a weighted-random (not
  * scripted) activity choice per weekly slot.
  *
+ * Phase 3.1 v2.1 ("Test A/B"): after combining, enforces
+ * WEEKLY_PLANNING.ACTIVITIES.PHYSIO_REST.minAttractionShare as a floor on
+ * PHYSIO_REST's *share* of the total (not a fixed weight, so it scales with
+ * however extreme the other 4 activities' combined pull is) — raising
+ * PHYSIO_REST's own weight just enough to hit the floor, never touching the
+ * other 4 activities' relative weights against each other. This is a soft,
+ * algorithmic floor applied identically to every archetype/trait
+ * combination, not a per-archetype scripted override: a fighter can still
+ * probabilistically go many slots without resting, just never because their
+ * personality mathematically assigned resting a near-zero chance.
+ *
  * @param {Object} fighter - A Fighter instance (duck-typed: needs psychology.personality).
  * @returns {Object} { [activityKey]: weight } over Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES).
  */
@@ -90,6 +101,15 @@ export function computeActivityWeights(fighter) {
     const traitWeights = TRAITS[trait]?.activityWeights;
     if (!traitWeights) continue;
     for (const key of activityKeys) weights[key] *= traitWeights[key] ?? 1;
+  }
+
+  const minShare = BALANCE.WEEKLY_PLANNING.ACTIVITIES.PHYSIO_REST.minAttractionShare;
+  if (minShare) {
+    const otherWeightSum = activityKeys
+      .filter((key) => key !== 'PHYSIO_REST')
+      .reduce((sum, key) => sum + weights[key], 0);
+    const minPhysioRestWeight = (minShare * otherWeightSum) / (1 - minShare);
+    weights.PHYSIO_REST = Math.max(weights.PHYSIO_REST, minPhysioRestWeight);
   }
 
   return weights;
