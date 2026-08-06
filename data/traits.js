@@ -25,6 +25,16 @@ export const TRAIT_DISPLAY = Object.freeze({
   Intense: { color: 'red', description: "S'entraine a fond — fatigue vite, progresse vite." },
   Calme: { color: 'blue', description: 'Flegmatique — moral tres stable.' },
   Ambitieux: { color: 'gold', description: 'Vise toujours plus haut — exigeant mais motive.' },
+
+  /** Phase 4.6: 8 more traits (matrice des 20 traits) — see data/balance.js's own comment on why "Showman"/"Leader" became Frimeur/Meneur here to avoid colliding with the existing ARCHETYPE names. */
+  Travailleur: { color: 'blue', description: 'Bosseur — progresse et fatigue moins vite, mais moral plus volatile.' },
+  Paresseux: { color: 'orange', description: "Peu motive a l'entrainement — progresse lentement." },
+  Frimeur: { color: 'orange', description: 'Aime se mettre en scene — exigences salariales elevees.' },
+  Introverti: { color: 'blue', description: 'Discret, evite les projecteurs — moral tres stable.' },
+  Agressif: { color: 'red', description: "Pousse fort a l'entrainement — fatigue vite, progresse vite." },
+  Meneur: { color: 'green', description: 'Naturellement respecte du vestiaire — moral stable.' },
+  Toxique: { color: 'red', description: 'Personnalite difficile — moral tres volatile, tres exigeant.' },
+  Mentor: { color: 'green', description: 'Guide les plus jeunes — sage, mais moins concentre sur sa propre progression.' },
 });
 
 /**

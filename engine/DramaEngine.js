@@ -46,6 +46,8 @@ const CONDITION_EVALUATORS = Object.freeze({
   MIN_MONEY: (condition, ctx) => ctx.playerState.money >= condition.amount,
   HAS_RIVAL_GYMS: (condition, ctx) => ctx.worldState.rivalGyms.length > 0,
   MIN_ROSTER_SIZE: (condition, ctx) => ctx.playerState.roster.length >= condition.amount,
+  /** Phase 4.6: gates a trait-specific event to whichever fighter selectEligibleDramaEvent() already picked — the event simply isn't eligible that week for a fighter who doesn't carry the trait. */
+  HAS_TRAIT: (condition, ctx) => ctx.fighter.psychology.personality.traits.includes(condition.trait),
 });
 
 function isEventEligible(event, ctx) {
@@ -111,6 +113,8 @@ const EFFECT_APPLIERS = Object.freeze({
   ADJUST_PHYSICAL_FATIGUE: (effect, ctx) => ctx.fighter.adjustPhysicalFatigue(effect.amount),
   ADJUST_MENTAL_FATIGUE: (effect, ctx) => ctx.fighter.adjustMentalFatigue(effect.amount),
   ADJUST_MORALE: (effect, ctx) => ctx.fighter.adjustMorale(effect.amount),
+  /** Phase 4.6: adjusts the featured fighter's relationship/loyalty with the gym (see Fighter#adjustLoyalty). */
+  ADJUST_LOYALTY: (effect, ctx) => ctx.fighter.adjustLoyalty(effect.amount),
   CHANGE_REPUTATION: (effect, ctx) => ctx.playerState.changeReputation(effect.amount, `DRAMA_ENGINE:${ctx.eventId}`),
   CHANGE_HYPE: (effect, ctx) => ctx.playerState.changeHype(effect.amount, `DRAMA_ENGINE:${ctx.eventId}`),
   CHANGE_MONEY: (effect, ctx) => ctx.playerState.changeMoney(effect.amount, `DRAMA_ENGINE:${ctx.eventId}`),

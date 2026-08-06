@@ -407,6 +407,513 @@ export const DRAMA_EVENTS = Object.freeze([
       },
     ],
   }),
+  // ---------------------------------------------------------------------
+  // Phase 4.6 ("Fighters with Soul"): one event per trait (20 total),
+  // each gated by { type: 'HAS_TRAIT', trait: '<TraitKey>' } so it can
+  // only ever be selected for the week's randomly-featured fighter when
+  // THEY happen to carry that exact trait — combined with at least one
+  // contextual condition/weightSignal, matching the spec's "Traits +
+  // Contexte" pairing. Several exercise the new ADJUST_LOYALTY effect
+  // (Fighter#adjustLoyalty) so the relationship/loyalty gauge is actually
+  // moved by real gameplay, not just displayed.
+  // ---------------------------------------------------------------------
+  Object.freeze({
+    id: 'PROFESSIONAL_CONSISTENCY',
+    category: EVENT_CATEGORIES.FIGHTER_STORY,
+    baseChance: 0.7,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Professionnel' }],
+    weightSignals: [{ signal: 'PERSONALITY_PROGRESSION', scale: 0.5 }],
+    choices: [
+      {
+        id: 'EMBRACE_ROUTINE',
+        label: 'Assumer sa reputation de metronome',
+        effects: [
+          { type: 'CHANGE_REPUTATION', amount: 2 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 3 },
+        ],
+      },
+      {
+        id: 'STAY_QUIET',
+        label: 'Rester discret sur sa methode',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 1 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'NIGHT_OUT_TEMPTATION',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Fetard' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'JOIN_THE_PARTY',
+        label: 'Sortir faire la fete',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 10 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 5 },
+          { type: 'CHANGE_REPUTATION', amount: -1 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'STAY_IN',
+        label: 'Rester au calme',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: -5 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 1 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'IMPULSIVE_CHALLENGE',
+    category: EVENT_CATEGORIES.RIVALRIES,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Impulsif' }, { type: 'HAS_RIVAL_GYMS' }],
+    weightSignals: [{ signal: 'RIVAL_GYM_COUNT', scale: 1 }],
+    choices: [
+      {
+        id: 'CALL_OUT_RIVAL',
+        label: 'Defier un rival sur un coup de tete',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 5 },
+          { type: 'CHANGE_REPUTATION', amount: -1 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 6 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'THINK_TWICE',
+        label: 'Se raviser au dernier moment',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 2 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'PROVOCATEUR_STUNT',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Provocateur' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.6 }],
+    choices: [
+      {
+        id: 'PULL_THE_STUNT',
+        label: 'Faire un coup d\'eclat devant les cameras',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 7 },
+          { type: 'CHANGE_REPUTATION', amount: -2 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 5 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'PLAY_IT_SAFE',
+        label: 'Jouer la carte de la sobriete',
+        effects: [{ type: 'CHANGE_HYPE', amount: 2 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'EXTRA_MILE_SESSION',
+    category: EVENT_CATEGORIES.FIGHTER_STORY,
+    baseChance: 0.7,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Discipline' }, { type: 'NOT_INJURED' }],
+    weightSignals: [{ signal: 'PERSONALITY_PROGRESSION', scale: 0.8 }],
+    choices: [
+      {
+        id: 'PUSH_EXTRA',
+        label: 'Ajouter une session non prevue',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 8 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 4 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 3 },
+        ],
+      },
+      {
+        id: 'KEEP_STANDARD',
+        label: 'S\'en tenir au plan prevu',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 1 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'LOYALTY_TEST',
+    category: EVENT_CATEGORIES.RIVALRIES,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Loyal' }, { type: 'HAS_RIVAL_GYMS' }],
+    weightSignals: [{ signal: 'RIVAL_GYM_COUNT', scale: 1 }],
+    choices: [
+      {
+        id: 'REAFFIRM_BOND',
+        label: 'Reaffirmer publiquement son attachement au gym',
+        effects: [
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: 15 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 5 },
+        ],
+      },
+      {
+        id: 'STAY_NONCOMMITTAL',
+        label: 'Rester evasif sur son avenir',
+        effects: [{ type: 'ADJUST_LOYALTY', target: 'fighter', amount: -5 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'ARROGANT_CALLOUT',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Arrogant' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'DOUBLE_DOWN',
+        label: 'En rajouter face aux critiques',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 6 },
+          { type: 'CHANGE_REPUTATION', amount: -2 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 5 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'TONE_IT_DOWN',
+        label: 'Se moderer, a contrecoeur',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -2 },
+          { type: 'CHANGE_REPUTATION', amount: 1 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'HUMBLE_DEFLECTION',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Humble' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.4 }],
+    choices: [
+      {
+        id: 'CREDIT_THE_TEAM',
+        label: 'Rediriger les eloges vers le staff',
+        effects: [
+          { type: 'CHANGE_REPUTATION', amount: 2 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 3 },
+        ],
+      },
+      {
+        id: 'TAKE_THE_SPOTLIGHT',
+        label: 'Accepter les projecteurs, pour une fois',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 3 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -1 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'CHARITY_REQUEST',
+    category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Genereux' }, { type: 'MIN_MONEY', amount: 500 }],
+    weightSignals: [],
+    choices: [
+      {
+        id: 'DONATE_PURSE',
+        label: 'Faire un don sur sa propre bourse',
+        effects: [
+          { type: 'CHANGE_MONEY', amount: -400 },
+          { type: 'CHANGE_REPUTATION', amount: 3 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 4 },
+        ],
+        personalityLean: { dimension: 'salaryDemandMultiplier', scale: 1 },
+      },
+      {
+        id: 'DECLINE_POLITELY',
+        label: 'Decliner poliment cette fois',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: -2 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'OVERTRAINING_RISK',
+    category: EVENT_CATEGORIES.FIGHTER_STORY,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Intense' }, { type: 'NOT_INJURED' }],
+    weightSignals: [{ signal: 'PERSONALITY_PROGRESSION', scale: 0.5 }],
+    choices: [
+      {
+        id: 'PUSH_THROUGH_PAIN',
+        label: 'Continuer malgre les signaux d\'alerte',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 15 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 5 },
+        ],
+      },
+      {
+        id: 'LISTEN_TO_BODY',
+        label: 'Ecouter son corps et lever le pied',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: -10 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -2 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'ZEN_FOCUS',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Calme' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.4 }],
+    choices: [
+      {
+        id: 'STAY_COMPOSED',
+        label: 'Rester impassible face a la pression',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 4 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: -5 },
+        ],
+      },
+      {
+        id: 'ENGAGE_ANYWAY',
+        label: 'Se preter au jeu mediatique',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 2 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 6 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'TITLE_SHOT_DEMAND',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Ambitieux' }],
+    weightSignals: [{ signal: 'PERSONALITY_SALARY_DEMAND', scale: 0.5 }],
+    choices: [
+      {
+        id: 'DEMAND_BIGGER_FIGHT',
+        label: 'Refuser un combat juge indigne de son statut',
+        effects: [
+          { type: 'CHANGE_REPUTATION', amount: -2 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 6 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 4 },
+        ],
+        personalityLean: { dimension: 'salaryDemandMultiplier', scale: 1 },
+      },
+      {
+        id: 'ACCEPT_ANYWAY',
+        label: 'Accepter le combat malgre tout',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -5 },
+          { type: 'CHANGE_REPUTATION', amount: 1 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'GRINDER_BREAKTHROUGH',
+    category: EVENT_CATEGORIES.FIGHTER_STORY,
+    baseChance: 0.7,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Travailleur' }, { type: 'NOT_INJURED' }],
+    weightSignals: [{ signal: 'PERSONALITY_PROGRESSION', scale: 0.6 }],
+    choices: [
+      {
+        id: 'LOG_EXTRA_HOURS',
+        label: 'Enchainer les heures supplementaires',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 10 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 3 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 5 },
+        ],
+      },
+      {
+        id: 'STICK_TO_PLAN',
+        label: 'S\'en tenir au programme etabli',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 2 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'SKIPPED_SESSION',
+    category: EVENT_CATEGORIES.FIGHTER_STORY,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Paresseux' }, { type: 'NOT_INJURED' }],
+    weightSignals: [],
+    choices: [
+      {
+        id: 'LET_IT_SLIDE',
+        label: 'Fermer les yeux, juste cette fois',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: -8 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 3 },
+        ],
+      },
+      {
+        id: 'CALL_THEM_OUT',
+        label: 'Le recadrer devant le reste du groupe',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -6 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 4 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: -8 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'VIRAL_STUNT',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Frimeur' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.6 }],
+    choices: [
+      {
+        id: 'GO_VIRAL',
+        label: 'Tenter le coup viral',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 10 },
+          { type: 'CHANGE_REPUTATION', amount: -1 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 6 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'KEEP_IT_CLASSY',
+        label: 'Rester sobre malgre l\'occasion',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 2 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 2 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'MEDIA_AVOIDANCE',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Introverti' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.3 }],
+    choices: [
+      {
+        id: 'DECLINE_INTERVIEW',
+        label: 'Decliner poliment l\'interview',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 5 },
+          { type: 'CHANGE_HYPE', amount: -1 },
+        ],
+      },
+      {
+        id: 'FORCE_THROUGH_IT',
+        label: 'S\'y plier malgre l\'inconfort',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 3 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 8 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -3 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'SPARRING_INCIDENT',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Agressif' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
+    weightSignals: [{ signal: 'ROSTER_SIZE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'EASE_OFF',
+        label: 'Lever le pied avec son partenaire',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: -5 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -2 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: 3 },
+        ],
+      },
+      {
+        id: 'KEEP_GOING_HARD',
+        label: 'Continuer a pleine intensite',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 12 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 5 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: -6 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'LOCKER_ROOM_SPEECH',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Meneur' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
+    weightSignals: [{ signal: 'ROSTER_SIZE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'RALLY_THE_TEAM',
+        label: 'Galvaniser le vestiaire avant la semaine',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 8 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 3 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: 10 },
+        ],
+      },
+      {
+        id: 'KEEP_TO_YOURSELF',
+        label: 'Rester en retrait cette fois',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 1 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'TOXIC_FRICTION',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Toxique' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
+    weightSignals: [{ signal: 'ROSTER_SIZE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'ADDRESS_THE_TENSION',
+        label: 'Crever l\'abces en discutant franchement',
+        effects: [
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 6 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 2 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: 5 },
+        ],
+      },
+      {
+        id: 'LET_IT_FESTER',
+        label: 'Laisser la tension s\'installer',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -4 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: -10 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'MENTORSHIP_MOMENT',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_TRAIT', trait: 'Mentor' }, { type: 'MIN_ROSTER_SIZE', amount: 2 }],
+    weightSignals: [{ signal: 'ROSTER_SIZE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'TAKE_PROSPECT_UNDER_WING',
+        label: 'Prendre un jeune combattant sous son aile',
+        effects: [
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 5 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 4 },
+          { type: 'ADJUST_LOYALTY', target: 'fighter', amount: 8 },
+        ],
+      },
+      {
+        id: 'FOCUS_ON_SELF',
+        label: 'Se concentrer sur sa propre carriere',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 2 }],
+      },
+    ],
+  }),
   Object.freeze({
     id: 'FACILITY_INSPECTION',
     category: EVENT_CATEGORIES.GYM_LIFE,

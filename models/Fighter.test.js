@@ -38,6 +38,23 @@ test('adjustPhysicalFatigue/adjustMentalFatigue each clamp to their own [MIN, MA
   assert.equal(fighter.attributes.mentalFatigue, BALANCE.MENTAL_FATIGUE.MAX);
 });
 
+test('a new fighter starts at PSYCHOLOGY.STARTING_VALUES.loyalty, and adjustLoyalty clamps to [PSYCHOLOGY.MIN, PSYCHOLOGY.MAX]', () => {
+  const fighter = makeFighter();
+  assert.equal(fighter.psychology.loyalty, BALANCE.PSYCHOLOGY.STARTING_VALUES.loyalty);
+
+  fighter.adjustLoyalty(-999);
+  assert.equal(fighter.psychology.loyalty, BALANCE.PSYCHOLOGY.MIN);
+  fighter.adjustLoyalty(999);
+  assert.equal(fighter.psychology.loyalty, BALANCE.PSYCHOLOGY.MAX);
+});
+
+test('psychology.loyalty round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  fighter.adjustLoyalty(-15);
+  const rebuilt = Fighter.fromJSON(fighter.toJSON());
+  assert.equal(rebuilt.psychology.loyalty, BALANCE.PSYCHOLOGY.STARTING_VALUES.loyalty - 15);
+});
+
 test('getReadiness matches the documented v2 formula: 100 - (0.6*PhysicalFatigue + 0.4*MentalFatigue) + MoralModifier + TacticalBonus - InjuryRisk, clamped', () => {
   const r = BALANCE.READINESS;
   const fighter = makeFighter({ attributes: { forme: 80, moral: 65, physicalFatigue: 40, mentalFatigue: 20 } });

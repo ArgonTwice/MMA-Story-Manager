@@ -210,6 +210,8 @@ export class Fighter {
       motivation: clampPsychology(
         config.psychology?.motivation ?? BALANCE.PSYCHOLOGY.STARTING_VALUES.motivation
       ),
+      /** Phase 4.6: relationship/loyalty with the current gym, 0-100 — see adjustLoyalty(). Mutable, unlike ego/discipline/motivation which are set once at creation. */
+      loyalty: clampPsychology(config.psychology?.loyalty ?? BALANCE.PSYCHOLOGY.STARTING_VALUES.loyalty),
     };
 
     /** Career record. */
@@ -671,6 +673,16 @@ export class Fighter {
    */
   adjustForm(delta) {
     this.attributes.forme = clampForm(this.attributes.forme + delta);
+  }
+
+  /**
+   * Phase 4.6: adjusts this fighter's relationship/loyalty with the gym
+   * (e.g. a Drama Engine choice reaffirming or straining the bond — see
+   * engine/DramaEngine.js's ADJUST_LOYALTY effect).
+   * @param {number} delta
+   */
+  adjustLoyalty(delta) {
+    this.psychology.loyalty = clampPsychology(this.psychology.loyalty + delta);
   }
 
   /**

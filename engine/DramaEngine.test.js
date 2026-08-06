@@ -11,7 +11,7 @@ import { DRAMA_EVENTS } from '../data/events.js';
 import Fighter from '../models/Fighter.js';
 import PlayerState from '../state/PlayerState.js';
 import WorldState from '../state/WorldState.js';
-import { processWeeklyDrama, DRAMA_ENGINE_EVENTS } from './DramaEngine.js';
+import { processWeeklyDrama, DRAMA_ENGINE_EVENTS, selectEligibleDramaEvent, applyDramaEventChoice } from './DramaEngine.js';
 import EventBus from '../core/EventBus.js';
 
 function makeFighter(overrides = {}) {
@@ -59,6 +59,7 @@ test('every DRAMA_EVENTS entry is well-formed: unique id, known category, non-em
     'ADJUST_PHYSICAL_FATIGUE',
     'ADJUST_MENTAL_FATIGUE',
     'ADJUST_MORALE',
+    'ADJUST_LOYALTY',
     'CHANGE_REPUTATION',
     'CHANGE_HYPE',
     'CHANGE_MONEY',
@@ -169,4 +170,56 @@ test('with rival gyms present, RIVALRIES-category events can fire', () => {
   unsub();
 
   assert.ok(events.some((e) => e.category === 'RIVALRIES'), 'expected at least one RIVALRIES event to fire over 300 weeks with rival gyms present');
+});
+
+test('HAS_TRAIT gates LOYALTY_TEST to a fighter who actually carries the Loyal trait', () => {
+  const world = new WorldState();
+  world.addRivalGym({ name: 'Rival', reputation: 50, activity: 50 });
+
+  const withoutTraitPlayer = new PlayerState({ gymName: 'No Loyal Trait' });
+  withoutTraitPlayer.addFighter(makeFighter({ psychology: { personality: { archetype: 'Cameleon', traits: ['Fetard'] } } }));
+
+  let seed = 1;
+  const rngA = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 500; i += 1) {
+    const selection = selectEligibleDramaEvent(withoutTraitPlayer, world, rngA);
+    assert.notEqual(selection?.event.id, 'LOYALTY_TEST', 'a fighter without the Loyal trait should never be offered LOYALTY_TEST');
+  }
+
+  const withTraitPlayer = new PlayerState({ gymName: 'Loyal Roster' });
+  withTraitPlayer.addFighter(makeFighter({ psychology: { personality: { archetype: 'Cameleon', traits: ['Loyal'] } } }));
+
+  let sawLoyaltyTest = false;
+  let seed2 = 1;
+  const rngB = () => {
+    seed2 = (seed2 * 1103515245 + 12345) & 0x7fffffff;
+    return seed2 / 0x7fffffff;
+  };
+  for (let i = 0; i < 500 && !sawLoyaltyTest; i += 1) {
+    const selection = selectEligibleDramaEvent(withTraitPlayer, world, rngB);
+    if (selection?.event.id === 'LOYALTY_TEST') sawLoyaltyTest = true;
+  }
+  assert.ok(sawLoyaltyTest, 'a fighter WITH the Loyal trait should be offered LOYALTY_TEST at least once across 500 attempts');
+});
+
+test('LOYALTY_TEST\'s REAFFIRM_BOND choice raises psychology.loyalty via the ADJUST_LOYALTY effect; STAY_NONCOMMITTAL lowers it', () => {
+  const world = new WorldState();
+  world.addRivalGym({ name: 'Rival', reputation: 50, activity: 50 });
+  const player = new PlayerState({ gymName: 'Loyal Roster' });
+  const fighter = makeFighter({ psychology: { personality: { archetype: 'Cameleon', traits: ['Loyal'] } } });
+  player.addFighter(fighter);
+
+  const event = DRAMA_EVENTS.find((e) => e.id === 'LOYALTY_TEST');
+  const selection = { event, fighter, playerState: player, worldState: world };
+
+  const loyaltyBefore = fighter.psychology.loyalty;
+  applyDramaEventChoice(selection, 'REAFFIRM_BOND');
+  assert.equal(fighter.psychology.loyalty, Math.min(BALANCE.PSYCHOLOGY.MAX, loyaltyBefore + 15));
+
+  const loyaltyAfterReaffirm = fighter.psychology.loyalty;
+  applyDramaEventChoice(selection, 'STAY_NONCOMMITTAL');
+  assert.equal(fighter.psychology.loyalty, Math.max(BALANCE.PSYCHOLOGY.MIN, loyaltyAfterReaffirm - 5));
 });

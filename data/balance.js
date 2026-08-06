@@ -1034,6 +1034,8 @@ const BALANCE = {
       ego: 50,
       discipline: 50,
       motivation: 60,
+      /** Phase 4.6: relationship/loyalty with the current gym, 0-100 — see Fighter#adjustLoyalty(). A new signing starts moderately, not blindly, loyal. */
+      loyalty: 60,
     },
   },
 
@@ -1420,6 +1422,94 @@ const BALANCE = {
         activityWeights: { TECHNIQUE: 1.1, SPARRING: 0.8, VIDEO_PREP: 1.2, MEDIA_SPONSORS: 0.9, PHYSIO_REST: 1.3 },
       },
       Ambitieux: { label: 'Ambitieux', fatigueMultiplier: 1.05, salaryDemandMultiplier: 1.15, moraleVolatility: 1.1, progressionMultiplier: 1.1 },
+
+      /**
+       * Phase 4.6 ("Fighters with Soul"): 8 more traits, same symmetric
+       * buff/malus philosophy as the 12 above — every gain on one dimension
+       * is paid for on another, never a strict upgrade. Two of the user's
+       * illustrative examples ("Showman", "Leader") already name existing
+       * ARCHETYPES above; reusing them as trait keys too would let the same
+       * fighter carry a "Showman" archetype AND a "Showman" trait badge,
+       * which reads as a confusing duplicate label rather than two distinct
+       * concepts. Frimeur/Meneur below carry the same narrative flavor
+       * (show-off / natural leader) under names that don't collide.
+       */
+      Travailleur: {
+        label: 'Travailleur',
+        fatigueMultiplier: 0.85,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 1.15,
+        progressionMultiplier: 1.15,
+        activityWeights: { TECHNIQUE: 1.3, SPARRING: 1.2, VIDEO_PREP: 1.1, MEDIA_SPONSORS: 0.6, PHYSIO_REST: 0.9 },
+      },
+      Paresseux: {
+        label: 'Paresseux',
+        fatigueMultiplier: 0.9,
+        salaryDemandMultiplier: 0.9,
+        moraleVolatility: 0.85,
+        progressionMultiplier: 0.8,
+        activityWeights: { TECHNIQUE: 0.7, SPARRING: 0.6, VIDEO_PREP: 0.7, MEDIA_SPONSORS: 0.8, PHYSIO_REST: 1.8 },
+      },
+      Frimeur: {
+        label: 'Frimeur',
+        fatigueMultiplier: 1.05,
+        salaryDemandMultiplier: 1.25,
+        moraleVolatility: 1.2,
+        progressionMultiplier: 0.9,
+        activityWeights: { TECHNIQUE: 0.7, SPARRING: 0.9, VIDEO_PREP: 0.6, MEDIA_SPONSORS: 1.8, PHYSIO_REST: 0.9 },
+      },
+      Introverti: {
+        label: 'Introverti',
+        fatigueMultiplier: 1.0,
+        salaryDemandMultiplier: 0.9,
+        moraleVolatility: 0.75,
+        progressionMultiplier: 1.05,
+        activityWeights: { TECHNIQUE: 1.3, SPARRING: 0.9, VIDEO_PREP: 1.3, MEDIA_SPONSORS: 0.4, PHYSIO_REST: 1.0 },
+      },
+      Agressif: {
+        label: 'Agressif',
+        fatigueMultiplier: 1.2,
+        salaryDemandMultiplier: 1.0,
+        moraleVolatility: 1.15,
+        progressionMultiplier: 1.1,
+        activityWeights: { TECHNIQUE: 0.8, SPARRING: 1.7, VIDEO_PREP: 0.6, MEDIA_SPONSORS: 1.0, PHYSIO_REST: 0.6 },
+      },
+      Meneur: {
+        label: 'Meneur',
+        /**
+         * Tuned post-launch: a 4000-season BalanceReporter run showed Meneur
+         * persistently at -6.2 pts winrate vs 50% (outside the [45%, 55%]
+         * target) even at large sample size — unlike every other trait's
+         * deviation at smaller samples, which converged to neutral as noise
+         * washed out. Its steadier moraleVolatility (0.8, shared with
+         * Discipline, which lands neutral) wasn't enough to offset its own
+         * mild fatigueMultiplier/progressionMultiplier and its
+         * slightly-below-neutral PHYSIO_REST weight. Nudged both up to a
+         * real, modest buff — in line with Discipline's own 0.88/1.1 pairing
+         * — since a fighter who leads the room by example should also be
+         * the one putting in the work.
+         */
+        fatigueMultiplier: 0.9,
+        salaryDemandMultiplier: 1.1,
+        moraleVolatility: 0.8,
+        progressionMultiplier: 1.08,
+        activityWeights: { TECHNIQUE: 1.1, SPARRING: 1.2, VIDEO_PREP: 1.1, MEDIA_SPONSORS: 1.1, PHYSIO_REST: 0.9 },
+      },
+      Toxique: {
+        label: 'Toxique',
+        fatigueMultiplier: 1.0,
+        salaryDemandMultiplier: 1.2,
+        moraleVolatility: 1.3,
+        progressionMultiplier: 1.1,
+      },
+      Mentor: {
+        label: 'Mentor',
+        fatigueMultiplier: 0.95,
+        salaryDemandMultiplier: 1.1,
+        moraleVolatility: 0.75,
+        progressionMultiplier: 0.9,
+        activityWeights: { TECHNIQUE: 1.0, SPARRING: 1.0, VIDEO_PREP: 1.4, MEDIA_SPONSORS: 1.0, PHYSIO_REST: 1.0 },
+      },
     },
 
     /** Reference magnitudes engine/PersonalityEngine.js scales its silent, post-hoc nudges by. */

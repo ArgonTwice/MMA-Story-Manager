@@ -791,6 +791,82 @@ function renderDramaEngineSection(result) {
   ].join('\n');
 }
 
+/** Phase 4.6 explicit validation target: "aucun trait ne depasse 45-55% de winrate" — a trait is narrative flavor, never a strict power upgrade. */
+const TRAIT_TARGETS = Object.freeze({ WINRATE_MIN: 0.45, WINRATE_MAX: 0.55 });
+
+/** Phase 4.6: the one Drama Engine event each of the 20 personality traits gates (see data/events.js's own "one event per trait" block) — used to isolate "Trait Event Frequency" from the generic per-event breakdown above. */
+const TRAIT_EVENT_IDS = Object.freeze({
+  Professionnel: 'PROFESSIONAL_CONSISTENCY',
+  Fetard: 'NIGHT_OUT_TEMPTATION',
+  Impulsif: 'IMPULSIVE_CHALLENGE',
+  Provocateur: 'PROVOCATEUR_STUNT',
+  Discipline: 'EXTRA_MILE_SESSION',
+  Loyal: 'LOYALTY_TEST',
+  Arrogant: 'ARROGANT_CALLOUT',
+  Humble: 'HUMBLE_DEFLECTION',
+  Genereux: 'CHARITY_REQUEST',
+  Intense: 'OVERTRAINING_RISK',
+  Calme: 'ZEN_FOCUS',
+  Ambitieux: 'TITLE_SHOT_DEMAND',
+  Travailleur: 'GRINDER_BREAKTHROUGH',
+  Paresseux: 'SKIPPED_SESSION',
+  Frimeur: 'VIRAL_STUNT',
+  Introverti: 'MEDIA_AVOIDANCE',
+  Agressif: 'SPARRING_INCIDENT',
+  Meneur: 'LOCKER_ROOM_SPEECH',
+  Toxique: 'TOXIC_FRICTION',
+  Mentor: 'MENTORSHIP_MOMENT',
+});
+
+function renderFightersWithSoulHeader() {
+  return '\n=== FIGHTERS WITH SOUL — TRAITS (Phase 4.6) ===';
+}
+
+function renderTraitWinrateDeltaSubsection(result) {
+  const lines = [renderSectionTitle('\u{2696}\u{FE0F} TRAIT WINRATE DELTA')];
+  const headers = ['Trait', 'Combats', 'Winrate', 'Ecart vs 50%', 'Statut'];
+  const rows = Object.entries(result.traits).map(([trait, bucket]) => {
+    const total = bucket.wins + bucket.losses + bucket.draws;
+    const inBand = bucket.winRate === null || (bucket.winRate >= TRAIT_TARGETS.WINRATE_MIN && bucket.winRate <= TRAIT_TARGETS.WINRATE_MAX);
+    return [
+      trait,
+      formatNumber(total),
+      bucket.winRate === null ? 'N/A' : formatPercent(bucket.winRate),
+      bucket.winRate === null ? 'N/A' : formatSignedPercentPoints(bucket.winRate, 0.5),
+      inBand ? 'DANS LA CIBLE' : 'HORS CIBLE',
+    ];
+  });
+  lines.push(renderTable(headers, rows));
+  lines.push('');
+  lines.push(
+    `Cible : chaque trait doit rester dans [${formatPercent(TRAIT_TARGETS.WINRATE_MIN, 0)}, ${formatPercent(TRAIT_TARGETS.WINRATE_MAX, 0)}] ` +
+      '(un trait est une coloration narrative, jamais un choix de puissance brute).'
+  );
+  const outOfBand = Object.entries(result.traits).filter(
+    ([, bucket]) => bucket.winRate !== null && (bucket.winRate < TRAIT_TARGETS.WINRATE_MIN || bucket.winRate > TRAIT_TARGETS.WINRATE_MAX)
+  );
+  lines.push(outOfBand.length === 0 ? 'Aucun trait hors cible.' : `${outOfBand.length} trait(s) hors cible : ${outOfBand.map(([t]) => t).join(', ')}.`);
+  return lines.join('\n');
+}
+
+function renderTraitEventFrequencySubsection(result) {
+  const d = result.drama;
+  const lines = [renderSectionTitle('\u{1F3AD} TRAIT EVENT FREQUENCY')];
+  const headers = ['Trait', 'Evenement', 'Declenchements', 'Part des evenements totaux'];
+  const rows = Object.entries(TRAIT_EVENT_IDS).map(([trait, eventId]) => {
+    const bucket = d.byEvent[eventId];
+    const count = bucket?.totalCount ?? 0;
+    const share = d.totalEventsResolved > 0 ? count / d.totalEventsResolved : null;
+    return [trait, eventId, formatNumber(count), share === null ? 'N/A' : formatPercent(share, 1)];
+  });
+  lines.push(renderTable(headers, rows));
+  return lines.join('\n');
+}
+
+function renderFightersWithSoulSection(result) {
+  return [renderFightersWithSoulHeader(), renderTraitWinrateDeltaSubsection(result), renderTraitEventFrequencySubsection(result)].join('\n');
+}
+
 /**
  * Phase 4.1 validation section — same shape as renderDramaValidationSubsection
  * (Phase 3.2's own "PHASE X — VALIDATION" pattern): a PASS/FAIL table against
@@ -1416,6 +1492,7 @@ export function formatReport(result) {
     renderMetaHealthDashboard(result),
     renderWeeklyPlanningSection(result),
     renderDramaEngineSection(result),
+    renderFightersWithSoulSection(result),
     renderClinchValidationSection(result),
     renderLegacyEngineSection(result),
     renderLegacyValidationSection(result),

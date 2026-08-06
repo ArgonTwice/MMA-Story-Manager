@@ -397,6 +397,10 @@ function createStatsAccumulator() {
     fighterCountsByStyle[key] = 0;
   }
 
+  /** Phase 4.6 ("Fighters with Soul"): trait -> {wins,losses,draws}, credited to EVERY trait a fighter carries (traits aren't exclusive like archetype/style) — see BalanceReporter's "Trait Winrate Delta". */
+  const traits = {};
+  for (const key of Object.keys(BALANCE.PERSONALITY.TRAITS)) traits[key] = emptyStyleBucket();
+
   return {
     economy: {
       weeksSimulated: 0,
@@ -409,6 +413,7 @@ function createStatsAccumulator() {
     },
     archetypes,
     styles,
+    traits,
     styleMatchups: createStyleMatchupMatrix(),
     styleWinMethods: createStyleWinMethodsAccumulator(),
     styleIdentity,
@@ -690,6 +695,9 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
       const outcome = isDraw ? 'draws' : result.winner === key ? 'wins' : 'losses';
       stats.archetypes[fighter.psychology.personality.archetype][outcome] += 1;
       stats.styles[fighter.identity.style][outcome] += 1;
+      for (const trait of fighter.psychology.personality.traits) {
+        stats.traits[trait][outcome] += 1;
+      }
       recordInjury(stats, result.injuries?.[key], 'COMBAT');
     }
   }
@@ -1377,6 +1385,14 @@ function finalizeStats(stats, config, durationMs) {
     ])
   );
 
+  /** Phase 4.6: same shape as `styles` above, one bucket per personality trait — see BalanceReporter's "Trait Winrate Delta" (target: no trait's winRate outside [0.45, 0.55]). */
+  const traits = Object.fromEntries(
+    Object.entries(stats.traits).map(([key, bucket]) => [
+      key,
+      { wins: bucket.wins, losses: bucket.losses, draws: bucket.draws, winRate: winRate(bucket) },
+    ])
+  );
+
   /** Combined record across every GROUND-affinity style (see GRAPPLING_STYLE_KEYS) — used by BalanceReporter's Version History Tracker to isolate the effect of judge-scoring changes on grappling as a whole. */
   const grapplingBucket = GRAPPLING_STYLE_KEYS.reduce(
     (acc, style) => {
@@ -1449,6 +1465,7 @@ function finalizeStats(stats, config, durationMs) {
     },
     archetypes,
     styles,
+    traits,
     grappling,
     styleMatchups: finalizeStyleMatchups(stats.styleMatchups),
     styleWinMethods: finalizeStyleWinMethods(stats.styleWinMethods, styles),

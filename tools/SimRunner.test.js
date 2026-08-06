@@ -35,6 +35,23 @@ test('runSimulation completes a small multi-season run without throwing and retu
   for (const bucket of Object.values(result.styles)) {
     assert.ok(bucket.wins >= 0 && bucket.losses >= 0 && bucket.draws >= 0);
   }
+
+  assert.deepEqual(Object.keys(result.traits).sort(), Object.keys(BALANCE.PERSONALITY.TRAITS).sort());
+  for (const bucket of Object.values(result.traits)) {
+    assert.ok(bucket.wins >= 0 && bucket.losses >= 0 && bucket.draws >= 0);
+    assert.ok(bucket.winRate === null || (bucket.winRate >= 0 && bucket.winRate <= 1));
+  }
+});
+
+test('trait winrate buckets credit EVERY trait a fighter carries, not just one (traits are non-exclusive, unlike archetype/style)', () => {
+  const result = runSimulation({ seasons: 20, rosterSize: 6, seed: 99 });
+
+  const totalTraitFights = Object.values(result.traits).reduce((sum, bucket) => sum + bucket.wins + bucket.losses + bucket.draws, 0);
+  const totalStyleFights = Object.values(result.styles).reduce((sum, bucket) => sum + bucket.wins + bucket.losses + bucket.draws, 0);
+  assert.ok(
+    totalTraitFights > totalStyleFights,
+    'every fighter carries 2-3 traits (MIN_TRAITS..MAX_TRAITS) but exactly 1 style, so summed across all buckets, trait fight-credits should outnumber style fight-credits'
+  );
 });
 
 test('runSimulation with a fixed seed is reproducible in its fight/economy totals', () => {
@@ -81,9 +98,31 @@ test('formatReport renders every required section as plain text without throwing
     'MATRICE DE MATCHUP PAR STYLE',
     'META HEALTH DASHBOARD',
     'VERSION HISTORY TRACKER',
+    'FIGHTERS WITH SOUL — TRAITS (Phase 4.6)',
+    'TRAIT WINRATE DELTA',
+    'TRAIT EVENT FREQUENCY',
   ]) {
     assert.ok(report.includes(heading), `report should include a "${heading}" section`);
   }
+});
+
+test('Trait Winrate Delta lists all 20 traits with a DANS LA CIBLE/HORS CIBLE verdict, and Trait Event Frequency lists all 20 trait-gated events', () => {
+  const result = runSimulation({ seasons: 20, rosterSize: 8, seed: 11 });
+  const report = formatReport(result);
+
+  for (const trait of Object.keys(BALANCE.PERSONALITY.TRAITS)) {
+    assert.ok(report.includes(trait), `report should mention trait "${trait}"`);
+  }
+  for (const eventId of [
+    'PROFESSIONAL_CONSISTENCY', 'NIGHT_OUT_TEMPTATION', 'IMPULSIVE_CHALLENGE', 'PROVOCATEUR_STUNT',
+    'EXTRA_MILE_SESSION', 'LOYALTY_TEST', 'ARROGANT_CALLOUT', 'HUMBLE_DEFLECTION', 'CHARITY_REQUEST',
+    'OVERTRAINING_RISK', 'ZEN_FOCUS', 'TITLE_SHOT_DEMAND', 'GRINDER_BREAKTHROUGH', 'SKIPPED_SESSION',
+    'VIRAL_STUNT', 'MEDIA_AVOIDANCE', 'SPARRING_INCIDENT', 'LOCKER_ROOM_SPEECH', 'TOXIC_FRICTION', 'MENTORSHIP_MOMENT',
+  ]) {
+    assert.ok(report.includes(eventId), `report should mention trait event "${eventId}"`);
+  }
+  assert.ok(report.includes('DANS LA CIBLE') || report.includes('HORS CIBLE'));
+  assert.ok(report.includes('45%') && report.includes('55%'), 'report should state the 45-55% target band');
 });
 
 test('Version History Tracker: the current run\'s row reflects live results, and deltas vs the recorded v0.34a/v0.34b entries are internally consistent', () => {

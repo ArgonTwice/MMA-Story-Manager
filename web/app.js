@@ -95,21 +95,6 @@ function trendArrow(delta) {
   return { symbol: '\u{2192}', cls: 'trend-flat' };
 }
 
-/**
- * Derived "loyalty" gauge (0-100) for the profile view: reuses the exact
- * same archetype/trait salaryDemandMultiplier values engine/StoryEngine.js's
- * own contract-demand logic already applies (see its
- * computeSalaryDemandMultiplier) — a low-maintenance, low-salary-demand
- * fighter reads as more loyal to the gym. Purely a UI reading of existing
- * public BALANCE data; not a new persisted stat.
- */
-function computeLoyalty(fighter) {
-  const { archetype, traits } = fighter.psychology.personality;
-  let multiplier = BALANCE.PERSONALITY.ARCHETYPES[archetype]?.salaryDemandMultiplier ?? 1;
-  for (const trait of traits) multiplier *= BALANCE.PERSONALITY.TRAITS[trait]?.salaryDemandMultiplier ?? 1;
-  const loyalty = 100 - (multiplier - 0.6) * 100;
-  return Math.max(0, Math.min(100, Math.round(loyalty)));
-}
 
 // ---- small DOM helpers -------------------------------------------------------
 
@@ -717,7 +702,11 @@ class WebApp {
       el('span', { class: 'trait-badge trait-gold', text: archetype }),
       ...traits.map((trait) => {
         const display = getTraitDisplay(trait);
-        return el('span', { class: `trait-badge trait-${display.color}`, text: trait, title: display.description });
+        return el('button', {
+          class: `trait-badge trait-${display.color}`,
+          text: trait,
+          onclick: () => this._showTraitInfo(fighter, trait, display),
+        });
       }),
     ];
 
@@ -744,7 +733,7 @@ class WebApp {
         '   Moral ',
         el('span', { class: `trend-arrow ${moralTrend.cls}`, text: moralTrend.symbol }),
       ]),
-      gaugeRow('Loyaute envers le gym', computeLoyalty(fighter)),
+      gaugeRow('Loyaute envers le gym', fighter.psychology.loyalty),
       el('div', { class: 'trait-list' }, traitBadges),
 
       trophyRows.length > 0 ? el('div', { class: 'card' }, [el('div', { class: 'card-title', text: 'Palmares' }), ...trophyRows]) : null,
@@ -765,6 +754,16 @@ class WebApp {
     ]);
 
     this._showModal(content);
+  }
+
+  /** Tap-to-explain trait badge: native `title` hover tooltips don't work on mobile touch, so a tap opens the description here instead, with a button back to the profile it came from. */
+  _showTraitInfo(fighter, trait, display) {
+    const card = el('div', {}, [
+      el('h2', { class: 'section-title', text: trait }),
+      el('p', { text: display.description || 'Aucune description disponible.' }),
+      el('button', { class: 'btn btn-gold btn-block', text: 'Retour a la fiche', onclick: () => this._showFighterProfile(fighter) }),
+    ]);
+    this._showModal(card);
   }
 
   _buildTrophyRows(fighter) {
