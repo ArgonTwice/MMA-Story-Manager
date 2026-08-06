@@ -60,6 +60,19 @@ const METHOD_LABELS = Object.freeze({
   DRAW: 'Match nul',
 });
 
+const TARGET_LABELS = Object.freeze({ HEAD: 'Tete', BODY: 'Corps', LEGS: 'Jambes' });
+const DISTANCE_LABELS = Object.freeze({ STRIKING: 'Frappe', CLINCH: 'Clinch', GROUND: 'Sol' });
+const TEMPO_LABELS = Object.freeze({ CONSERVATIVE: 'Prudent', BALANCED: 'Equilibre', AGGRESSIVE: 'Agressif' });
+const WEIGHT_CUT_LABELS = Object.freeze({ NATUREL: 'Naturel', MODERE: 'Modere', INTENSIF: 'Intensif', EXTREME: 'Extreme' });
+const SKILL_LABELS = Object.freeze({
+  boxe: 'Boxe',
+  jambes: 'Jambes',
+  sol: 'Sol',
+  soumission: 'Soumission',
+  cardio: 'Cardio',
+  intelligence: 'Intelligence',
+});
+
 // ---- small DOM helpers -------------------------------------------------------
 
 function el(tag, attrs = {}, children = []) {
@@ -161,11 +174,17 @@ class WebApp {
     this.weeklyFlow = null;
     this.fightView = null;
     this.selectedFighterIds = [];
+    this.fightCard = null;
     this.weeklyResultsThisYear = [];
     this.fightResultsThisYear = [];
     this.yearStartMoney = 0;
     this.yearStartDay = 1;
     this._yearChangedUnsub = null;
+    this.lastWeekEconomy = null;
+    this.journalTab = 'world';
+    this.fightSetupDone = false;
+    this.gameplanChoices = { A: {}, B: {} };
+    this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
     this.dom = {};
   }
 
@@ -195,6 +214,8 @@ class WebApp {
       continueMeta: document.getElementById('continueMeta'),
       btnContinue: document.getElementById('btnContinue'),
       btnNewGame: document.getElementById('btnNewGame'),
+      btnShowSlots: document.getElementById('btnShowSlots'),
+      slotList: document.getElementById('slotList'),
       newGymName: document.getElementById('newGymName'),
       newGymCountry: document.getElementById('newGymCountry'),
       tbGymName: document.getElementById('tbGymName'),
@@ -235,6 +256,29 @@ class WebApp {
       this.gameState.load(AUTOSAVE_SLOT);
       this._enterGame();
     });
+
+    this.dom.btnShowSlots.addEventListener('click', () => {
+      const slots = SaveManager.listSlots();
+      this.dom.slotList.innerHTML = '';
+      if (slots.length === 0) {
+        this.dom.slotList.appendChild(el('li', { class: 'empty', text: 'Aucune sauvegarde disponible.' }));
+        return;
+      }
+      for (const slot of slots) {
+        this.dom.slotList.appendChild(
+          el('li', {}, [
+            el('button', {
+              class: 'btn btn-outline btn-block slot-btn',
+              text: slot,
+              onclick: () => {
+                this.gameState.load(slot);
+                this._enterGame();
+              },
+            }),
+          ])
+        );
+      }
+    });
   }
 
   _wireNav() {
@@ -263,6 +307,11 @@ class WebApp {
     this.yearStartDay = this.gameState.worldState.currentDay;
     this.weeklyResultsThisYear = [];
     this.fightResultsThisYear = [];
+    this.lastWeekEconomy = null;
+    this.journalTab = 'world';
+    this.selectedFighterIds = [];
+    this.fightView = null;
+    this.fightSetupDone = false;
 
     this._yearChangedUnsub?.();
     this._yearChangedUnsub = EventBus.subscribe(WORLD_EVENTS.YEAR_CHANGED, () => this._showSeasonSummary());
@@ -344,6 +393,23 @@ class WebApp {
       );
     }
 
+    if (this.lastWeekEconomy) {
+      const e = this.lastWeekEconomy;
+      panel.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card-title', text: 'Charges (derniere semaine)' }),
+          el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Loyer' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.rent)}$` })]),
+          el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Salaires coachs' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.coachPayroll)}$` })]),
+          el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Entretien equipements' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.equipmentMaintenance)}$` })]),
+          el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Revenus passifs' }), el('span', { class: 'list-row-value', text: `+${Math.round(e.passiveIncome)}$` })]),
+          el('div', { class: 'list-row' }, [
+            el('span', { class: 'list-row-label', text: 'Solde net' }),
+            el('span', { class: 'list-row-value', text: `${e.netChange >= 0 ? '+' : ''}${Math.round(e.netChange)}$` }),
+          ]),
+        ])
+      );
+    }
+
     const rosterCard = el('div', { class: 'card' }, [el('div', { class: 'card-title', text: `Effectif (${snapshot.roster.length})` })]);
     for (const fighter of snapshot.roster.slice(0, 4)) {
       rosterCard.appendChild(this._buildFighterCard(fighter));
@@ -355,11 +421,119 @@ class WebApp {
 
     panel.appendChild(
       el('button', {
+        class: 'btn btn-outline btn-block',
+        text: '\u{1F3CB}\u{FE0F} Ma salle (equipement & rivaux)',
+        onclick: () => this._showGymFacilityModal(),
+      })
+    );
+
+    panel.appendChild(
+      el('button', {
         class: 'btn btn-gold btn-block',
         text: '\u{1F4C5} Aller au planning de la semaine',
         onclick: () => this._showPanel('planning'),
       })
     );
+  }
+
+  // ---- GYM FACILITY / EQUIPMENT / RIVALS modal ---------------------------------
+
+  _showGymFacilityModal() {
+    const playerState = this.gameState.playerState;
+    const { BASE_COST, GROWTH, MAX_LEVEL } = BALANCE.ECONOMY.FACILITY_UPGRADE;
+    const atMax = playerState.equipLevel >= MAX_LEVEL;
+    const nextLevelCost = atMax ? null : Math.round(BASE_COST * GROWTH ** playerState.equipLevel);
+
+    const ownedIds = new Set(playerState.equipment.map((item) => item.id));
+    const owned = playerState.equipment.map((item) => ({ id: item.id, ...BALANCE.EQUIPMENT.DEFINITIONS[item.id] })).filter((item) => item.label);
+    const catalog = Object.entries(BALANCE.EQUIPMENT.DEFINITIONS)
+      .filter(([id]) => !ownedIds.has(id))
+      .map(([id, def]) => ({ id, ...def, affordable: playerState.money >= def.purchaseCost }));
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F3CB}\u{FE0F} Ma salle' }),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: `Niveau ${playerState.equipLevel} — ${playerState.roster.length}/${playerState.getRosterCapacity()} places` }),
+        atMax
+          ? el('p', { text: 'Niveau maximum atteint.' })
+          : el('button', {
+              class: 'btn btn-gold btn-block',
+              text: `Ameliorer (${nextLevelCost}$)`,
+              disabled: playerState.money >= nextLevelCost ? null : 'disabled',
+              onclick: () => this._upgradeFacility(),
+            }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: `Equipement possede (${owned.length})` }),
+        owned.length === 0
+          ? el('p', { text: 'Aucun equipement pour le moment.' })
+          : el(
+              'div',
+              {},
+              owned.map((item) => el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: item.label })]))
+            ),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Catalogue' }),
+        catalog.length === 0
+          ? el('p', { text: 'Tout est deja possede.' })
+          : el(
+              'div',
+              {},
+              catalog.map((item) =>
+                el('div', { class: 'list-row' }, [
+                  el('div', {}, [el('div', { class: 'list-row-label', text: item.label }), el('div', { class: 'list-row-sub', text: `${item.purchaseCost}$` })]),
+                  el('button', {
+                    class: 'btn btn-outline btn-sm',
+                    text: 'Acheter',
+                    disabled: item.affordable ? null : 'disabled',
+                    onclick: () => this._buyEquipment(item.id),
+                  }),
+                ])
+              )
+            ),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Gyms rivaux' }),
+        this.gameState.worldState.rivalGyms.length === 0
+          ? el('p', { text: 'Aucun gym rival recense.' })
+          : el(
+              'div',
+              {},
+              this.gameState.worldState.rivalGyms.map((gym) =>
+                el('div', { class: 'list-row' }, [
+                  el('span', { class: 'list-row-label', text: gym.name ?? gym.id }),
+                  el('span', { class: 'list-row-value', text: `Reputation ${Math.round(gym.reputation ?? 0)}` }),
+                ])
+              )
+            ),
+      ]),
+      el('button', { class: 'btn btn-gold btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
+  }
+
+  _buyEquipment(equipmentId) {
+    const playerState = this.gameState.playerState;
+    const def = BALANCE.EQUIPMENT.DEFINITIONS[equipmentId];
+    if (!def || playerState.money < def.purchaseCost) return;
+    playerState.changeMoney(-def.purchaseCost, `EQUIPMENT_PURCHASE:${equipmentId}`);
+    playerState.addEquipmentItem({ id: equipmentId });
+    this._renderTopbar();
+    this._showToast(`\u{1F6E0}\u{FE0F} ${def.label} achete.`);
+    this._showGymFacilityModal();
+  }
+
+  _upgradeFacility() {
+    const playerState = this.gameState.playerState;
+    const { BASE_COST, GROWTH } = BALANCE.ECONOMY.FACILITY_UPGRADE;
+    const cost = Math.round(BASE_COST * GROWTH ** playerState.equipLevel);
+    const upgraded = playerState.upgradeFacility(cost);
+    if (upgraded) {
+      this._renderTopbar();
+      this._showToast(`\u{2B06}\u{FE0F} Salle amelioree — niveau ${playerState.equipLevel}.`);
+    }
+    this._showGymFacilityModal();
   }
 
   _buildFighterCard(fighter) {
@@ -387,16 +561,79 @@ class WebApp {
   _renderRoster() {
     const panel = this.dom.panels.roster;
     panel.innerHTML = '';
-    const snapshot = this.gymHub.getSnapshot();
+    const roster = this.gameState.playerState.roster;
 
-    panel.appendChild(el('h2', { class: 'section-title', text: `Effectif (${snapshot.roster.length})` }));
+    panel.appendChild(el('h2', { class: 'section-title', text: `Effectif (${roster.length}/${this.gameState.playerState.getRosterCapacity()})` }));
 
-    for (const fighter of snapshot.roster) {
-      const card = this._buildFighterCard(fighter);
-      card.appendChild(gaugeRow('Moral', fighter.moral));
-      card.appendChild(el('p', { class: 'fighter-meta', text: `Legacy : ${fighter.legacyStage} — Plan : ${fighter.weeklyPlan.map((a) => ACTIVITY_LABELS[a] ?? '—').join(', ') || 'vide'}` }));
-      panel.appendChild(card);
+    for (const fighter of roster) {
+      panel.appendChild(this._buildRosterDetailCard(fighter));
     }
+  }
+
+  _buildRosterDetailCard(fighter) {
+    const injured = fighter.isInjured(this.gameState.worldState.currentDay);
+    const badges = [];
+    if (fighter.identity.nickname) badges.push(el('span', { class: 'badge badge-nickname', text: fighter.identity.nickname }));
+    if (injured) badges.push(el('span', { class: 'badge badge-injured', text: 'Blesse' }));
+
+    const skillsList = el(
+      'ul',
+      { class: 'skill-list' },
+      Object.entries(fighter.attributes.skills).map(([key, value]) => el('li', { class: 'skill-pill', text: `${SKILL_LABELS[key] ?? key} ${Math.round(value)}` }))
+    );
+
+    const card = el('div', { class: 'fighter-card' }, [
+      el('div', { class: 'fighter-head' }, [
+        el('div', {}, [
+          el('div', { class: 'fighter-name' }, [
+            fighter.identity.name,
+            el('span', { class: 'rating-badge', text: `Note ${fighter.getOverallRating()}` }),
+          ]),
+          el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.identity.age} ans — ${fighter.getRecordString()}` }),
+        ]),
+        el('div', {}, badges),
+      ]),
+      gaugeRow('Readiness', fighter.getReadiness()),
+      gaugeRow('Fatigue P', fighter.attributes.physicalFatigue, { invert: true }),
+      gaugeRow('Fatigue M', fighter.attributes.mentalFatigue, { invert: true }),
+      gaugeRow('Moral', fighter.attributes.moral),
+      skillsList,
+      el('p', { class: 'fighter-meta', text: `Legacy : ${fighter.getLegacyStage()} — Plan : ${fighter.weeklyPlan.slots.map((a) => ACTIVITY_LABELS[a] ?? '—').join(', ') || 'vide'}` }),
+    ]);
+
+    if (fighter.isRetirementEligible()) {
+      card.appendChild(
+        el('button', {
+          class: 'btn btn-outline btn-sm',
+          text: 'Retraite',
+          onclick: () => this._confirmRetireFighter(fighter.identity.id, fighter.identity.name),
+        })
+      );
+    }
+
+    return card;
+  }
+
+  _confirmRetireFighter(fighterId, fighterName) {
+    const card = el('div', {}, [
+      el('h2', { class: 'section-title', text: 'Confirmer la retraite' }),
+      el('p', { text: `${fighterName} va prendre sa retraite et quitter votre effectif. Cette action est definitive.` }),
+      el('div', { class: 'choice-list' }, [
+        el('button', {
+          class: 'btn btn-danger btn-block',
+          text: 'Confirmer la retraite',
+          onclick: () => {
+            this.gameState.playerState.removeFighter(fighterId);
+            this._hideModal();
+            this._showToast(`\u{1F44B} ${fighterName} part a la retraite.`);
+            this._renderRoster();
+            this._autosave();
+          },
+        }),
+        el('button', { class: 'btn btn-outline btn-block', text: 'Annuler', onclick: () => this._hideModal() }),
+      ]),
+    ]);
+    this._showModal(card, { blocking: true });
   }
 
   // ---- PLANNING panel -----------------------------------------------------------
@@ -502,6 +739,7 @@ class WebApp {
 
   _completeWeek(result) {
     this.weeklyResultsThisYear.push(result);
+    this.lastWeekEconomy = result.weekSummary.economyReport;
     this._startNewWeek();
     this._renderAll();
     this._autosave();
@@ -513,7 +751,8 @@ class WebApp {
         bits.push(`\u{1F44B} ${retirement.name} part a la retraite${retirement.reconversion.isHallOfFamer ? ' \u{1F3C6} HALL OF FAME' : ''}.`);
       }
     }
-    bits.push(`Semaine resolue — jour ${this.gameState.worldState.currentDay}.`);
+    const net = Math.round(summary.economyReport.netChange);
+    bits.push(`Semaine resolue — jour ${this.gameState.worldState.currentDay}. Solde net ${net >= 0 ? '+' : ''}${net}$.`);
     this._showToast(bits.join(' '));
     this._showPanel('hub');
   }
@@ -527,6 +766,10 @@ class WebApp {
     const result = this.combatEngine.getSnapshot?.().result;
     if (this.fightView && result && this.combatEngine.state === COMBAT_STATES.FINISHED) {
       this._renderFightResult(panel);
+      return;
+    }
+    if (this.fightView && !this.fightSetupDone) {
+      this._renderFightSetup(panel);
       return;
     }
     if (this.fightView && this.combatEngine.state && this.combatEngine.state !== COMBAT_STATES.IDLE && this.combatEngine.state !== COMBAT_STATES.FINISHED) {
@@ -589,8 +832,79 @@ class WebApp {
     const fighterA = this.gameState.playerState.getFighter(idA);
     const fighterB = this.gameState.playerState.getFighter(idB);
     this.fightView = new FightNightView({ combatEngine: this.combatEngine });
-    this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false);
-    this.fightView.setGameplans();
+    this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false);
+    this.fightSetupDone = false;
+    this.gameplanChoices = { A: {}, B: {} };
+    this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
+    this._renderFight();
+  }
+
+  _renderFightSetup(panel) {
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Preparation du combat' }));
+    panel.appendChild(el('pre', { class: 'card', style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: this.fightView.toCardText() }));
+
+    for (const [key, label] of [['A', this.fightCard?.fighterA?.name ?? 'Coin A'], ['B', this.fightCard?.fighterB?.name ?? 'Coin B']]) {
+      const card = el('div', { class: 'card' }, [el('div', { class: 'card-title', text: `Coin ${key} — ${label}` })]);
+
+      card.appendChild(el('p', { class: 'fighter-meta', text: 'Coupe de poids' }));
+      card.appendChild(
+        el(
+          'div',
+          { class: 'slot-row' },
+          Object.keys(WEIGHT_CUT_LABELS).map((profileKey) =>
+            el('button', {
+              class: `activity-chip${this.weightCutChoices[key] === profileKey ? ' selected' : ''}`,
+              text: WEIGHT_CUT_LABELS[profileKey],
+              onclick: () => {
+                this.weightCutChoices = { ...this.weightCutChoices, [key]: profileKey };
+                this._renderFight();
+              },
+            })
+          )
+        )
+      );
+
+      card.appendChild(el('p', { class: 'fighter-meta', text: 'Cible' }));
+      card.appendChild(this._gameplanChipRow(key, 'target', TARGET_LABELS));
+      card.appendChild(el('p', { class: 'fighter-meta', text: 'Distance' }));
+      card.appendChild(this._gameplanChipRow(key, 'distance', DISTANCE_LABELS));
+      card.appendChild(el('p', { class: 'fighter-meta', text: 'Tempo' }));
+      card.appendChild(this._gameplanChipRow(key, 'tempo', TEMPO_LABELS));
+
+      panel.appendChild(card);
+    }
+
+    panel.appendChild(
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: 'Lancer le combat',
+        onclick: () => this._confirmFightSetup(),
+      })
+    );
+  }
+
+  _gameplanChipRow(cornerKey, field, labels) {
+    return el(
+      'div',
+      { class: 'slot-row' },
+      Object.entries(labels).map(([value, label]) =>
+        el('button', {
+          class: `activity-chip${this.gameplanChoices[cornerKey][field] === value ? ' selected' : ''}`,
+          text: label,
+          onclick: () => {
+            this.gameplanChoices = { ...this.gameplanChoices, [cornerKey]: { ...this.gameplanChoices[cornerKey], [field]: value } };
+            this._renderFight();
+          },
+        })
+      )
+    );
+  }
+
+  _confirmFightSetup() {
+    this.combatEngine.selectWeightCutProfile('A', this.weightCutChoices.A);
+    this.combatEngine.selectWeightCutProfile('B', this.weightCutChoices.B);
+    this.fightView.setGameplans({ A: this.gameplanChoices.A, B: this.gameplanChoices.B });
+    this.fightSetupDone = true;
     this._renderFight();
   }
 
@@ -667,6 +981,8 @@ class WebApp {
         onclick: () => {
           this.selectedFighterIds = [];
           this.fightView = null;
+          this.fightCard = null;
+          this.fightSetupDone = false;
           this._renderFight();
         },
       })
@@ -678,7 +994,7 @@ class WebApp {
   _renderJournal() {
     const panel = this.dom.panels.journal;
     panel.innerHTML = '';
-    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F4F0} Journal du monde' }));
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F4F0} Journal' }));
     panel.appendChild(
       el('button', {
         class: 'btn btn-outline btn-block',
@@ -686,6 +1002,32 @@ class WebApp {
         onclick: () => this._showSeasonSummary(),
       })
     );
+
+    panel.appendChild(
+      el('div', { class: 'subtab-row' }, [
+        el('button', {
+          class: `subtab-btn${this.journalTab === 'world' ? ' active' : ''}`,
+          text: 'Monde',
+          onclick: () => {
+            this.journalTab = 'world';
+            this._renderJournal();
+          },
+        }),
+        el('button', {
+          class: `subtab-btn${this.journalTab === 'social' ? ' active' : ''}`,
+          text: 'Reseaux',
+          onclick: () => {
+            this.journalTab = 'social';
+            this._renderJournal();
+          },
+        }),
+      ])
+    );
+
+    if (this.journalTab === 'social') {
+      this._renderSocialFeed(panel);
+      return;
+    }
 
     const entries = this.worldFeed.getEntries(50);
     if (entries.length === 0) {
@@ -699,6 +1041,23 @@ class WebApp {
           el('span', { class: 'feed-day', text: `J${entry.day}` }),
           el('span', { class: 'feed-category', text: entry.category }),
           el('span', { text: entry.text }),
+        ])
+      );
+    }
+  }
+
+  _renderSocialFeed(panel) {
+    const posts = [...this.gameState.playerState.socialFeed].reverse().slice(0, 30);
+    if (posts.length === 0) {
+      panel.appendChild(el('p', { text: 'Aucune publication pour le moment.' }));
+      return;
+    }
+    for (const post of posts) {
+      panel.appendChild(
+        el('div', { class: 'social-post' }, [
+          el('div', { class: 'post-author', text: post.author }),
+          el('div', { class: 'post-text', text: post.text }),
+          el('div', { class: 'post-likes', text: `\u{2605} ${post.likes}` }),
         ])
       );
     }
