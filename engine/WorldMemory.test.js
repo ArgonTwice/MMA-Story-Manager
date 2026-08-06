@@ -86,6 +86,45 @@ test('biggestFight tracks the highest combined purse and emits world:record_brok
   assert.equal(biggestFightBroken.length, 1, 'only the genuinely bigger fight should have broken the biggestFight record');
 });
 
+test('biggestUpset tracks the largest preFightRatings gap overcome by a winner, ignoring draws and results without preFightRatings', () => {
+  const world = new WorldState();
+  const engine = new WorldMemory().attach(world);
+
+  const brokenEvents = [];
+  const unsub = EventBus.subscribe(WORLD_EVENTS.RECORD_BROKEN, (e) => brokenEvents.push(e));
+
+  // Draw: never qualifies, even with a huge rating gap.
+  EventBus.publish('combat:finished', combatFinishedPayload({ winner: null, preFightRatings: { A: 20, B: 80 } }));
+  assert.equal(world.getRecord('biggestUpset').value, null);
+
+  // Missing preFightRatings (older saves/results): ignored, not a crash.
+  EventBus.publish('combat:finished', combatFinishedPayload({ winner: 'A', preFightRatings: undefined }));
+  assert.equal(world.getRecord('biggestUpset').value, null);
+
+  // Favorite wins as expected: no upset (gap <= 0), never sets the record.
+  EventBus.publish('combat:finished', combatFinishedPayload({ winner: 'A', preFightRatings: { A: 70, B: 40 } }));
+  assert.equal(world.getRecord('biggestUpset').value, null);
+
+  // A genuine upset: B (rating 30) beats A (rating 65), gap = 35.
+  EventBus.publish(
+    'combat:finished',
+    combatFinishedPayload({ winner: 'B', preFightRatings: { A: 65, B: 30 }, fighters: { A: 'f1', B: 'f2' }, names: { A: 'Alpha', B: 'Beta' } })
+  );
+  assert.equal(world.getRecord('biggestUpset').value, 35);
+  assert.ok(world.getRecord('biggestUpset').detail.includes('Beta'));
+  assert.ok(world.getRecord('biggestUpset').detail.includes('Alpha'));
+
+  // A smaller upset afterwards must not overwrite the bigger one.
+  EventBus.publish('combat:finished', combatFinishedPayload({ winner: 'B', preFightRatings: { A: 50, B: 45 } }));
+  assert.equal(world.getRecord('biggestUpset').value, 35, 'a smaller upset should not overwrite the bigger one');
+
+  unsub();
+  engine.detach();
+
+  const biggestUpsetBroken = brokenEvents.filter((e) => e.key === 'biggestUpset');
+  assert.equal(biggestUpsetBroken.length, 1, 'only the genuinely bigger upset should have broken the biggestUpset record');
+});
+
 test('a title win sets the holder; dethroning it later records the correct reign length and title count', () => {
   const world = new WorldState();
   const engine = new WorldMemory().attach(world);

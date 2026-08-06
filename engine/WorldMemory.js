@@ -56,6 +56,7 @@ class WorldMemory {
 
     this._checkFastestKO(payload);
     this._checkBiggestFight(payload);
+    this._checkBiggestUpset(payload);
     this._checkTitleRecords(payload);
   }
 
@@ -86,6 +87,39 @@ class WorldMemory {
       betterIf: 'HIGHER',
       detail: `${nameA} vs ${nameB} : bourse combinee de ${combinedPurse}$.`,
       meta: { fighterAId: payload.fighters.A, fighterBId: payload.fighters.B },
+    });
+  }
+
+  /**
+   * Phase Beta: the largest preFightRatings gap a winner has ever overcome
+   * (loser's rating minus winner's, only when positive — a true underdog
+   * win), same math as engine/StoryAnalyzer.js#findUpsetOfTheYear but kept
+   * as a persistent WorldState record instead of a per-season transient
+   * one — see state/WorldState.js#defaultRecords' own note on why
+   * web/StoryExporter.js needs this to outlive a single season. Draws
+   * (winner === null) and results predating preFightRatings never qualify.
+   */
+  _checkBiggestUpset(payload) {
+    if (payload.winner === null || payload.winner === undefined) return;
+    if (!payload.preFightRatings) return;
+
+    const winnerKey = payload.winner;
+    const loserKey = winnerKey === 'A' ? 'B' : 'A';
+    const winnerRating = payload.preFightRatings[winnerKey];
+    const loserRating = payload.preFightRatings[loserKey];
+    if (typeof winnerRating !== 'number' || typeof loserRating !== 'number') return;
+
+    const gap = loserRating - winnerRating;
+    if (gap <= 0) return;
+
+    const winnerName = payload.names?.[winnerKey] ?? payload.fighters[winnerKey];
+    const loserName = payload.names?.[loserKey] ?? payload.fighters[loserKey];
+    const roundedGap = Math.round(gap * 10) / 10;
+
+    this.worldState.trySetRecord('biggestUpset', gap, {
+      betterIf: 'HIGHER',
+      detail: `${winnerName} bat ${loserName} malgre un ecart de ${roundedGap} points de niveau.`,
+      meta: { fighterId: payload.fighters[winnerKey], opponentId: payload.fighters[loserKey] },
     });
   }
 

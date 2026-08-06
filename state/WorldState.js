@@ -71,6 +71,8 @@ function defaultRecords() {
     youngestChampion: blank(),
     /** Phase 4.2: highest Fighter.career.longestWinStreak ever observed across every fighter (see engine/HistoryEngine.js). */
     longestWinStreak: { value: 0, day: null, detail: null, meta: null },
+    /** Phase Beta: largest preFightRatings gap ever overcome by a winner (loser's rating minus winner's), across every combat:finished — see engine/WorldMemory.js. The same "biggest upset" concept engine/StoryAnalyzer.js computes per-season from transient fightResultsThisYear, kept here as a persistent career-wide record so web/StoryExporter.js can report it honestly outside the Week-52 gala window (e.g. from a retired legend's Hall of Fame profile, long after that season's transient data is gone). */
+    biggestUpset: blank(),
   };
 }
 

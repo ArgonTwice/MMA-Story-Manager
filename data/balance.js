@@ -45,6 +45,9 @@
  *   BALANCE.RELATIONSHIP  - relationship-graph gauge bounds and event deltas
  *   BALANCE.STORY         - narrative-opportunity detection thresholds
  *   BALANCE.NARRATIVE      - narrative-form selection weights per opportunity
+ *   BALANCE.TRANSFER_MARKET  - Phase V2.7 autonomous rival-gym roster management (engine/TransferMarket.js)
+ *   BALANCE.PROSPECT_GENERATOR - Phase V2.7 themed prospect wave generation (engine/ProspectGenerator.js)
+ *   BALANCE.TELEMETRY      - Phase Beta anonymous local behavioral telemetry thresholds (web/telemetry.js)
  *
  *   (COMBAT additionally carries GAMEPLAN, STYLE_BONUSES and TAKEDOWN_RISK
  *   sub-sections consumed by engine/CombatEngine.js: per-target/distance/
@@ -1791,6 +1794,19 @@ const BALANCE = {
     },
     /** Extra like multiplier applied when a VIRAL_POST narrative form lands on the social feed. */
     VIRAL_POST_LIKES_MULTIPLIER: 3,
+  },
+
+  // ---------------------------------------------------------------------
+  // TELEMETRY — Phase Beta ("Players First"): anonymous local behavioral
+  // telemetry thresholds, web/telemetry.js
+  // ---------------------------------------------------------------------
+  TELEMETRY: {
+    /** Fighter.attributes.moral (0-100 scale) below this value counts as "frustratingly low" — the spec's own literal "moral < 20%" threshold. */
+    LOW_MORALE_THRESHOLD: 20,
+    /** Consecutive resolved weeks a fighter must stay below LOW_MORALE_THRESHOLD before it's logged as a frustration signal — this module's own operationalization of the spec's qualitative "prolonge" (a single bad week is normal variance, not frustration), same spirit as tools/BalanceReporter.js's own CLINCH_TARGETS.STYLE_NEUTRALITY note about picking a reasonable floor when the spec gives no exact number. Edge-triggered: logs once when the streak crosses this bar, not once per week it stays there. */
+    LOW_MORALE_STREAK_WEEKS_THRESHOLD: 3,
+    /** Max raw entries kept per bounded log (dramaChoices/frustrationEvents) — oldest trimmed, same discipline as WORLD.GLOBAL_EVENT_HISTORY_LIMIT/RELATIONSHIP.HISTORY_LIMIT. */
+    LOG_HISTORY_LIMIT: 300,
   },
 };
 

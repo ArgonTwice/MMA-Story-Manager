@@ -42,7 +42,11 @@ import { FightNightView } from '../ui/FightNightView.js';
 import { WorldFeed } from '../ui/WorldFeed.js';
 import { SeasonSummary } from '../ui/SeasonSummary.js';
 
+import telemetry from './telemetry.js';
+import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExporter.js';
+
 const AUTOSAVE_SLOT = 'web-autosave';
+const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 const STARTING_ROSTER_STYLES = Object.freeze(['Boxe', 'Muay Thai', 'Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle', 'Kickboxing']);
 
 const ACTIVITY_LABELS = Object.freeze({
@@ -223,6 +227,8 @@ class WebApp {
     this.academyPool = [];
     /** { [fighterId]: { forme, moral } } snapshot taken at the start of the current week — see _startNewWeek()/_showFighterProfile()'s trend arrows. Runtime-only, never persisted. */
     this.weekStartSnapshot = {};
+    /** Set true only by the "Nouvelle Partie" flow (never Continuer/load) — gates the first-steps onboarding to a truly brand-new save, see _maybeShowFirstStepsOnboarding(). */
+    this._isBrandNewGame = false;
     this.dom = {};
   }
 
@@ -284,11 +290,13 @@ class WebApp {
         country: this.dom.newGymCountry.value || undefined,
       });
       bootstrapRoster(this.gameState.playerState, this.rng);
+      for (let i = 0; i < STARTING_ROSTER_STYLES.length; i += 1) telemetry.recordFighterRecruited();
       this.gameState.worldState.addRivalGym({ name: 'Iron Fist Academy', reputation: 55 });
       this.gameState.worldState.addRivalGym({ name: 'Apex MMA', reputation: 45 });
+      this._isBrandNewGame = true;
       this._enterGame();
       this._autosave();
-      this._maybeOpenAcademyDraft();
+      this._maybeShowFirstStepsOnboarding();
     });
 
     this.dom.btnContinue.addEventListener('click', () => {
@@ -361,6 +369,8 @@ class WebApp {
     this._yearChangedUnsub = EventBus.subscribe(WORLD_EVENTS.YEAR_CHANGED, () => {
       this._yearChangedPending = true;
     });
+
+    telemetry.startSession();
 
     this.dom.startScreen.classList.add('hidden');
     this.dom.gameShell.classList.remove('hidden');
@@ -953,6 +963,7 @@ class WebApp {
             class: 'btn btn-outline choice-btn',
             text: choice.label,
             onclick: () => {
+              telemetry.recordDramaChoice(dramaPrompt.eventId, choice.id);
               const result = this.weeklyFlow.resolveDramaChoice(choice.id);
               this.gymHub.clearPendingDramaChoice();
               this._hideModal();
@@ -968,6 +979,8 @@ class WebApp {
   _completeWeek(result) {
     this.weeklyResultsThisYear.push(result);
     this.lastWeekEconomy = result.weekSummary.economyReport;
+    telemetry.recordWeekResolved();
+    telemetry.checkFrustrationSignals(this.gameState.playerState);
     this._startNewWeek();
     this._renderAll();
     this._autosave();
@@ -1266,11 +1279,23 @@ class WebApp {
             this._renderJournal();
           },
         }),
+        el('button', {
+          class: `subtab-btn${this.journalTab === 'legends' ? ' active' : ''}`,
+          text: 'Legendes',
+          onclick: () => {
+            this.journalTab = 'legends';
+            this._renderJournal();
+          },
+        }),
       ])
     );
 
     if (this.journalTab === 'social') {
       this._renderSocialFeed(panel);
+      return;
+    }
+    if (this.journalTab === 'legends') {
+      this._renderHallOfFame(panel);
       return;
     }
 
@@ -1306,6 +1331,62 @@ class WebApp {
         ])
       );
     }
+  }
+
+  // ---- HALL OF FAME (Phase Beta: Story Export entry point) --------------------------
+
+  _renderHallOfFame(panel) {
+    const legends = [...this.gameState.worldState.getHallOfFame()].reverse();
+    if (legends.length === 0) {
+      panel.appendChild(el('p', { text: 'Aucune legende intronisee pour le moment.' }));
+      return;
+    }
+    for (const entry of legends) {
+      panel.appendChild(
+        el('div', { class: 'card', onclick: () => this._showLegendProfile(entry) }, [
+          el('div', { class: 'fighter-head' }, [
+            el('div', {}, [
+              el('div', { class: 'fighter-name', text: entry.name }),
+              el('div', { class: 'fighter-meta', text: `${entry.style} — ${entry.record}` }),
+            ]),
+            entry.nickname ? el('span', { class: 'badge badge-nickname', text: `"${entry.nickname}"` }) : null,
+          ]),
+        ])
+      );
+    }
+  }
+
+  _showLegendProfile(entry) {
+    const rows = [
+      el('div', { class: 'gauge-row' }, [el('span', { class: 'gauge-label', text: 'Bilan' }), el('span', { text: entry.record })]),
+      el('div', { class: 'gauge-row' }, [el('span', { class: 'gauge-label', text: 'Style' }), el('span', { text: entry.style })]),
+      el('div', { class: 'gauge-row' }, [el('span', { class: 'gauge-label', text: 'Retraite a' }), el('span', { text: `${entry.retiredAtAge} ans` })]),
+      el('div', { class: 'gauge-row' }, [el('span', { class: 'gauge-label', text: 'Finitions' }), el('span', { text: String(entry.finishes) })]),
+      el('div', { class: 'gauge-row' }, [
+        el('span', { class: 'gauge-label', text: 'Plus longue serie' }),
+        el('span', { text: String(entry.longestWinStreak) }),
+      ]),
+    ];
+    if (entry.biggestRival) {
+      rows.push(
+        el('div', { class: 'gauge-row' }, [
+          el('span', { class: 'gauge-label', text: 'Plus grand rival' }),
+          el('span', { text: `${entry.biggestRival.fighterName} (tension ${Math.round(entry.biggestRival.tension)})` }),
+        ])
+      );
+    }
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `\u{2728} ${entry.name}${entry.nickname ? ` "${entry.nickname}"` : ''}` }),
+      ...rows,
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: '\u{1F4DC} Exporter mon Epopee / Partager',
+        onclick: () => this._showStoryExportModal(),
+      }),
+      el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
   }
 
   // ---- GALA DE FIN DE SAISON (Story Analyzer trophies) -----------------------------
@@ -1434,6 +1515,11 @@ class WebApp {
       el('h2', { class: 'section-title', text: '\u{1F3C6} Bilan de saison' }),
       el('pre', { style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: seasonSummary.toText(summary) }),
       el('button', {
+        class: 'btn btn-outline btn-block',
+        text: '\u{1F4DC} Exporter mon Epopee / Partager',
+        onclick: () => this._showStoryExportModal({ afterYearChange }),
+      }),
+      el('button', {
         class: 'btn btn-gold btn-block',
         text: 'Fermer',
         onclick: () => {
@@ -1448,6 +1534,153 @@ class WebApp {
     this.fightResultsThisYear = [];
     this.yearStartMoney = this.gameState.playerState.money;
     this.yearStartDay = this.gameState.worldState.currentDay;
+  }
+
+  // ---- STORY EXPORTER (Phase Beta) --------------------------------------------------
+
+  /**
+   * Opens the "Carte de Succes / Chronique" export modal — reachable from
+   * the Week-52 Gala/Bilan de saison and from any Hall of Fame legend's
+   * profile (see _renderHallOfFame()). The card itself always summarizes
+   * the whole career (see web/StoryExporter.js#buildStoryCard), not just
+   * whichever legend the player was looking at when they tapped Export.
+   * @param {Object} [options]
+   * @param {boolean} [options.afterYearChange] - Threaded through so closing this modal can still resume the post-Gala Academy Draft flow, exactly like _showSeasonSummary()'s own "Fermer" does.
+   */
+  _showStoryExportModal({ afterYearChange = false } = {}) {
+    const card = buildStoryCard({ playerState: this.gameState.playerState, worldState: this.gameState.worldState });
+    const canvas = document.createElement('canvas');
+    canvas.className = 'story-card-canvas';
+    renderStoryCardToCanvas(canvas, card);
+
+    const actions = [
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: "\u{2B07}\u{FE0F} Telecharger l'image",
+        onclick: () => this._downloadStoryCard(canvas, card),
+      }),
+    ];
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      actions.push(
+        el('button', {
+          class: 'btn btn-outline btn-block',
+          text: '\u{1F4E4} Partager',
+          onclick: () => this._shareStoryCard(canvas, card),
+        })
+      );
+    }
+    actions.push(
+      el('button', {
+        class: 'btn btn-outline btn-block',
+        text: 'Fermer',
+        onclick: () => {
+          this._hideModal();
+          if (afterYearChange) this._maybeOpenAcademyDraft();
+        },
+      })
+    );
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F4DC} Exporter mon Epopee' }),
+      canvas,
+      el('p', { class: 'story-card-note', text: card.note }),
+      ...actions,
+    ]);
+    this._showModal(content);
+  }
+
+  _downloadStoryCard(canvas, card) {
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png');
+    link.download = `${(card.gymName || 'chronique').replace(/[^a-z0-9]+/gi, '_')}_chronique.png`;
+    link.click();
+  }
+
+  async _shareStoryCard(canvas, card) {
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      const file = blob ? new File([blob], 'chronique.png', { type: 'image/png' }) : null;
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Ma Chronique MMA Gym Manager', text: toShareText(card) });
+      } else {
+        await navigator.share({ title: 'Ma Chronique MMA Gym Manager', text: toShareText(card) });
+      }
+    } catch (error) {
+      console.warn('[web/app.js] Story card share failed or was cancelled:', error);
+    }
+  }
+
+  // ---- FIRST-STEPS ONBOARDING (Phase Beta, Week 1 of the very first season only) ----
+
+  /**
+   * Shows the "Premiers pas" welcome modal exactly once per browser/device
+   * (localStorage flag, own namespace — never routed through
+   * core/SaveManager.js's WorldState/PlayerState-only save envelope, same
+   * reasoning as web/telemetry.js's own storage split) and only for a
+   * truly brand-new game (see _isBrandNewGame, set only by the "Nouvelle
+   * Partie" flow — Continuer/charger une sauvegarde never sets it, so a
+   * returning player is never re-shown this). Always resolves into
+   * _maybeOpenAcademyDraft() next, whether or not the modal actually showed,
+   * so the existing Academy Draft flow is never skipped.
+   */
+  _maybeShowFirstStepsOnboarding() {
+    const alreadySeen = this._hasSeenOnboarding();
+    if (!this._isBrandNewGame || alreadySeen) {
+      this._maybeOpenAcademyDraft();
+      return;
+    }
+    this._showFirstStepsOnboardingModal();
+  }
+
+  _hasSeenOnboarding() {
+    try {
+      return localStorage.getItem(ONBOARDING_SEEN_KEY) === '1';
+    } catch {
+      return true; // if localStorage is unavailable, don't force the modal on every load.
+    }
+  }
+
+  _markOnboardingSeen() {
+    try {
+      localStorage.setItem(ONBOARDING_SEEN_KEY, '1');
+    } catch {
+      // Best-effort only — a blocked localStorage must never break the flow.
+    }
+  }
+
+  _showFirstStepsOnboardingModal() {
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F44B} Premiers pas' }),
+      el('p', { text: "Trois notions reviendront chaque semaine — voici l'essentiel avant de commencer." }),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4AA} Readiness' }),
+        el('p', {
+          text: "La forme d'un combattant le jour du combat : fatigue physique, charge mentale, moral et blessures s'y combinent. Une Readiness elevee (vert) rend un combattant plus dangereux ; une Readiness basse (rouge) le fragilise.",
+        }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F91D} Loyaute envers le gym' }),
+        el('p', {
+          text: 'Visible sur la fiche de chaque combattant : plus elle est haute, plus le combattant reste engage envers votre salle sur la duree.',
+        }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4C5} Les 3 creneaux de Planning' }),
+        el('p', {
+          text: 'Chaque semaine, chaque combattant occupe jusqu\'a 3 creneaux (Technique, Sparring, Preparation Video, Medias & Sponsors, Physio & Repos). Ce choix hebdomadaire faconne sa progression et sa condition.',
+        }),
+      ]),
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: "C'est parti",
+        onclick: () => {
+          this._markOnboardingSeen();
+          this._hideModal();
+          this._maybeOpenAcademyDraft();
+        },
+      }),
+    ]);
+    this._showModal(content, { blocking: true });
   }
 
   // ---- ACADEMY DRAFT (free annual recruitment) -------------------------------------
@@ -1512,6 +1745,7 @@ class WebApp {
     const { playerState, worldState } = this.gameState;
     if (chosenFighter) {
       playerState.addFighter(chosenFighter);
+      telemetry.recordFighterRecruited();
       this._showToast(`\u{1F393} ${chosenFighter.identity.name} rejoint votre effectif (draft academie).`);
     }
     playerState.recordAcademyDraftOffer(worldState.year);

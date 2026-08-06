@@ -36,6 +36,13 @@ test('records: trySetRecord only overwrites when the candidate is genuinely bett
   assert.throws(() => world.getRecord('notARecord'));
 });
 
+test('Phase Beta: biggestUpset is a valid default record key, blank on a fresh WorldState', () => {
+  const world = new WorldState();
+  assert.deepEqual(world.getRecord('biggestUpset'), { value: null, day: null, detail: null, meta: null });
+  assert.equal(world.trySetRecord('biggestUpset', 35, { detail: 'huge upset' }), true);
+  assert.equal(world.getRecord('biggestUpset').value, 35);
+});
+
 test('title holder bookkeeping is a plain get/set pair independent of the records themselves', () => {
   const world = new WorldState();
   assert.equal(world.getTitleHolder('WFC:Lightweight'), null);
