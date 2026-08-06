@@ -137,3 +137,57 @@ test('toText renders a non-empty, readable recap including retirements and the r
   assert.ok(text.includes('Retiree'));
   assert.ok(text.includes('Snapshot Fighter'));
 });
+
+// ---- Phase 4.4 ("Playtests, Polish, Long-Term Economics & Release Candidate") --
+
+test('build() extracts titleWins from fightResults, ignoring non-title fights and title fights ending in a draw', () => {
+  const playerState = new PlayerState();
+  const worldState = new WorldState();
+  const fightResults = [
+    { winner: 'A', method: 'KO', titleOnTheLine: true, names: { A: 'New Champ', B: 'Ex Champ' }, weightClasses: { A: 'Poids Leger', B: 'Poids Leger' } },
+    { winner: 'B', method: 'SUBMISSION', titleOnTheLine: false, names: { A: 'X', B: 'Y' } },
+    { winner: null, method: 'DRAW', titleOnTheLine: true, names: { A: 'X', B: 'Y' } },
+  ];
+
+  const summary = new SeasonSummary({ playerState, worldState }).build({ fightResults });
+
+  assert.equal(summary.titleWins.length, 1);
+  assert.equal(summary.titleWins[0].winnerName, 'New Champ');
+  assert.equal(summary.titleWins[0].weightClass, 'Poids Leger');
+  assert.equal(summary.titleWins[0].method, 'KO');
+});
+
+test('toText celebrates a title win and a Hall of Fame induction with a visible banner', () => {
+  const playerState = new PlayerState();
+  const worldState = new WorldState();
+  const seasonSummary = new SeasonSummary({ playerState, worldState });
+
+  const fightResults = [
+    { winner: 'A', method: 'KO', titleOnTheLine: true, names: { A: 'New Champ', B: 'Ex Champ' }, weightClasses: { A: 'Poids Leger', B: 'Poids Leger' } },
+  ];
+  const weeklyResults = [
+    {
+      weekSummary: makeWeekSummary({
+        retirements: [
+          {
+            name: 'Legend',
+            age: 45,
+            wins: 150,
+            losses: 10,
+            draws: 0,
+            reconversion: { isHallOfFamer: true, outcome: LEGACY_ENGINE_OUTCOMES.COACH_IN_GYM, nickname: 'The Hammer' },
+          },
+        ],
+      }),
+      dramaReport: null,
+    },
+  ];
+
+  const summary = seasonSummary.build({ weeklyResults, fightResults });
+  const text = seasonSummary.toText(summary);
+
+  assert.ok(text.includes('TITRES EN JEU'));
+  assert.ok(text.includes('New Champ'));
+  assert.ok(text.includes('HALL OF FAME'));
+  assert.ok(text.includes('Legend'));
+});

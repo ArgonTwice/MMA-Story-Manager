@@ -21,6 +21,7 @@ import EventBus from '../core/EventBus.js';
 import { WORLD_EVENTS } from '../state/WorldState.js';
 import { DRAMA_ENGINE_EVENTS } from '../engine/DramaEngine.js';
 import { NARRATIVE_ENGINE_EVENTS } from '../engine/NarrativeEngine.js';
+import { COMBAT_EVENTS } from '../engine/CombatEngine.js';
 import { DRAMA_EVENTS } from '../data/events.js';
 
 /** How many entries WorldFeed keeps — a display concern, not gameplay balance (mirrors render/DashboardRenderer.js's own LOG_DISPLAY_LIMIT precedent). */
@@ -47,6 +48,7 @@ export class WorldFeed {
     this._unsubs.push(EventBus.subscribe(WORLD_EVENTS.HALL_OF_FAME_INDUCTED, (payload) => this._onHallOfFameInducted(payload)));
     this._unsubs.push(EventBus.subscribe(WORLD_EVENTS.GLOBAL_EVENT_ADDED, (payload) => this._onGlobalEvent(payload)));
     this._unsubs.push(EventBus.subscribe(NARRATIVE_ENGINE_EVENTS.PUBLISHED, (payload) => this._onNarrativeBeat(payload)));
+    this._unsubs.push(EventBus.subscribe(COMBAT_EVENTS.FINISHED, (payload) => this._onCombatFinished(payload)));
     return this;
   }
 
@@ -91,7 +93,11 @@ export class WorldFeed {
 
   _onHallOfFameInducted({ entry }) {
     const nickname = entry.nickname ? ` "${entry.nickname}"` : '';
-    this._push('HALL_OF_FAME', `${entry.name}${nickname} entre au Hall of Fame (${entry.record}, ${entry.finishes} finishes).`, entry.inductedOnDay);
+    this._push(
+      'HALL_OF_FAME',
+      `\u{1F3C6}✨ HALL OF FAME ✨\u{1F3C6} — ${entry.name}${nickname} entre dans la legende (${entry.record}, ${entry.finishes} finishes).`,
+      entry.inductedOnDay
+    );
   }
 
   _onGlobalEvent({ event }) {
@@ -101,6 +107,16 @@ export class WorldFeed {
 
   _onNarrativeBeat(beat) {
     this._push('NARRATIVE', beat.headline, beat.day);
+  }
+
+  /** Celebrates a title fight's outcome (win or successful defense) — every other 'combat:finished' fight is silently ignored here, non-title results are already covered by whichever category actually cares (Drama/Narrative/etc.). */
+  _onCombatFinished(payload) {
+    if (!payload.titleOnTheLine || payload.winner === null) return;
+
+    const winnerKey = payload.winner;
+    const winnerName = payload.names?.[winnerKey] ?? payload.fighters?.[winnerKey] ?? 'Inconnu';
+    const weightClass = payload.weightClasses?.[winnerKey] ?? 'Inconnu';
+    this._push('TITLE', `\u{1F947} TITRE ${weightClass} — ${winnerName} remporte le combat par ${payload.method}.`, payload.day);
   }
 
   // ---- internals ------------------------------------------------------------

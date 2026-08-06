@@ -49,12 +49,52 @@ export const NICKNAME_RULES = Object.freeze([
     description: 'Au moins 5 victoires par KO en carriere.',
   }),
   Object.freeze({
+    id: 'UNSTOPPABLE',
+    label: 'Unstoppable',
+    statKey: 'longestWinStreak',
+    minValue: 10,
+    priority: 25,
+    description: 'A enchaine au moins 10 victoires consecutives en carriere (Fighter.career.longestWinStreak).',
+  }),
+  Object.freeze({
+    id: 'THE_SILENCER',
+    label: 'The Silencer',
+    statKey: 'submissionWins',
+    minValue: 5,
+    priority: 22,
+    description: 'Au moins 5 victoires par soumission en carriere.',
+  }),
+  Object.freeze({
+    id: 'THE_FINISHER',
+    label: 'The Finisher',
+    statKey: 'tkoWins',
+    minValue: 5,
+    priority: 19,
+    description: 'Au moins 5 victoires par TKO (ou arret medical) en carriere.',
+  }),
+  Object.freeze({
     id: 'THE_TECHNICIAN',
     label: 'The Technician',
     statKey: 'decisionWins',
     minValue: 10,
     priority: 10,
     description: 'Au moins 10 victoires aux points (decision) en carriere.',
+  }),
+  Object.freeze({
+    id: 'THE_IRONMAN',
+    label: 'The Ironman',
+    statKey: 'wins',
+    // Deliberately <= 21 (4 koWins + 4 tkoWins + 4 submissionWins + 9
+    // decisionWins, the most any fighter can accumulate while staying
+    // strictly under every other rule's own minValue above): any higher
+    // and a fighter mathematically cannot reach it without ALSO already
+    // clearing a more specific rule first, making THE_IRONMAN unreachable
+    // as the fighter's own top-matching nickname in practice.
+    minValue: 15,
+    priority: 5,
+    description:
+      'Au moins 15 victoires en carriere, toutes methodes confondues — le filet de securite pour un veteran polyvalent ' +
+      "qui n'a pas (encore) accumule assez d'un type de finish/decision precis pour l'une des autres surnoms.",
   }),
 ]);
 

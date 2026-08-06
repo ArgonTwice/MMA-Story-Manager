@@ -10,6 +10,7 @@ import EventBus from '../core/EventBus.js';
 import { WORLD_EVENTS } from '../state/WorldState.js';
 import { DRAMA_ENGINE_EVENTS } from '../engine/DramaEngine.js';
 import { NARRATIVE_ENGINE_EVENTS } from '../engine/NarrativeEngine.js';
+import { COMBAT_EVENTS } from '../engine/CombatEngine.js';
 import { DRAMA_EVENTS } from '../data/events.js';
 import Fighter from '../models/Fighter.js';
 import PlayerState from '../state/PlayerState.js';
@@ -143,4 +144,45 @@ test('getEntries/toText are newest-first, and detach() stops the feed from react
 
   const text = feed.toText();
   assert.ok(text.indexOf('SECOND') < text.indexOf('FIRST'));
+});
+
+// ---- Phase 4.4 ("Playtests, Polish, Long-Term Economics & Release Candidate") --
+
+test('a title fight with a winner is celebrated with a TITLE-category banner entry', () => {
+  const feed = makeFeed();
+
+  EventBus.publish(COMBAT_EVENTS.FINISHED, {
+    winner: 'A',
+    method: 'UNANIMOUS_DECISION',
+    titleOnTheLine: true,
+    names: { A: 'Champion Name', B: 'Challenger Name' },
+    weightClasses: { A: 'Poids Welter', B: 'Poids Welter' },
+    fighters: { A: 'f1', B: 'f2' },
+  });
+  feed.detach();
+
+  const [entry] = feed.getEntries();
+  assert.equal(entry.category, 'TITLE');
+  assert.ok(entry.text.includes('Champion Name'));
+  assert.ok(entry.text.includes('Poids Welter'));
+});
+
+test('a non-title fight and a title fight ending in a draw are both ignored by the TITLE celebration', () => {
+  const feed = makeFeed();
+
+  EventBus.publish(COMBAT_EVENTS.FINISHED, { winner: 'A', method: 'KO', titleOnTheLine: false, names: { A: 'X', B: 'Y' } });
+  EventBus.publish(COMBAT_EVENTS.FINISHED, { winner: null, method: 'DRAW', titleOnTheLine: true, names: { A: 'X', B: 'Y' } });
+  feed.detach();
+
+  assert.equal(feed.getEntries().length, 0);
+});
+
+test('a Hall of Fame induction entry carries a visible celebratory banner', () => {
+  const feed = makeFeed();
+  EventBus.publish(WORLD_EVENTS.HALL_OF_FAME_INDUCTED, {
+    entry: { name: 'Legend', nickname: null, record: '150-10-0', finishes: 90, inductedOnDay: 1 },
+  });
+  feed.detach();
+
+  assert.ok(feed.getEntries()[0].text.includes('HALL OF FAME'));
 });

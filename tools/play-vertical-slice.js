@@ -48,6 +48,7 @@ import { WeeklyFlowController, WEEKLY_FLOW_PHASES } from '../ui/WeeklyFlowContro
 import { FightNightView } from '../ui/FightNightView.js';
 import { WorldFeed } from '../ui/WorldFeed.js';
 import { SeasonSummary } from '../ui/SeasonSummary.js';
+import { SessionTelemetry } from './SessionTelemetry.js';
 
 const WEEKS_PER_YEAR = BALANCE.CALENDAR.WEEKS_PER_SEASON * BALANCE.CALENDAR.SEASONS_PER_YEAR;
 const STARTING_ROSTER_STYLES = Object.freeze(['Boxe', 'Muay Thai', 'Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle', 'Kickboxing']);
@@ -68,12 +69,17 @@ function parseArgs(argv) {
 function printUsage() {
   console.log(
     [
-      'Usage: node tools/play-vertical-slice.js [--weeks=52] [--seed=42] [--auto]',
+      'Usage: node tools/play-vertical-slice.js [--weeks=52] [--seed=42] [--auto] [--telemetry]',
       '',
-      '  --weeks   Nombre de semaines a jouer (defaut : 52, une annee complete).',
-      '  --seed    Graine RNG pour un playtest reproductible (defaut : Math.random).',
-      '  --auto    Mode non-interactif : plan hebdo auto-rempli, premier choix Drama Engine',
-      '            toujours retenu, combats simules instantanement. Pour la validation/CI.',
+      '  --weeks       Nombre de semaines a jouer (defaut : 52, une annee complete).',
+      '  --seed        Graine RNG pour un playtest reproductible (defaut : Math.random).',
+      '  --auto        Mode non-interactif : plan hebdo auto-rempli, premier choix Drama Engine',
+      '                toujours retenu, combats simules instantanement. Pour la validation/CI.',
+      '  --telemetry   Persiste le resume de cette session dans tools/.telemetry/sessions.json',
+      '                (gitignore) et affiche le taux de completion agrege sur toutes les',
+      '                sessions deja enregistrees. Sans ce flag, la telemetrie de CETTE session',
+      "                est quand meme calculee/affichee, juste pas ecrite sur disque.",
+      '  --telemetry-file=chemin  Fichier de log alternatif pour --telemetry.',
     ].join('\n')
   );
 }
@@ -145,7 +151,8 @@ function makePrompter(auto, rl) {
 
 // ---- one week ----------------------------------------------------------------
 
-async function playOneWeek({ weekIndex, gameState, rng, auto, prompt, gymHub }) {
+async function playOneWeek({ weekIndex, gameState, rng, auto, prompt, gymHub, telemetry }) {
+  telemetry.startWeek();
   console.log('\n' + gymHub.toText());
 
   const flow = new WeeklyFlowController({ gameState, rng });
@@ -175,6 +182,7 @@ async function playOneWeek({ weekIndex, gameState, rng, auto, prompt, gymHub }) 
     );
     stepResult = flow.resolveDramaChoice(choiceId);
     gymHub.clearPendingDramaChoice();
+    telemetry.recordDramaChoice(dramaPrompt.eventId, choiceId);
   }
 
   const summary = stepResult.weekSummary;
@@ -190,7 +198,7 @@ async function playOneWeek({ weekIndex, gameState, rng, auto, prompt, gymHub }) 
 
 // ---- one demo fight (intra-roster — see this file's header) -----------------
 
-async function playOneFight({ gameState, combatEngine, rng, auto, prompt }) {
+async function playOneFight({ gameState, combatEngine, rng, auto, prompt, telemetry }) {
   const available = gameState.playerState.roster.filter((f) => !f.isInjured(gameState.worldState.currentDay));
   if (available.length < 2) return null;
 
@@ -213,14 +221,18 @@ async function playOneFight({ gameState, combatEngine, rng, auto, prompt }) {
     do {
       step = view.advanceOneRound();
       if (!step.finished) {
-        console.log(`  Round ${step.round.round}: degats A ${step.round.damageDealt.A} / B ${step.round.damageDealt.B}`);
+        console.log(`  Round ${step.round.round} — degats A ${step.round.damageDealt.A} / B ${step.round.damageDealt.B}`);
+        console.log(`    Vie     A ${step.round.healthBar.A}   B ${step.round.healthBar.B}`);
+        console.log(`    Stamina A ${step.round.staminaBar.A}   B ${step.round.staminaBar.B}`);
         await prompt('  Round suivant', ['ok']);
       }
     } while (!step.finished);
   }
 
   console.log(view.toResultText());
-  return combatEngine.getSnapshot().result;
+  const result = combatEngine.getSnapshot().result;
+  telemetry.recordFightResult(result);
+  return result;
 }
 
 // ---- main ---------------------------------------------------------------------
@@ -255,20 +267,24 @@ async function main() {
   const rl = auto ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
   const prompt = makePrompter(auto, rl);
 
+  const telemetry = new SessionTelemetry(args['telemetry-file'] ? { filePath: String(args['telemetry-file']) } : {});
+  const persistTelemetry = Boolean(args.telemetry || args['telemetry-file']);
+
   const startMoney = gameState.playerState.money;
   const startDay = gameState.worldState.currentDay;
   const weeklyResults = [];
   const fightResults = [];
+  let weeksCompleted = 0;
 
   console.log(`\n### PHASE 4.3 — VERTICAL SLICE (${weeks} semaine(s), mode ${auto ? 'AUTO' : 'INTERACTIF'}) ###`);
 
   try {
     for (let week = 1; week <= weeks; week += 1) {
-      const stepResult = await playOneWeek({ weekIndex: week, gameState, rng, auto, prompt, gymHub });
+      const stepResult = await playOneWeek({ weekIndex: week, gameState, rng, auto, prompt, gymHub, telemetry });
       weeklyResults.push(stepResult);
 
       if (week % 4 === 0) {
-        const fightResult = await playOneFight({ gameState, combatEngine, rng, auto, prompt });
+        const fightResult = await playOneFight({ gameState, combatEngine, rng, auto, prompt, telemetry });
         if (fightResult) fightResults.push(fightResult);
       }
 
@@ -277,12 +293,24 @@ async function main() {
         console.log('\nFIL DU MONDE (recent) :');
         console.log(feedText);
       }
+
+      weeksCompleted = week;
     }
 
     const seasonSummary = new SeasonSummary({ playerState: gameState.playerState, worldState: gameState.worldState });
     const summary = seasonSummary.build({ weeklyResults, fightResults, startMoney, startDay });
     console.log('\n' + seasonSummary.toText(summary));
   } finally {
+    telemetry.finalize(weeks, weeksCompleted);
+    console.log('\n' + telemetry.toText());
+    if (persistTelemetry) {
+      const aggregate = telemetry.persist();
+      console.log(
+        `Taux de completion agrege (toutes sessions --telemetry) : ${aggregate.completedSessions} / ${aggregate.totalSessions}` +
+          ` (${aggregate.completionRate === null ? 'N/A' : `${(aggregate.completionRate * 100).toFixed(1)}%`})`
+      );
+    }
+
     rl?.close();
     worldFeed.detach();
     detachReactiveEngines(engines);

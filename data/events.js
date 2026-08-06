@@ -77,6 +77,32 @@ export const DRAMA_EVENTS = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'INJURY_SCARE',
+    category: EVENT_CATEGORIES.FIGHTER_STORY,
+    baseChance: 0.6,
+    conditions: [{ type: 'NOT_INJURED' }],
+    weightSignals: [{ signal: 'PERSONALITY_MORALE_VOLATILITY', scale: 0.5 }],
+    choices: [
+      {
+        id: 'GET_CHECKED',
+        label: 'Se faire examiner par precaution',
+        effects: [
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: -10 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 5 },
+        ],
+      },
+      {
+        id: 'SHRUG_IT_OFF',
+        label: 'Hausser les epaules et continuer',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 4 },
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 5 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+    ],
+  }),
+  Object.freeze({
     id: 'PERSONAL_SETBACK',
     category: EVENT_CATEGORIES.FIGHTER_STORY,
     baseChance: 0.8,
@@ -159,6 +185,31 @@ export const DRAMA_EVENTS = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'DOCUMENTARY_FEATURE',
+    category: EVENT_CATEGORIES.MEDIA_ENGINE,
+    baseChance: 0.5,
+    conditions: [{ type: 'NOT_INJURED' }],
+    weightSignals: [{ signal: 'HYPE', scale: 0.8 }],
+    choices: [
+      {
+        id: 'OPEN_UP',
+        label: 'Se livrer devant les cameras',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 8 },
+          { type: 'CHANGE_REPUTATION', amount: 2 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 10 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 5 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'KEEP_PRIVATE',
+        label: 'Garder sa vie privee',
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 2 }],
+      },
+    ],
+  }),
+  Object.freeze({
     id: 'SPONSOR_OFFER',
     category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
     baseChance: 1.0,
@@ -203,6 +254,30 @@ export const DRAMA_EVENTS = Object.freeze([
         id: 'REFUSE',
         label: 'Refuser, rester propre',
         effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: 3 }],
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'MERCHANDISE_DEAL',
+    category: EVENT_CATEGORIES.SPONSORS_MARCHE_NOIR,
+    baseChance: 0.6,
+    conditions: [],
+    weightSignals: [{ signal: 'HYPE', scale: 0.6 }],
+    choices: [
+      {
+        id: 'SIGN',
+        label: 'Signer l\'accord de merchandising',
+        effects: [
+          { type: 'CHANGE_MONEY', amount: 500 },
+          { type: 'CHANGE_HYPE', amount: 3 },
+          { type: 'ADJUST_MENTAL_FATIGUE', target: 'fighter', amount: 3 },
+        ],
+        personalityLean: { dimension: 'salaryDemandMultiplier', scale: 1 },
+      },
+      {
+        id: 'PASS',
+        label: 'Decliner l\'offre',
+        effects: [],
       },
     ],
   }),
@@ -263,6 +338,30 @@ export const DRAMA_EVENTS = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'PUBLIC_CALLOUT',
+    category: EVENT_CATEGORIES.RIVALRIES,
+    baseChance: 0.6,
+    conditions: [{ type: 'HAS_RIVAL_GYMS' }],
+    weightSignals: [{ signal: 'RIVAL_GYM_COUNT', scale: 0.8 }],
+    choices: [
+      {
+        id: 'FIRE_BACK',
+        label: 'Repondre publiquement au callout',
+        effects: [
+          { type: 'CHANGE_HYPE', amount: 6 },
+          { type: 'CHANGE_REPUTATION', amount: -1 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 4 },
+        ],
+        personalityLean: { dimension: 'moraleVolatility', scale: 1 },
+      },
+      {
+        id: 'STAY_SILENT',
+        label: 'Garder le silence',
+        effects: [{ type: 'CHANGE_REPUTATION', amount: 1 }],
+      },
+    ],
+  }),
+  Object.freeze({
     id: 'EQUIPMENT_OPPORTUNITY',
     category: EVENT_CATEGORIES.GYM_LIFE,
     baseChance: 0.6,
@@ -305,6 +404,29 @@ export const DRAMA_EVENTS = Object.freeze([
         label: 'Laisser la situation se resoudre seule',
         effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: -4 }],
         personalityLean: { dimension: 'progressionMultiplier', scale: 1 },
+      },
+    ],
+  }),
+  Object.freeze({
+    id: 'FACILITY_INSPECTION',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.5,
+    conditions: [{ type: 'MIN_MONEY', amount: 800 }],
+    weightSignals: [{ signal: 'ROSTER_SIZE', scale: 0.5 }],
+    choices: [
+      {
+        id: 'UPGRADE_SAFETY',
+        label: 'Ameliorer les protocoles de securite',
+        effects: [
+          { type: 'CHANGE_MONEY', amount: -700 },
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: -5 },
+          { type: 'CHANGE_REPUTATION', amount: 1 },
+        ],
+      },
+      {
+        id: 'MINIMUM_COMPLIANCE',
+        label: 'Faire le strict minimum',
+        effects: [{ type: 'CHANGE_MONEY', amount: -100 }],
       },
     ],
   }),

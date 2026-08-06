@@ -51,6 +51,14 @@ export class SeasonSummary {
       methodCounts[method] = (methodCounts[method] ?? 0) + 1;
     }
 
+    const titleWins = fightResults
+      .filter((result) => result.titleOnTheLine && result.winner !== null)
+      .map((result) => ({
+        winnerName: result.names?.[result.winner] ?? result.winner,
+        weightClass: result.weightClasses?.[result.winner] ?? null,
+        method: result.method,
+      }));
+
     return {
       weeksSimulated: weeklyResults.length,
       startDay,
@@ -69,6 +77,7 @@ export class SeasonSummary {
         nickname: r.reconversion.nickname,
       })),
       hallOfFameInductionsThisWindow: retirements.filter((r) => r.reconversion.isHallOfFamer).length,
+      titleWins,
       rosterSnapshot: this.playerState.roster.map((fighter) => ({
         name: fighter.identity.name,
         nickname: fighter.identity.nickname,
@@ -98,13 +107,26 @@ export class SeasonSummary {
     lines.push(`Combats disputes : ${summary.fights.total}${methodsText ? ` (${methodsText})` : ''}`);
     lines.push(`Evenements Drama Engine resolus : ${summary.dramaEventsResolved}`);
 
+    if (summary.titleWins.length > 0) {
+      lines.push('');
+      lines.push('\u{1F947} TITRES EN JEU CETTE SAISON :');
+      for (const title of summary.titleWins) {
+        lines.push(`  \u{1F947} ${title.winnerName} remporte le titre ${title.weightClass ?? ''} par ${title.method} !`);
+      }
+    }
+
     if (summary.retirements.length > 0) {
       lines.push('');
       lines.push('RETRAITES DE LA SAISON :');
       for (const retirement of summary.retirements) {
-        const hofTag = retirement.isHallOfFamer ? ' [HALL OF FAME]' : '';
         const nicknameTag = retirement.nickname ? ` "${retirement.nickname}"` : '';
-        lines.push(`  ${retirement.name}${nicknameTag} (${retirement.age} ans, ${retirement.record})${hofTag} -> ${retirement.outcome}`);
+        if (retirement.isHallOfFamer) {
+          lines.push(
+            `  \u{1F3C6}✨ ${retirement.name}${nicknameTag} (${retirement.age} ans, ${retirement.record}) ENTRE AU HALL OF FAME ✨\u{1F3C6} -> ${retirement.outcome}`
+          );
+        } else {
+          lines.push(`  ${retirement.name}${nicknameTag} (${retirement.age} ans, ${retirement.record}) -> ${retirement.outcome}`);
+        }
       }
     }
 

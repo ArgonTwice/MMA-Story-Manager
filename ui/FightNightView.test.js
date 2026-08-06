@@ -9,7 +9,8 @@ import assert from 'node:assert/strict';
 import Fighter from '../models/Fighter.js';
 import PlayerState from '../state/PlayerState.js';
 import WorldState from '../state/WorldState.js';
-import { CombatEngine, createSeededRng } from '../engine/CombatEngine.js';
+import { CombatEngine, createSeededRng, FINISH_METHODS } from '../engine/CombatEngine.js';
+import { HistoryEngine } from '../engine/HistoryEngine.js';
 import { FightNightView } from './FightNightView.js';
 
 function makeFighter(name, val, overrides = {}) {
@@ -141,4 +142,114 @@ test('toCardText/toRoundsText render non-empty, readable plain text', () => {
   view.simulateToCompletion();
   const roundsText = view.toRoundsText();
   assert.ok(roundsText.includes('Round 1'));
+});
+
+// ---- Phase 4.4 ("Playtests, Polish, Long-Term Economics & Release Candidate") --
+
+test('toRoundsText renders a visual health/stamina bar per corner per round', () => {
+  const { combatEngine, fighterA, fighterB } = makeEngineWithPlayerState();
+  const view = new FightNightView({ combatEngine });
+  view.presentMatchup(fighterA, fighterB, 'WFC', false);
+  view.setGameplans();
+  view.simulateToCompletion();
+
+  const roundsText = view.toRoundsText();
+  assert.ok(roundsText.includes('Vie     A ['));
+  assert.ok(roundsText.includes('Stamina A ['));
+  assert.match(roundsText, /\[[█░]{20}\] \d+%/);
+
+  const [firstRound] = view.getRoundLogs();
+  assert.match(firstRound.healthBar.A, /^\[[█░]{20}\] \d+%$/);
+  assert.match(firstRound.staminaBar.B, /^\[[█░]{20}\] \d+%$/);
+});
+
+test('toResultText shows a dramatic banner for a finish but not for a decision', () => {
+  const dramaticSeeds = [];
+  const decisionSeeds = [];
+
+  for (let seed = 1; seed <= 60 && (dramaticSeeds.length === 0 || decisionSeeds.length === 0); seed += 1) {
+    const playerState = new PlayerState({ money: 25000 });
+    const worldState = new WorldState();
+    // A moderate (not extreme) skill gap empirically produces a real mix of
+    // both dramatic finishes and decisions across seeds — too large a gap
+    // (e.g. 95 vs 10) always finishes early, too small never finishes at all.
+    const fighterA = makeFighter('Alpha', 70);
+    const fighterB = makeFighter('Beta', 40);
+    playerState.addFighter(fighterA);
+    playerState.addFighter(fighterB);
+    const combatEngine = new CombatEngine({ playerState, worldState, rng: createSeededRng(seed) });
+    const view = new FightNightView({ combatEngine });
+    view.presentMatchup(fighterA, fighterB, 'WFC', false);
+    view.setGameplans();
+    const banner = view.simulateToCompletion();
+
+    const isDecision = [
+      FINISH_METHODS.UNANIMOUS_DECISION,
+      FINISH_METHODS.SPLIT_DECISION,
+      FINISH_METHODS.MAJORITY_DECISION,
+      FINISH_METHODS.DRAW,
+    ].includes(banner.method);
+
+    if (isDecision && decisionSeeds.length === 0) decisionSeeds.push({ view, banner });
+    if (!isDecision && dramaticSeeds.length === 0) dramaticSeeds.push({ view, banner });
+  }
+
+  assert.ok(dramaticSeeds.length > 0, 'sanity: expected at least one dramatic finish across 60 seeds');
+  assert.ok(decisionSeeds.length > 0, 'sanity: expected at least one decision across 60 seeds');
+
+  assert.ok(dramaticSeeds[0].banner.dramaticBanner, 'a KO/TKO/Submission/Doctor Stoppage should carry a dramaticBanner');
+  assert.ok(dramaticSeeds[0].view.toResultText().includes(dramaticSeeds[0].banner.dramaticBanner));
+
+  assert.equal(decisionSeeds[0].banner.dramaticBanner, null, 'a decision/draw should not carry a dramaticBanner');
+});
+
+test('a world record broken during the fight is captured and surfaced in the result banner (only while HistoryEngine is attached)', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const worldState = new WorldState();
+  const fighterA = makeFighter('Record Setter', 50);
+  const fighterB = makeFighter('Opponent', 50);
+  playerState.addFighter(fighterA);
+  playerState.addFighter(fighterB);
+
+  const historyEngine = new HistoryEngine().attach(worldState);
+  const combatEngine = new CombatEngine({ playerState, worldState, rng: createSeededRng(1) });
+  const view = new FightNightView({ combatEngine });
+  view.presentMatchup(fighterA, fighterB, 'WFC', false);
+  view.setGameplans();
+  const banner = view.simulateToCompletion();
+  historyEngine.detach();
+
+  // longestWinStreak starts at 0 (see WorldState#defaultRecords), so any
+  // fight with a winner (streak >= 1) is guaranteed to set a new record.
+  if (banner.winner !== null) {
+    assert.ok(banner.recordsBroken.length > 0, 'expected the very first ever win to set a new longestWinStreak record');
+    assert.ok(view.toResultText().includes('NOUVEAU RECORD DU MONDE'));
+  }
+});
+
+test('presentMatchup() called again mid-session does not leak RECORD_BROKEN listeners across fights', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const worldState = new WorldState();
+  const fighterA = makeFighter('Alpha', 50);
+  const fighterB = makeFighter('Beta', 50);
+  playerState.addFighter(fighterA);
+  playerState.addFighter(fighterB);
+
+  const historyEngine = new HistoryEngine().attach(worldState);
+  const combatEngine = new CombatEngine({ playerState, worldState, rng: createSeededRng(1) });
+  const view = new FightNightView({ combatEngine });
+
+  view.presentMatchup(fighterA, fighterB, 'WFC', false);
+  view.setGameplans();
+  view.simulateToCompletion();
+
+  // A second fight: presentMatchup() must not accumulate a second listener
+  // on top of the (already torn down) one from the first fight.
+  view.presentMatchup(fighterA, fighterB, 'WFC', false);
+  view.setGameplans();
+  const secondBanner = view.simulateToCompletion();
+  historyEngine.detach();
+
+  // The second fight can't break longestWinStreak again the same way (already >=1), so this just needs to not throw/duplicate — a smoke check.
+  assert.ok(secondBanner);
 });

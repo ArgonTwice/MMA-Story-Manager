@@ -189,12 +189,78 @@ test('evaluateNickname prefers the higher-priority PHOENIX rule over an already-
 });
 
 test('evaluateNickname adopts "The Technician" once decisionWins reaches 10', () => {
+  // A loss part-way through breaks the win streak so this test isolates
+  // decisionWins from UNSTOPPABLE (priority 25, longestWinStreak >= 10) —
+  // 10 decision wins in an UNBROKEN row would legitimately earn both at
+  // once, and the higher-priority one would win.
   const fighter = makeFighter();
-  for (let i = 0; i < 9; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: false });
-  assert.equal(fighter.identity.nickname, null);
+  for (let i = 0; i < 5; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  fighter.recordFightResult({ outcome: 'loss' });
+  for (let i = 0; i < 4; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  assert.equal(fighter.identity.nickname, null, 'sanity: 9 decision wins (streak broken once) should not be enough yet');
 
   fighter.recordFightResult({ outcome: 'win', byFinish: false });
   assert.equal(fighter.identity.nickname, 'The Technician');
+});
+
+// ---- Phase 4.4 ("Playtests, Polish, Long-Term Economics & Release Candidate") --
+
+test('evaluateNickname adopts "Unstoppable" once longestWinStreak reaches 10, outranking "The Technician" earned the same fight', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 9; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  assert.equal(fighter.identity.nickname, null, 'sanity: a 9-fight streak should not be enough yet');
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: false });
+  assert.equal(
+    fighter.identity.nickname,
+    'Unstoppable',
+    'UNSTOPPABLE (priority 25) should outrank THE_TECHNICIAN (priority 10), both earned on this exact win'
+  );
+});
+
+test('evaluateNickname adopts "The Silencer" once submissionWins reaches 5', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 4; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'SUBMISSION' });
+  assert.equal(fighter.identity.nickname, null);
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'SUBMISSION' });
+  assert.equal(fighter.identity.nickname, 'The Silencer');
+});
+
+test('evaluateNickname adopts "The Finisher" once tkoWins reaches 5, and DOCTOR_STOPPAGE wins count toward it too', () => {
+  const fighter = makeFighter();
+  for (let i = 0; i < 4; i += 1) fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'TKO' });
+  assert.equal(fighter.identity.nickname, null);
+
+  fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: 'DOCTOR_STOPPAGE' });
+  assert.equal(fighter.identity.nickname, 'The Finisher');
+});
+
+test('evaluateNickname adopts "The Ironman" for a well-rounded record that stays under every OTHER rule\'s own bar', () => {
+  // 4 KO + 4 TKO + 4 SUBMISSION + 3 decisions = 15 wins, each bucket
+  // strictly below its own rule's minValue (5/5/5/10) — and a loss after
+  // every win keeps longestWinStreak at 1, well under UNSTOPPABLE's 10.
+  const fighter = makeFighter();
+  const methods = [
+    ...Array(4).fill('KO'),
+    ...Array(4).fill('TKO'),
+    ...Array(4).fill('SUBMISSION'),
+  ];
+  for (const method of methods) {
+    fighter.recordFightResult({ outcome: 'win', byFinish: true, finishMethod: method });
+    fighter.recordFightResult({ outcome: 'loss' });
+  }
+  for (let i = 0; i < 3; i += 1) {
+    fighter.recordFightResult({ outcome: 'win', byFinish: false });
+    fighter.recordFightResult({ outcome: 'loss' });
+  }
+
+  assert.equal(fighter.career.wins, 15);
+  assert.equal(fighter.career.koWins, 4);
+  assert.equal(fighter.career.tkoWins, 4);
+  assert.equal(fighter.career.submissionWins, 4);
+  assert.equal(fighter.career.decisionWins, 3);
+  assert.equal(fighter.identity.nickname, 'The Ironman');
 });
 
 test('toJSON/fromJSON round-trips the Phase 4.2 identity/career fields', () => {
