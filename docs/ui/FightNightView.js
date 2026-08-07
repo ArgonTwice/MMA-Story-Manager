@@ -243,11 +243,12 @@ export class FightNightView {
    * @param {Object} fighterB
    * @param {string} orgId
    * @param {boolean} [isTitle=false]
+   * @param {Object|null} [rules=null] - Forwarded verbatim to CombatEngine#setupMatch (e.g. engine/PressConferenceEngine.js's purseMultiplier).
    * @returns {Object} The fight card view model.
    */
-  presentMatchup(fighterA, fighterB, orgId, isTitle = false) {
+  presentMatchup(fighterA, fighterB, orgId, isTitle = false, rules = null) {
     this._teardownRecordListener();
-    this.combatEngine.setupMatch(fighterA, fighterB, orgId, isTitle);
+    this.combatEngine.setupMatch(fighterA, fighterB, orgId, isTitle, rules);
     this._roundLogs = [];
     this._fighterA = fighterA;
     this._fighterB = fighterB;

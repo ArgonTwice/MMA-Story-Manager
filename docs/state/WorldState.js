@@ -38,6 +38,7 @@ export const WORLD_EVENTS = Object.freeze({
   RELATIONSHIP_UPDATED: 'world:relationship_updated',
   RECORD_BROKEN: 'world:record_broken',
   HALL_OF_FAME_INDUCTED: 'world:hall_of_fame_inducted',
+  GOLDEN_BOOK_ENTRY_ADDED: 'world:golden_book_entry_added',
 });
 
 /** The five relationship gauges tracked per entity pair. */
@@ -134,6 +135,8 @@ export class WorldState {
     this.hallOfFame = config.hallOfFame ? config.hallOfFame.map((entry) => ({ ...entry })) : [];
     /** Phase V2.7: last year a "Cuvee de Prospects" wave was generated — see engine/ProspectGenerator.js#isProspectWaveDue. null before the first wave. */
     this.lastProspectWaveYear = config.lastProspectWaveYear ?? null;
+    /** "Livre d'Or": one auto-engraved recap phrase per season-end, see engine/HallOfFameEngine.js#generateGoldenBookEntry/addGoldenBookEntry below. */
+    this.goldenBook = config.goldenBook ? config.goldenBook.map((entry) => ({ ...entry })) : [];
   }
 
   // ---- calendar -----------------------------------------------------------
@@ -474,6 +477,39 @@ export class WorldState {
     return this.hallOfFame.map((entry) => ({ ...entry }));
   }
 
+  // ---- golden book (Livre d'Or) ------------------------------------------------
+
+  /**
+   * Appends one auto-engraved season recap phrase to the world's permanent
+   * "Livre d'Or" (see engine/HallOfFameEngine.js#generateGoldenBookEntry),
+   * trimming the oldest entries past BALANCE.GOLDEN_BOOK.HISTORY_LIMIT.
+   *
+   * @param {Object} entry - { year, season, text, ...extra }.
+   * @returns {Object} The stored entry (with an id/engravedOnDay assigned if missing).
+   */
+  addGoldenBookEntry(entry) {
+    const record = {
+      id: entry.id ?? generateId('gb'),
+      engravedOnDay: entry.engravedOnDay ?? this.currentDay,
+      ...entry,
+    };
+
+    this.goldenBook.push(record);
+    if (this.goldenBook.length > BALANCE.GOLDEN_BOOK.HISTORY_LIMIT) {
+      this.goldenBook.splice(0, this.goldenBook.length - BALANCE.GOLDEN_BOOK.HISTORY_LIMIT);
+    }
+
+    EventBus.publish(WORLD_EVENTS.GOLDEN_BOOK_ENTRY_ADDED, { entry: record });
+    return record;
+  }
+
+  /**
+   * @returns {Object[]} A copy of the full Livre d'Or registry.
+   */
+  getGoldenBook() {
+    return this.goldenBook.map((entry) => ({ ...entry }));
+  }
+
   // ---- prospect waves -----------------------------------------------------------
 
   /**
@@ -504,6 +540,7 @@ export class WorldState {
       titleHolders: structuredCloneOrCopy(this.titleHolders),
       hallOfFame: this.hallOfFame.map((entry) => ({ ...entry })),
       lastProspectWaveYear: this.lastProspectWaveYear,
+      goldenBook: this.goldenBook.map((entry) => ({ ...entry })),
     };
   }
 

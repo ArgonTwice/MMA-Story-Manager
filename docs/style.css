@@ -513,6 +513,38 @@ input[type='text'] {
   border: 1px solid var(--gold);
 }
 
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.badge-tile {
+  text-align: center;
+  padding: 12px 8px;
+}
+
+.badge-tile .badge-icon {
+  font-size: 26px;
+  margin-bottom: 4px;
+}
+
+.badge-locked {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+
+.badge-unlocked {
+  border-color: var(--gold);
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.1), var(--bg-panel));
+}
+
+.golden-book-entry {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
 .badge-injured {
   background: rgba(192, 57, 43, 0.18);
   color: var(--red-bright);

@@ -2231,6 +2231,100 @@ const BALANCE = {
     /** P(A beats B) = 1 / (1 + 10 ^ ((OverallB - OverallA) / RATING_DIVISOR)) — the spec's own formula, verbatim (RATING_DIVISOR = 20). */
     RATING_DIVISOR: 20,
   },
+
+  // ---------------------------------------------------------------------
+  // PRESS_CONFERENCE — engine/PressConferenceEngine.js's pre-fight stance
+  // choice, offered only ahead of a "big fight" (see IS_MAIN_EVENT below) —
+  // an ordinary undercard bout never shows this. Applied once, immediately
+  // before the fight actually starts.
+  // ---------------------------------------------------------------------
+  PRESS_CONFERENCE: {
+    /** A fight is "Main Event"-eligible for a press conference once EITHER fighter already holds a title (career.titles.length > 0), or the opponent's gym reputation is at/above this GYM.PROMOTION_TIER_REPUTATION_REQUIREMENT tier — reusing the existing promotion-tier scale rather than inventing a parallel one. */
+    MAIN_EVENT_REPUTATION_TIER: 'MAJOR_PROMOTION',
+    STANCES: {
+      RESPECTUEUX: {
+        id: 'RESPECTUEUX',
+        label: 'Respectueux',
+        description: 'Eloges pour l\'adversaire, ton mesure — rien a gagner, rien a perdre.',
+        purseMultiplier: 1,
+        moraleDelta: 0,
+        tensionDelta: 0,
+      },
+      PROVOCATEUR: {
+        id: 'PROVOCATEUR',
+        label: 'Provocateur',
+        description: 'Trash-talk assume : plus de buzz et de prime, mais la rivalite s\'envenime.',
+        /** "+20% la prime/ventes PPV" — applied to this fight's purse (both corners' gross), same shape as CombatEngine's other purse multipliers (League tier, Vale Tudo). */
+        purseMultiplier: 1.2,
+        moraleDelta: 8,
+        /** Added to the WorldState relationship 'tension' gauge between the two fighters. */
+        tensionDelta: 15,
+      },
+      TACTIQUE: {
+        id: 'TACTIQUE',
+        label: 'Tactique',
+        description: "Analyse froide du gameplan adverse — prepare le combat plutot que le buzz.",
+        purseMultiplier: 1,
+        moraleDelta: 0,
+        tensionDelta: 0,
+        /** Grants the same pending tactical-prep bonus WEEKLY_PLANNING's own TACTICAL_PREP activity does — see Fighter#preparation.tacticalBonusPending. */
+        grantsTacticalPrep: true,
+      },
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // HALL_OF_FAME_BADGES — engine/HallOfFameEngine.js's 20 unlockable
+  // achievement badges (BALANCE.HALL_OF_FAME_BADGES, keyed by id). This
+  // catalog is DESIGN DATA ONLY (label/description/icon) — unlock
+  // conditions themselves live in engine/HallOfFameEngine.js, split into:
+  //   - threshold badges, re-evaluated periodically (any state that can be
+  //     observed at any moment: money, reputation, roster, titles held...).
+  //   - reactive badges, checked once at the moment of a specific
+  //     'combat:finished' event (Premier Sang, Upset du Siecle...) since
+  //     they depend on a fact only true in that instant (this exact fight's
+  //     pre-fight rating gap), not on any lasting state.
+  // Once unlocked, a badge is PERMANENT (PlayerState#unlockedBadges only
+  // ever grows) — losing the money/roster/etc. that triggered it later
+  // never revokes it, matching how real achievements work.
+  // ---------------------------------------------------------------------
+  HALL_OF_FAME_BADGES: {
+    /** Minimum pre-fight OverallRating gap (opponent - own fighter) for a win to count as the reactive UPSET_DU_SIECLE badge — see engine/HallOfFameEngine.js's reactive class. */
+    UPSET_RATING_GAP_THRESHOLD: 25,
+
+    CATALOG: {
+    PREMIER_SANG: { id: 'PREMIER_SANG', label: 'Premier Sang', description: 'Premiere victoire par finition (KO/TKO/Soumission).', icon: '\u{1FA78}' },
+    PREMIERE_SIGNATURE: { id: 'PREMIERE_SIGNATURE', label: 'Premiere Signature', description: 'Premier combattant recrute dans le roster.', icon: '\u{270D}\u{FE0F}' },
+    CHAMPION_DU_MONDE: { id: 'CHAMPION_DU_MONDE', label: 'Champion du Monde', description: "Un combattant du roster (ou de legende) a decroche un titre.", icon: '\u{1F451}' },
+    DYNASTIE: { id: 'DYNASTIE', label: 'Dynastie', description: 'Un combattant a decroche 3 titres au cours de sa carriere.', icon: '\u{1F3F0}' },
+    UPSET_DU_SIECLE: { id: 'UPSET_DU_SIECLE', label: 'Upset du Siecle', description: 'Victoire ecrasante contre un adversaire largement mieux note.', icon: '\u{1F4A5}' },
+    MILLIONNAIRE: { id: 'MILLIONNAIRE', label: 'Millionnaire', description: 'Tresorerie de la salle a atteint 1 000 000$.', icon: '\u{1F4B0}' },
+    ICONE_MEDIATIQUE: { id: 'ICONE_MEDIATIQUE', label: 'Icone Mediatique', description: 'Le Hype de la salle a atteint son maximum.', icon: '\u{1F4F8}' },
+    RESEAU_ETABLI: { id: 'RESEAU_ETABLI', label: 'Reseau Etabli', description: 'Le fil Reseaux a accumule au moins 50 publications.', icon: '\u{1F4F1}' },
+    EMPIRE_IMMOBILIER: { id: 'EMPIRE_IMMOBILIER', label: 'Empire Immobilier', description: "La salle a atteint le palier Academie Elite.", icon: '\u{1F3DB}\u{FE0F}' },
+    ARSENAL_COMPLET: { id: 'ARSENAL_COMPLET', label: 'Arsenal Complet', description: "Tout le catalogue d'equipements est possede.", icon: '\u{1F6E0}\u{FE0F}' },
+    ELITE_MONDIALE: { id: 'ELITE_MONDIALE', label: 'Elite Mondiale', description: 'La salle a atteint le sommet de la pyramide des ligues.', icon: '\u{1F30D}' },
+    LEGENDE_VIVANTE: { id: 'LEGENDE_VIVANTE', label: 'Legende Vivante', description: 'Un premier combattant a rejoint le Hall of Fame.', icon: '\u{2728}' },
+    DYNASTIE_DE_LEGENDES: { id: 'DYNASTIE_DE_LEGENDES', label: 'Dynastie de Legendes', description: 'Cinq combattants ont rejoint le Hall of Fame.', icon: '\u{1F3DB}\u{FE0F}' },
+    PALMARES_DORE: { id: 'PALMARES_DORE', label: 'Palmares Dore', description: 'Un combattant du roster a remporte un trophee de fin de saison.', icon: '\u{1F396}\u{FE0F}' },
+    REPUTATION_INTERNATIONALE: { id: 'REPUTATION_INTERNATIONALE', label: 'Reputation Internationale', description: 'Reputation de la salle au maximum.', icon: '\u{1F310}' },
+    SALLE_COMBLE: { id: 'SALLE_COMBLE', label: 'Salle Comble', description: 'Effectif au complet par rapport a la capacite du palier actuel.', icon: '\u{1F465}' },
+    VENERABLE: { id: 'VENERABLE', label: 'Venerable', description: 'Un combattant encore actif approche l\'age de la retraite forcee.', icon: '\u{1F9D3}' },
+    STAFF_COMPLET: { id: 'STAFF_COMPLET', label: 'Staff au Complet', description: 'Les 3 postes de staff specialise sont pourvus.', icon: '\u{1F4CB}' },
+    INVAINCU: { id: 'INVAINCU', label: 'Invaincu', description: 'Un combattant a atteint 10 victoires sans defaite.', icon: '\u{1F6E1}\u{FE0F}' },
+    ROI_DE_LA_FINITION: { id: 'ROI_DE_LA_FINITION', label: 'Roi de la Finition', description: 'Un combattant a accumule 5 victoires par finition.', icon: '\u{1F94A}' },
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // GOLDEN_BOOK — WorldState.goldenBook, one auto-engraved recap phrase per
+  // season-end (see engine/HallOfFameEngine.js#generateGoldenBookEntry,
+  // called from web/app.js's season-boundary Gala flow alongside the
+  // pre-existing StoryAnalyzer.analyzeSeason trophy pass).
+  // ---------------------------------------------------------------------
+  GOLDEN_BOOK: {
+    HISTORY_LIMIT: 100,
+  },
 };
 
 export default deepFreeze(BALANCE);

@@ -50,6 +50,8 @@ import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESE
 import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from '../engine/GymStipulations.js';
 import { recordLeagueFightResult, getPromotionProgress } from '../engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
+import { isMainEventEligible, getStances, applyPressConferenceChoice } from '../engine/PressConferenceEngine.js';
+import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from '../engine/HallOfFameEngine.js';
 import { generateHiringPool, hireStaff } from '../engine/StaffEngine.js';
 import {
   getNextTierUpgradeCost,
@@ -319,6 +321,7 @@ function createReactiveEngines() {
     worldMemory: new WorldMemory(),
     historyEngine: new HistoryEngine(),
     socialEngine: new SocialEngine(),
+    hallOfFameEngine: new HallOfFameEngine(),
   };
 }
 
@@ -330,6 +333,7 @@ function attachReactiveEngines(engines, playerState, worldState) {
   engines.worldMemory.attach(worldState);
   engines.historyEngine.attach(worldState);
   engines.socialEngine.attach(playerState);
+  engines.hallOfFameEngine.attach(playerState);
 }
 
 function detachReactiveEngines(engines) {
@@ -762,6 +766,14 @@ class WebApp {
         class: 'btn btn-outline btn-block',
         text: '\u{1F3CB}\u{FE0F} Ma salle (equipement & rivaux)',
         onclick: () => this._showGymFacilityModal(),
+      })
+    );
+
+    panel.appendChild(
+      el('button', {
+        class: 'btn btn-outline btn-block',
+        text: '\u{2699}\u{FE0F} Parametres & Sauvegarde',
+        onclick: () => this._showSettingsModal(),
       })
     );
 
@@ -1500,12 +1512,37 @@ class WebApp {
     this._showModal(card, { blocking: true });
   }
 
+  /**
+   * "Rumeurs de mercato" — engine/SocialEngine.js already reacts to every
+   * fight/roster-add/facility-upgrade with fan/journalist/rival posts; this
+   * is the one remaining source it doesn't cover, since
+   * engine/TransferMarket.js only runs in a batch at season boundaries and
+   * publishes no EventBus event of its own — so this reads its report
+   * straight out of the weekly summary instead.
+   * @param {Object|null} transferMarketReport - result.weekSummary.transferMarketReport (null except at a season boundary).
+   */
+  _postMercatoRumors(transferMarketReport) {
+    if (!transferMarketReport) return;
+    const playerState = this.gameState.playerState;
+
+    for (const signing of transferMarketReport.signings.slice(0, 2)) {
+      playerState.pushSocialFeedEntry({
+        author: 'Rumeur de Mercato',
+        authorType: 'JOURNALIST',
+        text: `${signing.gymName} vient de signer ${signing.fighterName}.`,
+        likes: Math.round(5 + playerState.hype * 0.3),
+      });
+    }
+  }
+
   _completeWeek(result) {
     this.weeklyResultsThisYear.push(result);
     this.lastWeekEconomy = result.weekSummary.economyReport;
     telemetry.recordWeekResolved();
     telemetry.checkFrustrationSignals(this.gameState.playerState);
     processActiveDeals(this.gameState.playerState);
+    this._postMercatoRumors(result.weekSummary.transferMarketReport);
+    const newBadges = evaluateBadgeUnlocks(this.gameState.playerState, this.gameState.worldState);
     this._startNewWeek();
     this._renderAll();
     this._autosave();
@@ -1516,6 +1553,9 @@ class WebApp {
       for (const retirement of summary.retirements) {
         bits.push(`\u{1F44B} ${retirement.name} part a la retraite${retirement.reconversion.isHallOfFamer ? ' \u{1F3C6} HALL OF FAME' : ''}.`);
       }
+    }
+    for (const badge of newBadges) {
+      bits.push(`${badge.icon} Badge debloque : ${badge.label} !`);
     }
     const net = Math.round(summary.economyReport.netChange);
     bits.push(`Semaine resolue — jour ${this.gameState.worldState.currentDay}. Solde net ${net >= 0 ? '+' : ''}${net}$.`);
@@ -1532,6 +1572,8 @@ class WebApp {
         yearStartRosterRatings: this.yearStartRosterRatings,
       });
       this._persistTrophies(analysis);
+      const goldenBookEntry = generateGoldenBookEntry(this.gameState.playerState, this.gameState.worldState, analysis);
+      this.gameState.worldState.addGoldenBookEntry(goldenBookEntry);
       if (hasAnyTrophy(analysis)) {
         this._showGala(analysis);
       } else {
@@ -1709,11 +1751,46 @@ class WebApp {
     const fighterB = Fighter.fromJSON(opponentEntry);
     assertNoIntraGymMatch(fighterA, fighterB, playerState);
 
+    if (isMainEventEligible({ fighterA, fighterB, opponentGymReputation: gym?.reputation ?? 0 })) {
+      this._showPressConferenceModal(fighterA, fighterB, gym);
+      return;
+    }
+
+    this._launchFight(fighterA, fighterB, gym, null);
+  }
+
+  _showPressConferenceModal(fighterA, fighterB, gym) {
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: "\u{1F3A4} Conference de presse" }),
+      el('p', { text: `Avant d'affronter ${fighterB.identity.name}, quelle posture adopte ${fighterA.identity.name} ?` }),
+      el(
+        'div',
+        { class: 'choice-list' },
+        getStances().map((stance) =>
+          el('div', { class: 'card' }, [
+            el('p', { class: 'fighter-meta', text: stance.description }),
+            el('button', {
+              class: 'btn btn-outline choice-btn btn-block',
+              text: stance.label,
+              onclick: () => {
+                applyPressConferenceChoice(stance.id, { fighterA, fighterB, worldState: this.gameState.worldState });
+                this._hideModal();
+                this._launchFight(fighterA, fighterB, gym, { purseMultiplier: stance.purseMultiplier });
+              },
+            }),
+          ])
+        )
+      ),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _launchFight(fighterA, fighterB, gym, rules) {
     this._fightOpponentGymId = gym.id;
     this._fightFighterB = fighterB;
     this._teardownCombatPlayback();
     this.fightView = new FightNightView({ combatEngine: this.combatEngine });
-    this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false);
+    this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false, rules);
     this.fightSetupDone = false;
     // Only the player's own corner (A) is ever player-configured — the
     // opponent (B) always fights their own AI gameplan/natural weight cut
@@ -2329,7 +2406,7 @@ class WebApp {
         }),
         el('button', {
           class: `subtab-btn${this.journalTab === 'legends' ? ' active' : ''}`,
-          text: 'Legendes',
+          text: '\u{1F3C6} Hall of Fame',
           onclick: () => {
             this.journalTab = 'legends';
             this._renderJournal();
@@ -2381,9 +2458,13 @@ class WebApp {
     }
   }
 
-  // ---- HALL OF FAME (Phase Beta: Story Export entry point) --------------------------
+  // ---- HALL OF FAME & TROPHEES (badges, Livre d'Or, legends) --------------------------
 
   _renderHallOfFame(panel) {
+    this._renderBadgesGrid(panel);
+    this._renderGoldenBook(panel);
+
+    panel.appendChild(el('h3', { class: 'section-title', text: '\u{2728} Legendes' }));
     const legends = [...this.gameState.worldState.getHallOfFame()].reverse();
     if (legends.length === 0) {
       panel.appendChild(el('p', { text: 'Aucune legende intronisee pour le moment.' }));
@@ -2401,6 +2482,39 @@ class WebApp {
           ]),
         ])
       );
+    }
+  }
+
+  _renderBadgesGrid(panel) {
+    const unlockedIds = new Set(this.gameState.playerState.unlockedBadges);
+    const badges = getAllBadgeDefinitions();
+
+    panel.appendChild(
+      el('h3', { class: 'section-title', text: `\u{1F396}\u{FE0F} Badges (${unlockedIds.size}/${badges.length})` })
+    );
+    const grid = el('div', { class: 'badge-grid' });
+    for (const badge of badges) {
+      const unlocked = unlockedIds.has(badge.id);
+      grid.appendChild(
+        el('div', { class: `card badge-tile${unlocked ? ' badge-unlocked' : ' badge-locked'}` }, [
+          el('div', { class: 'badge-icon', text: badge.icon }),
+          el('div', { class: 'fighter-name', text: badge.label }),
+          el('div', { class: 'fighter-meta', text: badge.description }),
+        ])
+      );
+    }
+    panel.appendChild(grid);
+  }
+
+  _renderGoldenBook(panel) {
+    const entries = [...this.gameState.worldState.getGoldenBook()].reverse();
+    panel.appendChild(el('h3', { class: 'section-title', text: "\u{1F4DC} Livre d'Or" }));
+    if (entries.length === 0) {
+      panel.appendChild(el('p', { text: 'Aucune saison gravee pour le moment.' }));
+      return;
+    }
+    for (const entry of entries) {
+      panel.appendChild(el('div', { class: 'card golden-book-entry', text: entry.text }));
     }
   }
 
@@ -2801,6 +2915,84 @@ class WebApp {
     this._hideModal();
     this._renderAll();
     this._autosave();
+  }
+
+  // ---- SETTINGS / SAVE EXPORT-IMPORT --------------------------------------------------
+
+  /**
+   * core/SaveManager.js (via state/GameState.js#exportSave/importSave)
+   * already handles the versioned JSON envelope, serialization and
+   * migration — this modal is purely the browser-side file download/upload
+   * plumbing on top of that pre-existing, already-tested API. Autosave
+   * itself already runs after every meaningful action (fight, week,
+   * purchase...) via this._autosave() — a strictly tighter safety net than
+   * "every 5 weeks", so no separate timer is added here.
+   */
+  _showSettingsModal() {
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{2699}\u{FE0F} Parametres & Sauvegarde' }),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Exporter la sauvegarde' }),
+        el('p', { class: 'fighter-meta', text: 'Telecharge un fichier .json contenant votre partie actuelle.' }),
+        el('button', { class: 'btn btn-gold btn-block', text: '\u{2B07}\u{FE0F} Exporter (.json)', onclick: () => this._exportSaveToFile() }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Importer une sauvegarde' }),
+        el('p', { class: 'fighter-meta', text: 'Remplace la partie actuelle par le contenu du fichier .json choisi.' }),
+        el('input', {
+          type: 'file',
+          accept: '.json,application/json',
+          onchange: (event) => this._importSaveFromFile(event),
+        }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Sauvegarde automatique' }),
+        el('p', { class: 'fighter-meta', text: 'La partie est sauvegardee automatiquement dans le navigateur apres chaque action importante (combat, semaine, achat...).' }),
+      ]),
+      el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
+  }
+
+  _exportSaveToFile() {
+    try {
+      const json = this.gameState.exportSave();
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const gymSlug = (this.gameState.playerState.gymName || 'gym').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `mma-gym-manager_${gymSlug}_${Date.now()}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      this._showToast('\u{2B07}\u{FE0F} Sauvegarde exportee.');
+    } catch (error) {
+      console.error('[web/app.js] Export failed:', error);
+      this._showToast('\u{26A0}\u{FE0F} Echec de l\'export.');
+    }
+  }
+
+  _importSaveFromFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        this.gameState.importSave(String(reader.result));
+        this._hideModal();
+        this._startNewWeek();
+        this._renderAll();
+        this._autosave();
+        this._showToast('\u{2705} Sauvegarde importee.');
+      } catch (error) {
+        console.error('[web/app.js] Import failed:', error);
+        this._showToast('\u{26A0}\u{FE0F} Fichier de sauvegarde invalide.');
+      }
+    };
+    reader.readAsText(file);
   }
 
   // ---- modal / toast -----------------------------------------------------------------

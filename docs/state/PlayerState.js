@@ -42,6 +42,8 @@ export const PLAYER_EVENTS = Object.freeze({
   /** Underground Circuit gym-stipulation matches (engine/GymStipulations.js): a timed recurring deal (e.g. a captured Sponsorship Raid contract) was added/expired. */
   ACTIVE_DEAL_ADDED: 'deals:active_deal_added',
   ACTIVE_DEAL_REMOVED: 'deals:active_deal_removed',
+  /** engine/HallOfFameEngine.js: a new BALANCE.HALL_OF_FAME_BADGES entry was unlocked. */
+  BADGE_UNLOCKED: 'hallOfFame:badge_unlocked',
 });
 
 let idCounter = 0;
@@ -113,6 +115,9 @@ export class PlayerState {
     this.leagueTier = config.leagueTier ?? BALANCE.LEAGUE_PYRAMID.TIER_ORDER[0];
     /** Rolling win/loss (true/false) window over the gym's last BALANCE.LEAGUE_PYRAMID.FIGHT_HISTORY_WINDOW SANCTIONED fights (Underground Circuit/sparring never count) — oldest first, capped at the window size by engine/LeagueEngine.js#recordLeagueFightResult. */
     this.recentFightResults = config.recentFightResults ? [...config.recentFightResults] : [];
+
+    /** engine/HallOfFameEngine.js's 20-badge catalog (BALANCE.HALL_OF_FAME_BADGES) — ids of every badge ever unlocked, permanent (never removed even if the triggering condition later stops holding). */
+    this.unlockedBadges = config.unlockedBadges ? [...config.unlockedBadges] : [];
   }
 
   // ---- roster -----------------------------------------------------------
@@ -406,6 +411,21 @@ export class PlayerState {
     EventBus.publish(PLAYER_EVENTS.ACADEMY_DRAFT_OFFERED, { year });
   }
 
+  // ---- hall of fame badges ----------------------------------------------------
+
+  /**
+   * Unlocks one BALANCE.HALL_OF_FAME_BADGES entry, permanently. No-ops
+   * (returns false) if already unlocked — badges never re-fire.
+   * @param {string} badgeId
+   * @returns {boolean} True if this call actually unlocked it (false if already owned).
+   */
+  unlockBadge(badgeId) {
+    if (this.unlockedBadges.includes(badgeId)) return false;
+    this.unlockedBadges.push(badgeId);
+    EventBus.publish(PLAYER_EVENTS.BADGE_UNLOCKED, { badgeId });
+    return true;
+  }
+
   // ---- social feed ------------------------------------------------------------
 
   /**
@@ -454,6 +474,7 @@ export class PlayerState {
       activeDeals: this.activeDeals.map((deal) => ({ ...deal })),
       leagueTier: this.leagueTier,
       recentFightResults: [...this.recentFightResults],
+      unlockedBadges: [...this.unlockedBadges],
     };
   }
 
