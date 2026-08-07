@@ -266,6 +266,18 @@ export class Fighter {
      */
     this.weeklySalary = config.weeklySalary ?? 0;
 
+    /**
+     * Weeks spent training at the PLAYER's own gym — drives engine/
+     * ScoutingEngine.js's Fog of War reveal (estimateFighterSkills):
+     * the longer a signed prospect has been around, the closer the
+     * player's estimate of their real stats gets to the truth. Zero for a
+     * freshly-signed fighter; incremented weekly for every roster fighter
+     * (see engine/ScoutingEngine.js#advanceWeeksAtGym, called from the
+     * same weekly resolution pass as everything else). Never decremented,
+     * never reset — a fighter doesn't become a mystery again once known.
+     */
+    this.weeksAtGym = config.weeksAtGym ?? 0;
+
     /** Health record. */
     this.medical = {
       injuredUntil: config.medical?.injuredUntil ?? null,
@@ -851,6 +863,7 @@ export class Fighter {
         scoutOffers: [...this.contracts.scoutOffers],
       },
       weeklySalary: this.weeklySalary,
+      weeksAtGym: this.weeksAtGym,
       medical: {
         injuredUntil: this.medical.injuredUntil,
         injuriesHistory: [...this.medical.injuriesHistory],

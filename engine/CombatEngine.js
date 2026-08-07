@@ -44,6 +44,9 @@
 import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
+import { getHeadCoachMomentumBonus, getStrikingGrapplingMultipliers, getPhysioInjuryRiskMultiplier, getPhysioStaminaRegenMultiplier } from './StaffEngine.js';
+import { getClinchOutputMultiplier, getStaminaMaxBonusPercent, getLowQualityInjuryRiskMultiplier } from './GymInfrastructure.js';
+import { getPurseMultiplier } from './LeagueEngine.js';
 
 /** FSM phase names. */
 export const COMBAT_STATES = Object.freeze({
@@ -522,9 +525,16 @@ export class CombatEngine {
       live.readiness = readiness;
       live.readinessMomentumBonus = readinessMods.momentumBonus;
 
+      // Zone Cardio (GymInfrastructure) only boosts the player's own fighters'
+      // Stamina Max, never a rival/opponent's.
+      const equipmentStaminaMaxBonus =
+        this.playerState && this._isPlayerFighter(fighter) ? getStaminaMaxBonusPercent(this.playerState) : 0;
       live.staminaMax = Math.max(
         0,
-        BALANCE.COMBAT.STAMINA.MAX * (1 + profile.staminaModifier) * (1 + readinessMods.staminaMaxMultiplier)
+        BALANCE.COMBAT.STAMINA.MAX *
+          (1 + profile.staminaModifier) *
+          (1 + readinessMods.staminaMaxMultiplier) *
+          (1 + equipmentStaminaMaxBonus)
       );
       live.stamina = live.staminaMax;
 
@@ -654,7 +664,14 @@ export class CombatEngine {
     const c = this.context;
     for (const key of ['A', 'B']) {
       const live = c.live[key];
-      live.stamina = clamp(live.stamina + BALANCE.COMBAT.STAMINA.REGEN_PER_ROUND_REST, 0, live.staminaMax);
+      const fighter = c.fighters[key];
+      const staminaRegenMultiplier =
+        this.playerState && this._isPlayerFighter(fighter) ? getPhysioStaminaRegenMultiplier(this.playerState) : 1;
+      live.stamina = clamp(
+        live.stamina + BALANCE.COMBAT.STAMINA.REGEN_PER_ROUND_REST * staminaRegenMultiplier,
+        0,
+        live.staminaMax
+      );
     }
 
     this._transition(COMBAT_STATES.ROUND_START);
@@ -1123,8 +1140,16 @@ export class CombatEngine {
     // only ever nudges a fighter who has actually won or lost fights before.
     const confidenceMomentumBonus =
       (attacker.attributes.confidence - BALANCE.CONFIDENCE.STARTING_VALUE) * BALANCE.CONFIDENCE.MOMENTUM_BONUS_SCALE;
+    // Head Coach (StaffEngine) nudges momentum the same additive way
+    // confidence does, but only for the player's own fighters — zero for
+    // any opponent or for a player with no Head Coach hired.
+    const headCoachMomentumBonus =
+      this.playerState && this._isPlayerFighter(attacker) ? getHeadCoachMomentumBonus(this.playerState) : 0;
     const momentumMultiplier = clamp(
-      attackerLive.momentum / BALANCE.MOMENTUM.MAX + attackerLive.readinessMomentumBonus + confidenceMomentumBonus,
+      attackerLive.momentum / BALANCE.MOMENTUM.MAX +
+        attackerLive.readinessMomentumBonus +
+        confidenceMomentumBonus +
+        headCoachMomentumBonus,
       0,
       2
     );
@@ -1135,6 +1160,14 @@ export class CombatEngine {
         : 1;
     const perkDamageMultiplier = this._getPerkMultiplier(attacker, 'damageMultiplier');
     const varianceMultiplier = this._rollVarianceMultiplier();
+
+    // Coach Frappe/Grappling (StaffEngine) and Cage de Competition
+    // (GymInfrastructure) both only apply to the player's own fighters —
+    // 1 (no effect) for any opponent or with neither hired/owned.
+    const isPlayerAttacker = this.playerState && this._isPlayerFighter(attacker);
+    const staffDistanceMultiplier = isPlayerAttacker ? getStrikingGrapplingMultipliers(this.playerState)[distance] ?? 1 : 1;
+    const equipmentClinchMultiplier =
+      isPlayerAttacker && distance === 'CLINCH' ? getClinchOutputMultiplier(this.playerState) : 1;
 
     // A3.2 Counter Window: a bonus earned *last* round (by stuffing the
     // opponent's takedown) and consumed here, on this fighter's very next
@@ -1195,6 +1228,8 @@ export class CombatEngine {
       staminaMultiplier *
       perkDamageMultiplier *
       varianceMultiplier *
+      staffDistanceMultiplier *
+      equipmentClinchMultiplier *
       hitChance;
 
     const targetEffects = BALANCE.COMBAT.GAMEPLAN.TARGET_EFFECTS[plan.target];
@@ -1899,7 +1934,15 @@ export class CombatEngine {
     const tierKey = c.originalIsTitle ? 'TITLE_FIGHT' : 'REGIONAL';
     const basePurse = econ.BASE_FIGHT_PURSE[tierKey];
 
-    const gross = { A: basePurse * c.rules.purseMultiplier, B: basePurse * c.rules.purseMultiplier };
+    // LeagueEngine: the gym's current league-pyramid tier scales the whole
+    // event's purse (both corners) — 1x at the bottom LOCAL_UNDERGROUND
+    // tier (today's pre-League behavior) up to a large multiplier at
+    // ELITE_MONDIALE. No playerState attached (e.g. a headless sim) keeps
+    // this at 1.
+    const leaguePurseMultiplier = this.playerState ? getPurseMultiplier(this.playerState) : 1;
+    const combinedPurseMultiplier = c.rules.purseMultiplier * leaguePurseMultiplier;
+
+    const gross = { A: basePurse * combinedPurseMultiplier, B: basePurse * combinedPurseMultiplier };
 
     if (!isDraw) {
       gross[finish.winnerKey] *= econ.WIN_BONUS_MULTIPLIER;
@@ -1950,10 +1993,17 @@ export class CombatEngine {
     const c = this.context;
     const inj = BALANCE.INJURIES;
     const live = c.live[key];
+    const fighter = c.fighters[key];
 
     const staminaFraction = live.stamina / live.staminaMax;
     const fatigueMultiplier = 1 + (1 - staminaFraction) * (inj.FATIGUE_RISK_MULTIPLIER_MAX - 1);
-    const chance = inj.BASE_CHANCE_PER_FIGHT * fatigueMultiplier * c.rules.injuryRiskMultiplier;
+    let chance = inj.BASE_CHANCE_PER_FIGHT * fatigueMultiplier * c.rules.injuryRiskMultiplier;
+
+    // Physio (StaffEngine) and run-down equipment (GymInfrastructure) only
+    // adjust risk for the player's own fighters.
+    if (this.playerState && this._isPlayerFighter(fighter)) {
+      chance *= getPhysioInjuryRiskMultiplier(this.playerState) * getLowQualityInjuryRiskMultiplier(this.playerState);
+    }
 
     if (this.rng() >= chance) return null;
 

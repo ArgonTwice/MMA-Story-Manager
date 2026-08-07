@@ -25,6 +25,7 @@ import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
 import { DRAMA_EVENTS } from '../data/events.js';
 import { computeCombinedModifiers } from './PersonalityEngine.js';
+import { hasLowQualityEquipment } from './GymInfrastructure.js';
 
 /** Event names published on EventBus by DramaEngine. Import instead of raw strings. */
 export const DRAMA_ENGINE_EVENTS = Object.freeze({
@@ -48,6 +49,8 @@ const CONDITION_EVALUATORS = Object.freeze({
   MIN_ROSTER_SIZE: (condition, ctx) => ctx.playerState.roster.length >= condition.amount,
   /** Phase 4.6: gates a trait-specific event to whichever fighter selectEligibleDramaEvent() already picked — the event simply isn't eligible that week for a fighter who doesn't carry the trait. */
   HAS_TRAIT: (condition, ctx) => ctx.fighter.psychology.personality.traits.includes(condition.trait),
+  /** GymInfrastructure material-incident gate ("sac dechire", "clim en panne") — only eligible once at least one owned item has degraded below LOW_QUALITY_THRESHOLD. */
+  HAS_LOW_QUALITY_EQUIPMENT: (condition, ctx) => hasLowQualityEquipment(ctx.playerState),
 });
 
 function isEventEligible(event, ctx) {
@@ -118,6 +121,13 @@ const EFFECT_APPLIERS = Object.freeze({
   CHANGE_REPUTATION: (effect, ctx) => ctx.playerState.changeReputation(effect.amount, `DRAMA_ENGINE:${ctx.eventId}`),
   CHANGE_HYPE: (effect, ctx) => ctx.playerState.changeHype(effect.amount, `DRAMA_ENGINE:${ctx.eventId}`),
   CHANGE_MONEY: (effect, ctx) => ctx.playerState.changeMoney(effect.amount, `DRAMA_ENGINE:${ctx.eventId}`),
+  /** GymInfrastructure material incident: an already-run-down item is left unrepaired and degrades further (same 0-1 clamp GymInfrastructure#degradeEquipmentWeekly uses). */
+  DEGRADE_LOW_QUALITY_EQUIPMENT: (effect, ctx) => {
+    const threshold = BALANCE.EQUIPMENT.LOW_QUALITY_THRESHOLD;
+    for (const item of ctx.playerState.equipment) {
+      if ((item.quality ?? 1) < threshold) item.quality = Math.max(0, (item.quality ?? 1) - effect.amount);
+    }
+  },
 });
 
 /**

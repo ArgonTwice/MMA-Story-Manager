@@ -63,6 +63,7 @@ test('every DRAMA_EVENTS entry is well-formed: unique id, known category, non-em
     'CHANGE_REPUTATION',
     'CHANGE_HYPE',
     'CHANGE_MONEY',
+    'DEGRADE_LOW_QUALITY_EQUIPMENT',
   ]);
   const seenIds = new Set();
 
@@ -222,4 +223,36 @@ test('LOYALTY_TEST\'s REAFFIRM_BOND choice raises psychology.loyalty via the ADJ
   const loyaltyAfterReaffirm = fighter.psychology.loyalty;
   applyDramaEventChoice(selection, 'STAY_NONCOMMITTAL');
   assert.equal(fighter.psychology.loyalty, Math.max(BALANCE.PSYCHOLOGY.MIN, loyaltyAfterReaffirm - 5));
+});
+
+test('EQUIPMENT_BREAKDOWN is only eligible with run-down equipment, and IGNORE_FOR_NOW degrades it further', () => {
+  const world = new WorldState();
+  const player = new PlayerState({ gymName: 'Worn Gym' });
+  const fighter = makeFighter();
+  player.addFighter(fighter);
+  player.addEquipmentItem({ id: 'HEAVY_BAGS' });
+
+  let seed = 1;
+  const rng = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 500; i += 1) {
+    const selection = selectEligibleDramaEvent(player, world, rng);
+    assert.notEqual(selection?.event.id, 'EQUIPMENT_BREAKDOWN', 'should never be offered while equipment quality is still healthy');
+  }
+
+  player.equipment[0].quality = BALANCE.EQUIPMENT.LOW_QUALITY_THRESHOLD - 0.05;
+
+  const event = DRAMA_EVENTS.find((e) => e.id === 'EQUIPMENT_BREAKDOWN');
+  const selection = { event, fighter, playerState: player, worldState: world };
+
+  const qualityBefore = player.equipment[0].quality;
+  applyDramaEventChoice(selection, 'IGNORE_FOR_NOW');
+  assert.ok(player.equipment[0].quality < qualityBefore, 'IGNORE_FOR_NOW should further degrade the already-run-down item');
+
+  player.equipment[0].quality = BALANCE.EQUIPMENT.LOW_QUALITY_THRESHOLD - 0.05;
+  const moneyBefore = player.money;
+  applyDramaEventChoice(selection, 'REPAIR_NOW');
+  assert.ok(player.money < moneyBefore, 'REPAIR_NOW should cost money');
 });

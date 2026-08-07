@@ -6,6 +6,7 @@
   "description": "MMA Gym Manager v2 - modular game engine (State / Engine / Render / Models / Data).",
   "scripts": {
     "test": "node --test",
+    "test:balance": "node --test tools/BalanceSimulation.test.js",
     "build:web": "node tools/build-web.mjs"
   }
 }

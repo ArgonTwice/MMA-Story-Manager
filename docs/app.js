@@ -48,6 +48,16 @@ import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExp
 
 import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from './engine/UndergroundEngine.js';
 import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from './engine/GymStipulations.js';
+import { recordLeagueFightResult, getPromotionProgress } from './engine/LeagueEngine.js';
+import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from './engine/EmergencyFinanceEngine.js';
+import { generateHiringPool, hireStaff } from './engine/StaffEngine.js';
+import {
+  getNextTierUpgradeCost,
+  getNextTier,
+  getEquipmentHealthIndicator,
+  getRepairCost,
+  repairEquipment,
+} from './engine/GymInfrastructure.js';
 
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
@@ -646,6 +656,20 @@ class WebApp {
       panel.appendChild(list);
     }
 
+    if (isTreasuryCrisis(this.gameState.playerState)) {
+      panel.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card-title', text: '\u{1F6A8} Tresorerie critique' }),
+          el('p', { text: "La tresorerie est passee sous le seuil critique — des leviers d'urgence sont disponibles." }),
+          el('button', {
+            class: 'btn btn-gold btn-block',
+            text: "\u{1F6A8} Leviers d'urgence",
+            onclick: () => this._showEmergencyFinanceModal(),
+          }),
+        ])
+      );
+    }
+
     panel.appendChild(
       el('div', { class: 'card' }, [
         el('div', { class: 'card-title', text: 'Gym' }),
@@ -668,6 +692,43 @@ class WebApp {
         ])
       );
     }
+
+    const staffCoaches = this.gameState.playerState.coaches.filter((coach) => coach.role);
+    const promotion = getPromotionProgress(this.gameState.playerState);
+    panel.appendChild(
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4CB} Staff & Competitions' }),
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Ligue actuelle' }),
+          el('span', { class: 'list-row-value', text: promotion.tier.label }),
+        ]),
+        promotion.nextTier
+          ? el('div', {}, [
+              gaugeRow(`Winrate -> ${promotion.nextTier.label}`, (promotion.winrateProgress ?? 0) * 100),
+              gaugeRow(`Reputation -> ${promotion.nextTier.label}`, (promotion.reputationProgress ?? 0) * 100),
+            ])
+          : el('p', { text: 'Ligue la plus haute deja atteinte.' }),
+        staffCoaches.length === 0
+          ? el('p', { text: 'Aucun staff specialise sous contrat.' })
+          : el(
+              'div',
+              {},
+              staffCoaches.map((coach) =>
+                el('div', { class: 'list-row' }, [
+                  el('div', {}, [
+                    el('div', { class: 'list-row-label', text: `${coach.name} — ${BALANCE.STAFF.ROLES[coach.role]?.label ?? coach.role}` }),
+                    el('div', { class: 'list-row-sub', text: `Skill ${coach.skill} — ${coach.salary}$/sem — Relation ${coach.relationship ?? '-'}` }),
+                  ]),
+                ])
+              )
+            ),
+        el('button', {
+          class: 'btn btn-outline btn-block',
+          text: '\u{1F4CB} Recruter du staff',
+          onclick: () => this._showStaffHiringModal(),
+        }),
+      ])
+    );
 
     if (this.lastWeekEconomy) {
       const e = this.lastWeekEconomy;
@@ -717,28 +778,30 @@ class WebApp {
 
   _showGymFacilityModal() {
     const playerState = this.gameState.playerState;
-    const { BASE_COST, GROWTH, MAX_LEVEL } = BALANCE.ECONOMY.FACILITY_UPGRADE;
-    const atMax = playerState.equipLevel >= MAX_LEVEL;
-    const nextLevelCost = atMax ? null : Math.round(BASE_COST * GROWTH ** playerState.equipLevel);
+    const tier = playerState.getFacilityTier();
+    const nextTier = getNextTier(playerState);
+    const nextTierCost = getNextTierUpgradeCost(playerState);
 
     const ownedIds = new Set(playerState.equipment.map((item) => item.id));
-    const owned = playerState.equipment.map((item) => ({ id: item.id, ...BALANCE.EQUIPMENT.DEFINITIONS[item.id] })).filter((item) => item.label);
+    const owned = playerState.equipment
+      .map((item) => ({ ...item, def: BALANCE.EQUIPMENT.DEFINITIONS[item.id] }))
+      .filter((item) => item.def);
     const catalog = Object.entries(BALANCE.EQUIPMENT.DEFINITIONS)
       .filter(([id]) => !ownedIds.has(id))
       .map(([id, def]) => ({ id, ...def, affordable: playerState.money >= def.purchaseCost }));
 
     const content = el('div', {}, [
-      el('h2', { class: 'section-title', text: '\u{1F3CB}\u{FE0F} Ma salle' }),
+      el('h2', { class: 'section-title', text: '\u{1F3CB}\u{FE0F} Infrastructure & Materiel' }),
       el('div', { class: 'card' }, [
-        el('div', { class: 'card-title', text: `Niveau ${playerState.equipLevel} — ${playerState.roster.length}/${playerState.getRosterCapacity()} places` }),
-        atMax
-          ? el('p', { text: 'Niveau maximum atteint.' })
-          : el('button', {
+        el('div', { class: 'card-title', text: `${tier.label} — ${playerState.roster.length}/${tier.capacity} places` }),
+        nextTier
+          ? el('button', {
               class: 'btn btn-gold btn-block',
-              text: `Ameliorer (${nextLevelCost}$)`,
-              disabled: playerState.money >= nextLevelCost ? null : 'disabled',
+              text: `Agrandir vers ${nextTier.label} (${nextTierCost}$)`,
+              disabled: playerState.money >= nextTierCost ? null : 'disabled',
               onclick: () => this._upgradeFacility(),
-            }),
+            })
+          : el('p', { text: 'Palier maximum atteint (Academie Elite).' }),
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'card-title', text: `Equipement possede (${owned.length})` }),
@@ -747,7 +810,28 @@ class WebApp {
           : el(
               'div',
               {},
-              owned.map((item) => el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: item.label })]))
+              owned.map((item) => {
+                const quality = item.quality ?? 1;
+                const lowQuality = quality < BALANCE.EQUIPMENT.LOW_QUALITY_THRESHOLD;
+                const repairCost = getRepairCost(item.id);
+                return el('div', { class: 'list-row' }, [
+                  el('div', {}, [
+                    el('div', { class: 'list-row-label', text: `${getEquipmentHealthIndicator(quality)} ${item.def.label}` }),
+                    el('div', {
+                      class: 'list-row-sub',
+                      text: `Qualite ${Math.round(quality * 100)}% — ${item.def.weeklyMaintenanceCost}$/sem${lowQuality ? ' — risque de blessure accru' : ''}`,
+                    }),
+                  ]),
+                  quality < 1
+                    ? el('button', {
+                        class: 'btn btn-outline btn-sm',
+                        text: `Entretenir (${repairCost}$)`,
+                        disabled: playerState.money >= repairCost ? null : 'disabled',
+                        onclick: () => this._repairEquipmentItem(item.id),
+                      })
+                    : null,
+                ]);
+              })
             ),
       ]),
       el('div', { class: 'card' }, [
@@ -759,7 +843,10 @@ class WebApp {
               {},
               catalog.map((item) =>
                 el('div', { class: 'list-row' }, [
-                  el('div', {}, [el('div', { class: 'list-row-label', text: item.label }), el('div', { class: 'list-row-sub', text: `${item.purchaseCost}$` })]),
+                  el('div', {}, [
+                    el('div', { class: 'list-row-label', text: item.label }),
+                    el('div', { class: 'list-row-sub', text: `${item.purchaseCost}$ — ${item.weeklyMaintenanceCost}$/sem` }),
+                  ]),
                   el('button', {
                     class: 'btn btn-outline btn-sm',
                     text: 'Acheter',
@@ -803,14 +890,158 @@ class WebApp {
 
   _upgradeFacility() {
     const playerState = this.gameState.playerState;
-    const { BASE_COST, GROWTH } = BALANCE.ECONOMY.FACILITY_UPGRADE;
-    const cost = Math.round(BASE_COST * GROWTH ** playerState.equipLevel);
-    const upgraded = playerState.upgradeFacility(cost);
+    const cost = getNextTierUpgradeCost(playerState);
+    const upgraded = cost !== null && playerState.upgradeFacility(cost);
     if (upgraded) {
       this._renderTopbar();
-      this._showToast(`\u{2B06}\u{FE0F} Salle amelioree — niveau ${playerState.equipLevel}.`);
+      this._showToast(`\u{2B06}\u{FE0F} ${playerState.getFacilityTier().label} — nouvelle capacite atteinte.`);
     }
     this._showGymFacilityModal();
+  }
+
+  _repairEquipmentItem(equipmentId) {
+    const playerState = this.gameState.playerState;
+    const def = BALANCE.EQUIPMENT.DEFINITIONS[equipmentId];
+    if (repairEquipment(playerState, equipmentId)) {
+      this._renderTopbar();
+      this._showToast(`\u{1F527} ${def?.label ?? equipmentId} remis en etat.`);
+    }
+    this._showGymFacilityModal();
+  }
+
+  // ---- STAFF ENGINE hiring modal ---------------------------------------------
+
+  _showStaffHiringModal() {
+    const playerState = this.gameState.playerState;
+    if (!this._staffHiringPool) this._staffHiringPool = generateHiringPool({ rng: this.rng });
+    const pool = this._staffHiringPool;
+    const specialtyLabel = { STRIKING: 'Frappe', GRAPPLING: 'Grappling' };
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F4CB} Recruter du staff' }),
+      ...pool.map((candidate) => {
+        const role = BALANCE.STAFF.ROLES[candidate.role];
+        const incumbent = playerState.coaches.find((coach) => coach.role === candidate.role);
+        return el('div', { class: 'card' }, [
+          el('div', {
+            class: 'card-title',
+            text: `${candidate.name} — ${role.label}${candidate.specialty ? ` (${specialtyLabel[candidate.specialty]})` : ''}`,
+          }),
+          el('p', { text: `Skill ${candidate.skill} — ${candidate.salary}$/semaine` }),
+          incumbent
+            ? el('p', { class: 'fighter-meta', text: `Poste occupe par ${incumbent.name} — congediez-le d'abord.` })
+            : el('button', {
+                class: 'btn btn-gold btn-block',
+                text: 'Recruter',
+                onclick: () => this._hireStaffCandidate(candidate),
+              }),
+        ]);
+      }),
+      ...(playerState.coaches.filter((coach) => coach.role).length > 0
+        ? [
+            el('div', { class: 'card' }, [
+              el('div', { class: 'card-title', text: 'Staff sous contrat' }),
+              ...playerState.coaches
+                .filter((coach) => coach.role)
+                .map((coach) =>
+                  el('div', { class: 'list-row' }, [
+                    el('span', { class: 'list-row-label', text: `${coach.name} — ${BALANCE.STAFF.ROLES[coach.role]?.label ?? coach.role}` }),
+                    el('button', { class: 'btn btn-outline btn-sm', text: 'Congedier', onclick: () => this._fireStaffCoach(coach.id) }),
+                  ])
+                ),
+            ]),
+          ]
+        : []),
+      el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
+  }
+
+  _hireStaffCandidate(candidate) {
+    const playerState = this.gameState.playerState;
+    if (playerState.coaches.some((coach) => coach.role === candidate.role)) return;
+    hireStaff(playerState, candidate);
+    this._staffHiringPool = null;
+    this._renderTopbar();
+    this._showToast(`\u{1F4CB} ${candidate.name} rejoint le staff.`);
+    this._hideModal();
+    this._renderHub();
+  }
+
+  _fireStaffCoach(coachId) {
+    this.gameState.playerState.removeCoach(coachId);
+    this._renderTopbar();
+    this._showStaffHiringModal();
+  }
+
+  // ---- EMERGENCY FINANCE (treasury crisis levers) ----------------------------
+
+  _showEmergencyFinanceModal() {
+    const playerState = this.gameState.playerState;
+    const loanCfg = BALANCE.EMERGENCY_FINANCE.PREDATORY_LOAN;
+    const ownedEquipment = playerState.equipment
+      .map((item) => ({ ...item, def: BALANCE.EQUIPMENT.DEFINITIONS[item.id] }))
+      .filter((item) => item.def);
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: "\u{1F6A8} Leviers d'urgence" }),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4B8} Pret usurier' }),
+        el('p', { text: `Recevez ${loanCfg.PRINCIPAL}$ immediatement, rembourses ${loanCfg.TOTAL_REPAYMENT}$ au total sur ${loanCfg.WEEKS_TO_REPAY} semaines.` }),
+        el('button', { class: 'btn btn-gold btn-block', text: 'Emprunter', onclick: () => this._takeEmergencyLoan() }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4E6} Vente bradee de materiel' }),
+        ownedEquipment.length === 0
+          ? el('p', { text: 'Aucun equipement a vendre.' })
+          : el(
+              'div',
+              {},
+              ownedEquipment.map((item) =>
+                el('div', { class: 'list-row' }, [
+                  el('span', { class: 'list-row-label', text: item.def.label }),
+                  el('button', {
+                    class: 'btn btn-outline btn-sm',
+                    text: `Vendre (${getFireSalePrice(item.id)}$)`,
+                    onclick: () => this._fireSaleEquipmentItem(item.id),
+                  }),
+                ])
+              )
+            ),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F573}\u{FE0F} Combat clandestin a haut risque' }),
+        el('p', { text: 'Une bourse plus elevee, mais un risque de blessure accru — Underground Circuit, mode Vale Tudo.' }),
+        el('button', {
+          class: 'btn btn-outline btn-block',
+          text: 'Aller au Circuit Underground',
+          onclick: () => {
+            this._hideModal();
+            this.fightTab = 'underground';
+            this._showPanel('fight');
+          },
+        }),
+      ]),
+      el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
+  }
+
+  _takeEmergencyLoan() {
+    takePredatoryLoan(this.gameState.playerState);
+    this._renderTopbar();
+    this._showToast('\u{1F4B8} Pret usurier accepte — remboursement hebdomadaire engage.');
+    this._hideModal();
+    this._renderHub();
+  }
+
+  _fireSaleEquipmentItem(equipmentId) {
+    const def = BALANCE.EQUIPMENT.DEFINITIONS[equipmentId];
+    if (fireSaleEquipment(this.gameState.playerState, equipmentId)) {
+      this._renderTopbar();
+      this._showToast(`\u{1F4E6} ${def?.label ?? equipmentId} vendu en urgence.`);
+    }
+    this._showEmergencyFinanceModal();
   }
 
   _buildFighterCard(fighter) {
@@ -1944,7 +2175,17 @@ class WebApp {
     if (this._fightOpponentGymId && this._fightFighterB) {
       this._writeBackRivalFighter(this._fightOpponentGymId, this._fightFighterB);
     }
-    this.fightResultsThisYear.push(this.combatEngine.getSnapshot().result);
+    const result = this.combatEngine.getSnapshot().result;
+    this.fightResultsThisYear.push(result);
+
+    // LeagueEngine: only sanctioned WFC Combat-tab fights count toward
+    // promotion/relegation — this is that single call site (Underground
+    // Circuit bouts never reach _finishCombatPlayback at all). A draw
+    // (winner === null) is skipped rather than counted as a loss.
+    if (result.winner !== null) {
+      recordLeagueFightResult(this.gameState.playerState, result.winner === 'A');
+    }
+
     this._autosave();
     this._renderFight();
   }

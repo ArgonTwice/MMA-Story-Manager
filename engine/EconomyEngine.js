@@ -24,6 +24,7 @@
 
 import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
+import { getPassiveIncomeMultiplier } from './LeagueEngine.js';
 
 /** Event names published on EventBus by EconomyEngine. Import instead of raw strings. */
 export const ECONOMY_EVENTS = Object.freeze({
@@ -66,10 +67,14 @@ export function processWeeklyExpenses(playerState) {
     const def = BALANCE.EQUIPMENT.DEFINITIONS[item?.id];
     return sum + (def?.weeklyMaintenanceCost ?? 0);
   }, 0);
+  // LeagueEngine: "retombees de sponsors" scale strongly with the gym's
+  // current league-pyramid tier — 1x at the bottom LOCAL_UNDERGROUND tier
+  // (today's pre-League behavior).
   const passiveIncome =
-    econ.PASSIVE_INCOME.BASE_WEEKLY +
-    playerState.reputation * econ.PASSIVE_INCOME.PER_REPUTATION_POINT +
-    playerState.hype * econ.PASSIVE_INCOME.PER_HYPE_POINT;
+    (econ.PASSIVE_INCOME.BASE_WEEKLY +
+      playerState.reputation * econ.PASSIVE_INCOME.PER_REPUTATION_POINT +
+      playerState.hype * econ.PASSIVE_INCOME.PER_HYPE_POINT) *
+    getPassiveIncomeMultiplier(playerState);
 
   if (passiveIncome !== 0) playerState.changeMoney(passiveIncome, 'WEEKLY_PASSIVE_INCOME');
   if (rent !== 0) playerState.changeMoney(-rent, 'WEEKLY_RENT');

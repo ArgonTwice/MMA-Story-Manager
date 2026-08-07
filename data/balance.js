@@ -556,9 +556,9 @@ const BALANCE = {
     STARTING_GYM_FUNDS: 25000,
 
     /** Weekly recurring gym overhead, before facility upgrades add to it. */
-    BASE_WEEKLY_UPKEEP: 800,
+    BASE_WEEKLY_UPKEEP: 1700,
     /** Extra weekly upkeep added per facility (equipLevel) point. */
-    UPKEEP_PER_FACILITY_LEVEL: 100,
+    UPKEEP_PER_FACILITY_LEVEL: 300,
 
     /** Passive weekly income from gym memberships/local sponsors, scaling with standing. */
     PASSIVE_INCOME: {
@@ -613,11 +613,48 @@ const BALANCE = {
       INCOME_TAX_RATE: 0.22,
     },
 
-    /** Facility upgrade cost curve: cost(level) = BASE * (GROWTH ^ level). */
+    /**
+     * Facility upgrade cost curve: cost(level) = BASE * (GROWTH ^ level) —
+     * the price to move FROM `level` to `level + 1`. Retuned for
+     * GYM.TIERS' 4 narratively-named tiers (was a flatter 10-level climb):
+     * Local Modeste->Salle Locale 8000$, ->Centre de Formation ~17600$,
+     * ->Academie Elite ~38720$ — each upgrade is meant to absorb a real
+     * chunk of a season's earnings (BOUCLE ANTI-SNOWBALL), not be an
+     * incidental purchase.
+     */
     FACILITY_UPGRADE: {
-      BASE_COST: 5000,
-      GROWTH: 1.35,
-      MAX_LEVEL: 10,
+      BASE_COST: 8000,
+      GROWTH: 2.2,
+      MAX_LEVEL: 3,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // EMERGENCY_FINANCE — engine/EmergencyFinanceEngine.js's 3 crisis levers,
+  // offered in the Hub once treasury drops below TREASURY_CRISIS_THRESHOLD
+  // (well before ECONOMY.INSOLVENCY.DEBT_THRESHOLD's automatic response
+  // kicks in at -5000$ — this is the proactive, player-chosen escape hatch
+  // that comes first). Every lever is a real trade-off, never a free
+  // bailout: the loan costs real interest paid back over weeks (via the
+  // pre-existing activeDeals weekly-deal mechanism, a negative weeklyAmount
+  // — see PlayerState#addActiveDeal / engine/GymStipulations.js#processActiveDeals),
+  // the fire-sale permanently loses the item and its bonuses for a fraction
+  // of what it cost, and the underground fight (engine/UndergroundEngine.js's
+  // pre-existing VALE_TUDO mode) already carries its own elevated injury risk.
+  // ---------------------------------------------------------------------
+  EMERGENCY_FINANCE: {
+    TREASURY_CRISIS_THRESHOLD: 1000,
+
+    PREDATORY_LOAN: {
+      PRINCIPAL: 3000,
+      /** Total repaid over the schedule — well above PRINCIPAL, the "usurier" part. */
+      TOTAL_REPAYMENT: 4800,
+      WEEKS_TO_REPAY: 6,
+    },
+
+    EQUIPMENT_FIRE_SALE: {
+      /** Sale price = purchaseCost * this fraction — a real loss versus what it cost. */
+      SALE_FRACTION_OF_PURCHASE: 0.35,
     },
   },
 
@@ -957,6 +994,25 @@ const BALANCE = {
     /** IQ/experience-based attributes are exempt from decline below this age. */
     MENTAL_ATTRIBUTE_DECLINE_IMMUNITY_AGE: 38,
 
+    /**
+     * Reference decline-rate curve exposed by engine/BalanceConfig.js
+     * (computeAgeDeclineMultiplier) for display/analysis — e.g. a fighter
+     * profile's "projected decline" readout. Deliberately NOT wired into
+     * ProgressionEngine's actual weekly attribute mutation, which keeps
+     * using DECLINE_START_AGE/ANNUAL_DECLINE_PER_ATTRIBUTE above unchanged
+     * (a flat rate past a single threshold, already tuned and tested) —
+     * this is a finer-grained reference curve (2%/an des 28 ans,
+     * accelerant a 5%/an des 35 ans) for anything that wants to SHOW a
+     * smoother expectation, not a second decline mechanic actually applied
+     * to fighters.
+     */
+    DECLINE_CURVE_REFERENCE: {
+      EARLY_DECLINE_START_AGE: 28,
+      EARLY_ANNUAL_RATE: 0.02,
+      STEEP_DECLINE_START_AGE: 35,
+      STEEP_ANNUAL_RATE: 0.05,
+    },
+
     RETIREMENT: {
       /** Age at which retirement becomes a possibility each year-end. */
       MIN_CONSIDERATION_AGE: 33,
@@ -971,9 +1027,21 @@ const BALANCE = {
   // GYM — facilities, roster capacity, upgrades
   // ---------------------------------------------------------------------
   GYM: {
-    STARTING_ROSTER_CAPACITY: 8,
-    /** Extra roster slots granted per facility level (see ECONOMY.FACILITY_UPGRADE). */
-    ROSTER_SLOTS_PER_FACILITY_LEVEL: 2,
+    /**
+     * 4 named facility tiers, indexed by PlayerState.equipLevel (0-3, see
+     * ECONOMY.FACILITY_UPGRADE.MAX_LEVEL) — replaces the old flat
+     * "STARTING_ROSTER_CAPACITY + equipLevel * ROSTER_SLOTS_PER_FACILITY_LEVEL"
+     * linear formula with an explicit, narratively-named progression (see
+     * engine/GymInfrastructure.js). PlayerState#getRosterCapacity() reads
+     * TIERS[equipLevel].capacity directly — roster size is STRICTLY capped
+     * by the current tier, no exceptions.
+     */
+    TIERS: [
+      { id: 'LOCAL_MODESTE', label: 'Local Modeste', capacity: 4 },
+      { id: 'SALLE_LOCALE', label: 'Salle Locale', capacity: 8 },
+      { id: 'CENTRE_FORMATION', label: 'Centre de Formation', capacity: 15 },
+      { id: 'ACADEMIE_ELITE', label: 'Academie Elite', capacity: 30 },
+    ],
 
     STARTING_REPUTATION: 20,
     MAX_REPUTATION: 100,
@@ -1234,17 +1302,31 @@ const BALANCE = {
   // ---------------------------------------------------------------------
   EQUIPMENT: {
     /**
-     * PlayerState.equipment entries reference these by `id`. Unknown ids
-     * (e.g. from a save made against an older BALANCE) are silently
-     * ignored rather than erroring.
+     * PlayerState.equipment entries reference these by `id` and now also
+     * carry their own `quality` (1.0 = 100%, see engine/GymInfrastructure.js).
+     * Unknown ids (e.g. from a save made against an older BALANCE) are
+     * silently ignored rather than erroring.
      *
-     * trainingGainMultiplier - applied to weekly skill gain.
-     * appliesToSkills        - null = applies to every skill; otherwise an
-     *                           array of the skill keys it boosts.
-     * formRecoveryMultiplier - applied only to *positive* weekly form
-     *                          changes (i.e. rest), never to training wear.
-     * weeklyMaintenanceCost  - deducted every week by EconomyEngine.
-     * purchaseCost           - one-time cost charged by GymRenderer.buyEquipment().
+     * trainingGainMultiplier   - applied to weekly skill gain, scaled by quality.
+     * appliesToSkills          - null = applies to every skill; otherwise an
+     *                            array of the skill keys it boosts.
+     * formRecoveryMultiplier   - applied only to *positive* weekly form
+     *                            changes (i.e. rest), never to training wear.
+     * fatigueAccumulationMultiplier - applied to weekly Fatigue gain from
+     *                            training (< 1 reduces it). Defaults to 1
+     *                            (no effect) when omitted.
+     * clinchOutputMultiplier   - applied to a player fighter's CLINCH-distance
+     *                            output in CombatEngine, on top of the
+     *                            existing per-style bonus. Defaults to 1.
+     * staminaMaxBonusPercent   - added to a player fighter's Stamina Max at
+     *                            weigh-in. Defaults to 0.
+     * rosterCapacityCost       - roster slots this item consumes just by
+     *                            being owned (space trade-off) — subtracted
+     *                            from PlayerState#getRosterCapacity(),
+     *                            floored so it can never go below 1.
+     *                            Defaults to 0.
+     * weeklyMaintenanceCost    - deducted every week by EconomyEngine.
+     * purchaseCost             - one-time cost charged when buying it.
      */
     DEFINITIONS: {
       OCTAGON_PRO: {
@@ -1264,10 +1346,12 @@ const BALANCE = {
         purchaseCost: 4000,
       },
       CRYOTHERAPY_CHAMBER: {
-        label: 'Chambre de Cryotherapie',
+        label: 'Unite de Cryotherapie',
         trainingGainMultiplier: 1,
         appliesToSkills: null,
         formRecoveryMultiplier: 1.5,
+        /** "-20% accumulation de fatigue" — this IS the "Unite de Cryotherapie" from the spec; its 200$/semaine electricity bill was already this item's own maintenance cost. */
+        fatigueAccumulationMultiplier: 0.8,
         weeklyMaintenanceCost: 200,
         purchaseCost: 12000,
       },
@@ -1280,14 +1364,162 @@ const BALANCE = {
         purchaseCost: 3000,
       },
       GRAPPLING_MATS_PRO: {
-        label: 'Tapis de Grappling Pro',
+        label: 'Tatamis de Grappling',
+        /** "+10% gain en Sol" — appliesToSkills also includes soumission (the natural pairing every other skill-specific item already follows, e.g. WEIGHT_ROOM's boxe+jambes). */
         trainingGainMultiplier: 1.1,
         appliesToSkills: ['sol', 'soumission'],
         formRecoveryMultiplier: 1,
         weeklyMaintenanceCost: 90,
         purchaseCost: 3500,
       },
+      HEAVY_BAGS: {
+        label: 'Sacs de Frappe Lourds',
+        trainingGainMultiplier: 1.08,
+        appliesToSkills: ['boxe'],
+        formRecoveryMultiplier: 1,
+        weeklyMaintenanceCost: 60,
+        purchaseCost: 2000,
+      },
+      COMPETITION_CAGE: {
+        label: 'Cage de Competition',
+        trainingGainMultiplier: 1,
+        appliesToSkills: null,
+        formRecoveryMultiplier: 1,
+        /** "+15% efficacite du Clinch/Cage Control" — a real in-fight bonus, not a training-gain one, see engine/CombatEngine.js#_computeRoundOffense. */
+        clinchOutputMultiplier: 1.15,
+        /** "cout de maintenance eleve" — the priciest upkeep in the catalog. */
+        weeklyMaintenanceCost: 350,
+        purchaseCost: 15000,
+      },
+      CARDIO_ZONE: {
+        label: 'Zone Cardio',
+        trainingGainMultiplier: 1,
+        appliesToSkills: null,
+        formRecoveryMultiplier: 1,
+        /** Boosts Stamina Max at weigh-in for the player's own fighters. */
+        staminaMaxBonusPercent: 0.1,
+        /** "consomme de la capacite d'espace" — a real trade-off against roster size. */
+        rosterCapacityCost: 1,
+        weeklyMaintenanceCost: 120,
+        purchaseCost: 5000,
+      },
     },
+
+    /**
+     * Owned equipment degrades with weekly use (see
+     * engine/GymInfrastructure.js#degradeEquipmentWeekly) — quality 1.0 ->
+     * 0.0 over roughly 1/DEGRADATION_PER_WEEK weeks (~12-13 weeks, one
+     * season) of continuous use if never repaired.
+     */
+    DEGRADATION_PER_WEEK: 0.08,
+    /** Below this quality, the item actively hurts: training injury risk rises (LOW_QUALITY_INJURY_RISK_MULTIPLIER) instead of just losing its bonus. */
+    LOW_QUALITY_THRESHOLD: 0.4,
+    LOW_QUALITY_INJURY_RISK_MULTIPLIER: 1.15,
+    /** repairCost = purchaseCost * this fraction, restores quality to 1.0. */
+    REPAIR_COST_FRACTION_OF_PURCHASE: 0.25,
+  },
+
+  // ---------------------------------------------------------------------
+  // STAFF — engine/StaffEngine.js's 3 recruitable roles (Head Coach,
+  // Striking/Grappling Coach, Physio), distinct from the pre-existing
+  // Legacy Coach system (engine/LegacyEngine.js, a retired fighter hired
+  // automatically — unpaid, no `role`) which keeps working unchanged.
+  // Every effect is scaled around baselineSkill: a coach AT baseline
+  // helps/hurts nothing, so hiring nobody (the pre-existing default)
+  // remains exactly today's behavior.
+  // ---------------------------------------------------------------------
+  STAFF: {
+    ROLES: {
+      HEAD_COACH: {
+        id: 'HEAD_COACH',
+        label: 'Head Coach',
+        baselineSkill: 50,
+        /** Additive nudge to CombatEngine's momentumMultiplier per point of skill above/below baseline — same shape/scale as CONFIDENCE's own momentum bonus (see engine/CombatEngine.js). */
+        momentumBonusPerSkillPoint: 0.0015,
+        /** Weekly morale bump applied to every roster fighter per point of skill above baseline (see engine/StaffEngine.js#applyWeeklyStaffEffects). */
+        weeklyMoraleBonusPerSkillPoint: 0.06,
+        /** This role's skill IS the "CompetenceCoach" the Fog of War formula reads (see SCOUTING_FOG below / engine/ScoutingEngine.js). */
+      },
+      STRIKING_GRAPPLING_COACH: {
+        id: 'STRIKING_GRAPPLING_COACH',
+        label: 'Coach Frappe / Grappling',
+        baselineSkill: 50,
+        /** Output bonus to the specialty's own distance (STRIKING for a striking coach, GROUND for a grappling coach) per point of skill above baseline. */
+        primaryBonusPerSkillPoint: 0.003,
+        /** Malus to the OPPOSITE distance's output per point of skill above baseline — "boost les degats/soumissions, mais applique un malus secondaire sur la stat opposee." */
+        secondaryMalusPerSkillPoint: 0.0015,
+      },
+      PHYSIO: {
+        id: 'PHYSIO',
+        label: 'Physio',
+        baselineSkill: 50,
+        /** Multiplicative reduction to post-fight/training injury chance per point of skill above baseline. */
+        injuryRiskReductionPerSkillPoint: 0.004,
+        /** Multiplicative bonus to CORNER_PAUSE stamina regen per point of skill above baseline. */
+        staminaRegenBonusPerSkillPoint: 0.01,
+      },
+    },
+
+    HIRING_POOL_SIZE: 4,
+    MIN_SKILL: 30,
+    MAX_SKILL: 90,
+    SALARY_BASE_WEEKLY: 200,
+    SALARY_PER_SKILL_POINT: 8,
+
+    /**
+     * Relationship/ego gauge (0-100) each hired staff member starts at and
+     * carries for as long as they're on staff — see
+     * engine/StaffEngine.js#rollStaffConflict ("avis divergeant sur l'etat
+     * de sante d'un combattant").
+     */
+    STARTING_RELATIONSHIP: 60,
+    CONFLICT: {
+      BASE_WEEKLY_CHANCE: 0.06,
+      LOW_RELATIONSHIP_THRESHOLD: 35,
+      LOW_RELATIONSHIP_CHANCE_BONUS: 0.14,
+      RELATIONSHIP_HIT: -10,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // SCOUTING_FOG — Fog of War over un-scouted prospects' real stats, per
+  // engine/ScoutingEngine.js#estimateFighterSkills. Distinct from that
+  // same file's generateScoutingReport() (qualitative pre-fight opponent
+  // notes) — this is the quantitative estimate shown for a PROSPECT before
+  // (and for a while after) signing.
+  // ---------------------------------------------------------------------
+  SCOUTING_FOG: {
+    /** StatEstimee = StatReelle +/- (100 - CompetenceCoach) * this factor — the spec's own formula, verbatim. */
+    ERROR_PER_MISSING_COMPETENCE_POINT: 0.3,
+    /** "CompetenceCoach" used when no Head Coach is hired — the player's own untrained eye. */
+    NO_COACH_COMPETENCE: 20,
+    /** The INITIAL error window shrinks by this fraction of itself per week a fighter has spent at the gym (not a flat additive decay) — "-5% d'erreur par semaine passee au Gym". Reaches effectively 0 (full reveal) well within a season. */
+    WEEKLY_ERROR_REDUCTION_FRACTION: 0.05,
+  },
+
+  // ---------------------------------------------------------------------
+  // LEAGUE_PYRAMID — the PLAYER's own 3-tier competitive progression (see
+  // engine/LeagueEngine.js), promoted/relegated by Reputation + recent
+  // winrate. Distinct from data/leagues.js's own 4-entry LEAGUES catalog:
+  // that one only tags which purse tier a RIVAL gym's autonomous contracts
+  // (engine/TransferMarket.js/engine/ProspectGenerator.js) are written
+  // under by Reputation alone, with no promotion/relegation state at all —
+  // the two systems never read each other.
+  // ---------------------------------------------------------------------
+  LEAGUE_PYRAMID: {
+    TIERS: {
+      LOCAL_UNDERGROUND: { id: 'LOCAL_UNDERGROUND', label: 'Local / Underground', tier: 1, purseMultiplier: 1, passiveIncomeMultiplier: 1 },
+      NATIONAL: { id: 'NATIONAL', label: 'National', tier: 2, promotionReputationThreshold: 45, purseMultiplier: 3, passiveIncomeMultiplier: 2 },
+      ELITE_MONDIALE: { id: 'ELITE_MONDIALE', label: 'Elite Mondiale', tier: 3, promotionReputationThreshold: 75, purseMultiplier: 8, passiveIncomeMultiplier: 4 },
+    },
+    /** Tier ids in ascending order — LOCAL_UNDERGROUND has no promotionReputationThreshold of its own (nothing promotes INTO the bottom tier). */
+    TIER_ORDER: ['LOCAL_UNDERGROUND', 'NATIONAL', 'ELITE_MONDIALE'],
+
+    FIGHT_HISTORY_WINDOW: 10,
+    /** Guards against promoting/relegating off a tiny sample (e.g. 1 win in week 1). */
+    MIN_FIGHTS_FOR_EVALUATION: 5,
+    PROMOTION_WINRATE_THRESHOLD: 0.5,
+    RELEGATION_WINRATE_THRESHOLD: 0.4,
   },
 
   // ---------------------------------------------------------------------
@@ -1984,6 +2216,20 @@ const BALANCE = {
       VETERAN: 0.85,
       DECLINING: 0.65,
     },
+  },
+
+  // ---------------------------------------------------------------------
+  // WIN_PROBABILITY — the logistic (Elo-style) pre-fight win estimate
+  // exposed by engine/BalanceConfig.js#computeWinProbability, e.g. for a
+  // pre-fight odds readout or a balance-validation script. Deliberately a
+  // SEPARATE, display/analysis-only estimate — CombatEngine's actual
+  // round-by-round simulation (skills/gameplan/stamina/momentum/variance)
+  // remains the sole authority over what really happens in a fight; this
+  // never feeds back into it.
+  // ---------------------------------------------------------------------
+  WIN_PROBABILITY: {
+    /** P(A beats B) = 1 / (1 + 10 ^ ((OverallB - OverallA) / RATING_DIVISOR)) — the spec's own formula, verbatim (RATING_DIVISOR = 20). */
+    RATING_DIVISOR: 20,
   },
 };
 

@@ -1,20 +1,28 @@
 /**
  * engine/ScoutingEngine.js
  * ---------------------------------------------------------------------------
- * Turns an opponent's REAL (but never player-visible) skills/style/
- * personality/career into a handful of qualitative "Rapport de Scouting"
- * lines — the pre-fight uncertainty layer: the player sees "Fort en
- * Grappling" or "Agressif des le R1", never the opponent's exact skill
- * numbers, Readiness, or Overall rating (see ui/FightNightView.js's fight
- * card, which now calls this instead of exposing Coin B's raw stats, and
- * web/app.js's fight-setup screen, which no longer lets the player see —
- * or set — the opponent's gameplan).
+ * Two related but distinct halves, both about withholding certainty:
  *
- * Pure and read-only: reads a Fighter instance, returns plain strings.
- * Never mutates, never rolls dice — the SAME opponent always produces the
- * SAME report, because scouting a real fighter's tape doesn't get luckier
- * on a second viewing. The "incertitude" in "sous incertitude" comes from
- * what's withheld (no numbers, no gameplan), not from randomized accuracy.
+ *   1. Opponent scouting (generateScoutingReport): turns a FIGHT OPPONENT's
+ *      real skills/style/personality/career into a handful of qualitative
+ *      "Rapport de Scouting" lines — "Fort en Grappling", never the exact
+ *      skill numbers, Readiness, or Overall rating (see
+ *      ui/FightNightView.js's fight card, and web/app.js's fight-setup
+ *      screen, which no longer lets the player see — or set — the
+ *      opponent's gameplan).
+ *
+ *   2. Prospect Fog of War (estimateFighterSkills/getRevealedTraits): a
+ *      RECRUITMENT-MARKET PROSPECT's exact stats/hidden traits are
+ *      estimated rather than shown outright, resolving toward the truth
+ *      the longer they've trained at the gym (Fighter#weeksAtGym) and the
+ *      better the Head Coach scouting them (engine/StaffEngine.js#getScoutingCompetence).
+ *
+ * Both halves are pure and read-only: reads a Fighter instance, returns
+ * plain data, never mutates, never rolls dice — the SAME fighter always
+ * produces the SAME report/estimate for the SAME inputs, because scouting
+ * a real fighter's tape doesn't get luckier on a second viewing. The
+ * "incertitude"/"Fog of War" comes from what's withheld or estimated, not
+ * from randomized accuracy.
  * ---------------------------------------------------------------------------
  */
 
@@ -118,4 +126,92 @@ export function generateScoutingReport(fighter) {
   return lines.slice(0, 5);
 }
 
-export default { generateScoutingReport };
+// ---- Fog of War: prospect stat estimation (BALANCE.SCOUTING_FOG) --------------
+// Distinct from generateScoutingReport above (qualitative FIGHT-OPPONENT
+// notes): this half of the module estimates a PROSPECT's exact numeric
+// skills before/while they're still being scouted at the gym — the
+// "StatEstimee = StatReelle +/- (100 - CompetenceCoach) * 0.3" formula,
+// resolving toward the truth over weeks spent training (Fighter#weeksAtGym).
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Deterministic pseudo-random offset in [-1, 1) from a seed string — no Math.random, same "the same fighter always scouts the same way" contract as generateScoutingReport (see this file's own header). */
+function stableSignedNoise(seedString) {
+  let hash = 0;
+  for (let i = 0; i < seedString.length; i += 1) hash = (hash * 31 + seedString.charCodeAt(i)) >>> 0;
+  return (hash % 2000) / 1000 - 1;
+}
+
+/**
+ * @param {number} weeksAtGym
+ * @returns {number} 0 (just signed, nothing revealed yet) to 1 (fully revealed) — BALANCE.SCOUTING_FOG.WEEKLY_ERROR_REDUCTION_FRACTION per week.
+ */
+export function getRevealProgress(weeksAtGym) {
+  return clamp01(weeksAtGym * BALANCE.SCOUTING_FOG.WEEKLY_ERROR_REDUCTION_FRACTION);
+}
+
+/**
+ * Estimates a prospect's skills under Fog of War: StatEstimee = StatReelle
+ * +/- (100 - CompetenceCoach) * ERROR_PER_MISSING_COMPETENCE_POINT, with
+ * that error window shrinking toward 0 as weeksAtGym grows (per
+ * WEEKLY_ERROR_REDUCTION_FRACTION) — a sharp-eyed Head Coach (high
+ * CompetenceCoach) starts closer to the truth than a gym with nobody
+ * hired (BALANCE.SCOUTING_FOG.NO_COACH_COMPETENCE), and either way the
+ * estimate converges to the real numbers well within a season.
+ *
+ * @param {Object} fighter - A Fighter instance.
+ * @param {Object} [options]
+ * @param {number} [options.headCoachSkill] - See engine/StaffEngine.js#getScoutingCompetence. Defaults to NO_COACH_COMPETENCE.
+ * @param {number} [options.weeksAtGym] - Fighter#weeksAtGym. Defaults to 0 (a candidate not yet signed).
+ * @returns {{ estimated: Object, errorWindow: number, fullyRevealed: boolean }}
+ */
+export function estimateFighterSkills(fighter, { headCoachSkill = BALANCE.SCOUTING_FOG.NO_COACH_COMPETENCE, weeksAtGym = 0 } = {}) {
+  const cfg = BALANCE.SCOUTING_FOG;
+  const baseError = (100 - headCoachSkill) * cfg.ERROR_PER_MISSING_COMPETENCE_POINT;
+  const remainingFraction = 1 - getRevealProgress(weeksAtGym);
+  const errorWindow = baseError * remainingFraction;
+
+  const estimated = {};
+  for (const [key, real] of Object.entries(fighter.attributes.skills)) {
+    const noise = stableSignedNoise(`${fighter.identity.id}-${key}`) * errorWindow;
+    estimated[key] = Math.round(clamp(real + noise, 0, 100));
+  }
+
+  return { estimated, errorWindow, fullyRevealed: errorWindow < 1 };
+}
+
+/**
+ * Personality traits reveal one at a time as scouting progress advances —
+ * the "traits caches... se revelent progressivement" fog-of-war layer,
+ * expressed over this codebase's REAL personality trait system (see
+ * data/traits.js) rather than inventing new hidden-perk mechanics.
+ * Archetype is always visible (a fighter's general vibe reads immediately;
+ * only the finer-grained traits are genuinely hidden at first).
+ *
+ * @param {Object} fighter - A Fighter instance.
+ * @param {number} weeksAtGym
+ * @returns {string[]} The subset of fighter.psychology.personality.traits revealed so far.
+ */
+export function getRevealedTraits(fighter, weeksAtGym) {
+  const traits = fighter.psychology.personality.traits;
+  const revealedCount = Math.floor(getRevealProgress(weeksAtGym) * traits.length);
+  return traits.slice(0, revealedCount);
+}
+
+/**
+ * Increments every roster fighter's Fighter#weeksAtGym by 1 — call once
+ * per week (see web/app.js's weekly resolution, alongside
+ * engine/StaffEngine.js#applyWeeklyStaffEffects).
+ * @param {Object} playerState
+ */
+export function advanceWeeksAtGym(playerState) {
+  for (const fighter of playerState.roster) fighter.weeksAtGym += 1;
+}
+
+export default { generateScoutingReport, getRevealProgress, estimateFighterSkills, getRevealedTraits, advanceWeeksAtGym };

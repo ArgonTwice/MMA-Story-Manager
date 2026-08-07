@@ -950,6 +950,14 @@ export function runSimulation(options = {}) {
   }
   seedRivalGyms(worldState, rng);
 
+  // Optional post-spawn hook (e.g. tools/BalanceSimulation.test.js assigning
+  // realistic Fighter#weeklySalary to the freshly spawned roster, mirroring
+  // engine/DraftEngine.js's own signing-cost formula) — a no-op unless
+  // explicitly provided, so every existing caller's behavior is unchanged.
+  if (typeof options.afterRosterSpawned === 'function') {
+    options.afterRosterSpawned(playerState, rng);
+  }
+
   const combatEngine = new CombatEngine({ playerState, worldState, rng });
   const engines = createReactiveEngines();
   attachReactiveEngines(engines, playerState, worldState);

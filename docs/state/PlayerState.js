@@ -33,6 +33,7 @@ export const PLAYER_EVENTS = Object.freeze({
   GYM_FACILITY_UPGRADED: 'gym:facility_upgraded',
   GYM_FACILITY_UPGRADE_REJECTED: 'gym:facility_upgrade_rejected',
   GYM_EQUIPMENT_ADDED: 'gym:equipment_added',
+  GYM_EQUIPMENT_REMOVED: 'gym:equipment_removed',
   GYM_FACILITY_SEIZED: 'gym:facility_seized',
   STAFF_COACH_ADDED: 'staff:coach_added',
   STAFF_COACH_REMOVED: 'staff:coach_removed',
@@ -107,18 +108,36 @@ export class PlayerState {
      * never here, exactly like every other State array in this file.
      */
     this.activeDeals = config.activeDeals ? config.activeDeals.map((deal) => ({ ...deal })) : [];
+
+    /** engine/LeagueEngine.js's own 3-tier player-progression id (see BALANCE.LEAGUE_PYRAMID.TIERS) — every new gym starts at the bottom. */
+    this.leagueTier = config.leagueTier ?? BALANCE.LEAGUE_PYRAMID.TIER_ORDER[0];
+    /** Rolling win/loss (true/false) window over the gym's last BALANCE.LEAGUE_PYRAMID.FIGHT_HISTORY_WINDOW SANCTIONED fights (Underground Circuit/sparring never count) — oldest first, capped at the window size by engine/LeagueEngine.js#recordLeagueFightResult. */
+    this.recentFightResults = config.recentFightResults ? [...config.recentFightResults] : [];
   }
 
   // ---- roster -----------------------------------------------------------
 
   /**
-   * @returns {number} Max roster size at the current facility level.
+   * @returns {number} Max roster size at the current facility tier
+   *   (BALANCE.GYM.TIERS[equipLevel]), minus any roster-space cost owned
+   *   equipment carries (see BALANCE.EQUIPMENT.DEFINITIONS[*].rosterCapacityCost,
+   *   e.g. Zone Cardio) — floored at 1 so a capacity-hungry loadout can
+   *   never lock the gym out of signing anyone at all.
    */
   getRosterCapacity() {
-    return (
-      BALANCE.GYM.STARTING_ROSTER_CAPACITY +
-      this.equipLevel * BALANCE.GYM.ROSTER_SLOTS_PER_FACILITY_LEVEL
-    );
+    const tier = BALANCE.GYM.TIERS[this.equipLevel] ?? BALANCE.GYM.TIERS[BALANCE.GYM.TIERS.length - 1];
+    const equipmentSpaceCost = this.equipment.reduce((sum, item) => {
+      const def = BALANCE.EQUIPMENT.DEFINITIONS[item?.id];
+      return sum + (def?.rosterCapacityCost ?? 0);
+    }, 0);
+    return Math.max(1, tier.capacity - equipmentSpaceCost);
+  }
+
+  /**
+   * @returns {Object} The current facility tier record (BALANCE.GYM.TIERS[equipLevel]).
+   */
+  getFacilityTier() {
+    return BALANCE.GYM.TIERS[this.equipLevel] ?? BALANCE.GYM.TIERS[BALANCE.GYM.TIERS.length - 1];
   }
 
   /**
@@ -282,8 +301,27 @@ export class PlayerState {
    * @param {Object} item
    */
   addEquipmentItem(item) {
-    this.equipment.push(item);
-    EventBus.publish(PLAYER_EVENTS.GYM_EQUIPMENT_ADDED, { item });
+    /** New equipment always starts at full quality (see engine/GymInfrastructure.js's weekly degradation/repair). */
+    const record = { quality: 1, ...item };
+    this.equipment.push(record);
+    EventBus.publish(PLAYER_EVENTS.GYM_EQUIPMENT_ADDED, { item: record });
+  }
+
+  /**
+   * Removes one owned equipment item outright — the inverse of
+   * addEquipmentItem(), used by e.g. engine/EmergencyFinanceEngine.js's
+   * equipment fire-sale (no refund logic here; the caller credits whatever
+   * sale price it decides on before/after calling this).
+   * @param {string} equipmentId
+   * @returns {Object|null} The removed item record, or null if not owned.
+   */
+  removeEquipmentItem(equipmentId) {
+    const index = this.equipment.findIndex((item) => item.id === equipmentId);
+    if (index === -1) return null;
+
+    const [removed] = this.equipment.splice(index, 1);
+    EventBus.publish(PLAYER_EVENTS.GYM_EQUIPMENT_REMOVED, { item: removed });
+    return removed;
   }
 
   // ---- active deals (Underground Circuit gym-stipulation matches) -----------------
@@ -414,6 +452,8 @@ export class PlayerState {
       socialFeed: this.socialFeed.map((entry) => ({ ...entry })),
       lastAcademyDraftYear: this.lastAcademyDraftYear,
       activeDeals: this.activeDeals.map((deal) => ({ ...deal })),
+      leagueTier: this.leagueTier,
+      recentFightResults: [...this.recentFightResults],
     };
   }
 

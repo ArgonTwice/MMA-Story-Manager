@@ -23,6 +23,9 @@ import { generatePersonality } from './FighterGenerator.js';
 import { processRetirement } from './LegacyEngine.js';
 import { processTransferMarket } from './TransferMarket.js';
 import { isProspectWaveDue, generateProspectWave } from './ProspectGenerator.js';
+import { applyWeeklyStaffEffects, rollStaffConflict } from './StaffEngine.js';
+import { degradeEquipmentWeekly } from './GymInfrastructure.js';
+import { advanceWeeksAtGym } from './ScoutingEngine.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -284,6 +287,18 @@ export function advanceWeek(gameState, options = {}) {
 
   const trainingReport = processWeeklyTraining(playerState, worldState, { rng });
   const economyReport = processWeeklyExpenses(playerState);
+
+  // Phase F ("Staff Engine, Fog of War, League Pyramid, Infrastructure"):
+  // Head Coach's weekly morale bump, staff ego/relationship conflicts,
+  // equipment wear, and the Fog of War's per-fighter weeksAtGym counter all
+  // advance once per week, alongside the pre-existing training/economy
+  // resolution above.
+  const staffMoraleBonus = applyWeeklyStaffEffects(playerState);
+  const staffConflicts = rollStaffConflict(playerState, rng);
+  degradeEquipmentWeekly(playerState);
+  advanceWeeksAtGym(playerState);
+  const staffReport = { moraleBonus: staffMoraleBonus, conflicts: staffConflicts };
+
   const narrativeReport = evaluateWeeklyEvents(gameState, { rng });
   const { birthdays, retirements } = processBirthdaysAndRetirements(playerState, worldState, rng);
   const rivalGymReport = processRivalGyms(worldState, rng);
@@ -306,6 +321,7 @@ export function advanceWeek(gameState, options = {}) {
     year: worldState.year,
     trainingReport,
     economyReport,
+    staffReport,
     narrativeReport,
     birthdays,
     retirements,

@@ -23,6 +23,7 @@
 import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
 import { computeCombinedModifiers } from './PersonalityEngine.js';
+import { getFatigueAccumulationMultiplier } from './GymInfrastructure.js';
 
 /** Event names published on EventBus by WeeklyPlanningEngine. Import instead of raw strings. */
 export const WEEKLY_PLANNING_EVENTS = Object.freeze({
@@ -150,12 +151,18 @@ function resolveSlot(activityKey, fighter, playerState, worldState, rng, persona
   const mediaReport = isMediaActivity ? resolveMediaSponsors(fighter, playerState, personalityModifiers) : null;
   if (mediaReport) report.media = mediaReport;
 
-  const physicalFatigueFromCost = activity.physicalFatigueCost ? activity.physicalFatigueCost * personalityModifiers.fatigueMultiplier : 0;
+  const fatigueAccumulationMultiplier = getFatigueAccumulationMultiplier(playerState);
+
+  const physicalFatigueFromCost = activity.physicalFatigueCost
+    ? activity.physicalFatigueCost * personalityModifiers.fatigueMultiplier * fatigueAccumulationMultiplier
+    : 0;
   const physicalFatigueFromRecovery = activity.physicalFatigueDelta ?? 0;
   fighter.adjustPhysicalFatigue(physicalFatigueFromCost + physicalFatigueFromRecovery);
   report.physicalFatigueDelta = Math.round((physicalFatigueFromCost + physicalFatigueFromRecovery) * 100) / 100;
 
-  const mentalFatigueFromCost = activity.mentalFatigueCost ? activity.mentalFatigueCost * personalityModifiers.fatigueMultiplier : 0;
+  const mentalFatigueFromCost = activity.mentalFatigueCost
+    ? activity.mentalFatigueCost * personalityModifiers.fatigueMultiplier * fatigueAccumulationMultiplier
+    : 0;
   const mentalFatigueFromRecovery = activity.mentalFatigueDelta ?? 0;
   fighter.adjustMentalFatigue(mentalFatigueFromCost + mentalFatigueFromRecovery);
   report.mentalFatigueDelta = Math.round((mentalFatigueFromCost + mentalFatigueFromRecovery) * 100) / 100;

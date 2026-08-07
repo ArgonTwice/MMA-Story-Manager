@@ -417,6 +417,34 @@ export const DRAMA_EVENTS = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'EQUIPMENT_BREAKDOWN',
+    title: 'Incident Materiel',
+    description: 'Un sac de frappe se dechire, la climatisation tombe en panne — le materiel use commence a lacher.',
+    category: EVENT_CATEGORIES.GYM_LIFE,
+    baseChance: 0.5,
+    conditions: [{ type: 'HAS_LOW_QUALITY_EQUIPMENT' }],
+    weightSignals: [],
+    choices: [
+      {
+        id: 'REPAIR_NOW',
+        label: 'Faire reparer immediatement',
+        effects: [
+          { type: 'CHANGE_MONEY', amount: -400 },
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: 2 },
+        ],
+      },
+      {
+        id: 'IGNORE_FOR_NOW',
+        label: 'Reporter la reparation',
+        effects: [
+          { type: 'ADJUST_MORALE', target: 'fighter', amount: -3 },
+          { type: 'ADJUST_PHYSICAL_FATIGUE', target: 'fighter', amount: 3 },
+          { type: 'DEGRADE_LOW_QUALITY_EQUIPMENT', amount: 0.1 },
+        ],
+      },
+    ],
+  }),
+  Object.freeze({
     id: 'TEAMMATE_CONFLICT',
     title: 'Tension au Vestiaire',
     description: 'Une friction eclate entre deux membres du roster.',

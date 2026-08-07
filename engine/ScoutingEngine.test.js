@@ -6,8 +6,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
-import { generateScoutingReport } from './ScoutingEngine.js';
+import PlayerState from '../state/PlayerState.js';
+import {
+  generateScoutingReport,
+  getRevealProgress,
+  estimateFighterSkills,
+  getRevealedTraits,
+  advanceWeeksAtGym,
+} from './ScoutingEngine.js';
 
 function makeFighter(overrides = {}) {
   return new Fighter({
@@ -64,4 +72,73 @@ test('generateScoutingReport returns at most 5 lines', () => {
   });
   const report = generateScoutingReport(fighter);
   assert.ok(report.length <= 5);
+});
+
+// ---- Fog of War: prospect stat estimation --------------------------------------
+
+test('estimateFighterSkills with no coach hired (NO_COACH_COMPETENCE) and 0 weeks at gym uses the full formula error window', () => {
+  const fighter = makeFighter({ attributes: { skills: { boxe: 50, jambes: 50, sol: 50, soumission: 50, cardio: 50, intelligence: 50 } } });
+  const { estimated, errorWindow, fullyRevealed } = estimateFighterSkills(fighter, { weeksAtGym: 0 });
+
+  const expectedWindow = (100 - BALANCE.SCOUTING_FOG.NO_COACH_COMPETENCE) * BALANCE.SCOUTING_FOG.ERROR_PER_MISSING_COMPETENCE_POINT;
+  assert.ok(Math.abs(errorWindow - expectedWindow) < 1e-9);
+  assert.equal(fullyRevealed, false);
+
+  for (const [key, value] of Object.entries(estimated)) {
+    assert.ok(Math.abs(value - fighter.attributes.skills[key]) <= expectedWindow + 1, `estimate for ${key} strayed further than the error window allows`);
+  }
+});
+
+test('a higher headCoachSkill (CompetenceCoach) produces a tighter error window than no coach at all', () => {
+  const fighter = makeFighter();
+  const noCoach = estimateFighterSkills(fighter, { weeksAtGym: 0 });
+  const goodCoach = estimateFighterSkills(fighter, { headCoachSkill: 90, weeksAtGym: 0 });
+  assert.ok(goodCoach.errorWindow < noCoach.errorWindow);
+});
+
+test('the error window shrinks toward 0 (full reveal) as weeksAtGym grows, per WEEKLY_ERROR_REDUCTION_FRACTION', () => {
+  const fighter = makeFighter();
+  const week0 = estimateFighterSkills(fighter, { weeksAtGym: 0 });
+  const week10 = estimateFighterSkills(fighter, { weeksAtGym: 10 });
+  const week100 = estimateFighterSkills(fighter, { weeksAtGym: 100 });
+
+  assert.ok(week10.errorWindow < week0.errorWindow);
+  assert.ok(week100.errorWindow < week10.errorWindow);
+  assert.equal(week100.fullyRevealed, true);
+  assert.deepEqual(week100.estimated, fighter.attributes.skills, 'fully revealed estimate should exactly match real skills');
+});
+
+test('estimateFighterSkills is pure and deterministic — same fighter/coach/weeks always yields the same estimate', () => {
+  const fighter = makeFighter();
+  const first = estimateFighterSkills(fighter, { headCoachSkill: 60, weeksAtGym: 3 });
+  const second = estimateFighterSkills(fighter, { headCoachSkill: 60, weeksAtGym: 3 });
+  assert.deepEqual(first, second);
+});
+
+test('getRevealedTraits reveals traits progressively and matches all real traits once fully revealed', () => {
+  const fighter = makeFighter({ psychology: { personality: { archetype: 'Guerrier', traits: ['Agressif', 'Discipline'] } } });
+
+  assert.deepEqual(getRevealedTraits(fighter, 0), []);
+  const fullyRevealed = getRevealedTraits(fighter, 100);
+  assert.deepEqual(fullyRevealed.sort(), [...fighter.psychology.personality.traits].sort());
+});
+
+test('getRevealProgress is 0 at 0 weeks and clamped at 1 far beyond full reveal', () => {
+  assert.equal(getRevealProgress(0), 0);
+  assert.equal(getRevealProgress(100000), 1);
+});
+
+test('advanceWeeksAtGym increments every roster fighter\'s weeksAtGym by exactly 1', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const fighterA = makeFighter();
+  const fighterB = makeFighter();
+  playerState.addFighter(fighterA);
+  playerState.addFighter(fighterB);
+
+  advanceWeeksAtGym(playerState);
+  assert.equal(fighterA.weeksAtGym, 1);
+  assert.equal(fighterB.weeksAtGym, 1);
+
+  advanceWeeksAtGym(playerState);
+  assert.equal(fighterA.weeksAtGym, 2);
 });

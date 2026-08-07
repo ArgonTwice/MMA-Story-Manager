@@ -15,6 +15,7 @@
 
 import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
+import { getQualityScaledMultiplier } from './GymInfrastructure.js';
 
 /** Event names published on EventBus by TrainingEngine. Import instead of raw strings. */
 export const TRAINING_EVENTS = Object.freeze({
@@ -70,7 +71,7 @@ function computeEquipmentGainMultiplier(equipment, focus) {
     const def = BALANCE.EQUIPMENT.DEFINITIONS[item?.id];
     if (!def) continue;
     if (!def.appliesToSkills || def.appliesToSkills.includes(focus)) {
-      multiplier *= def.trainingGainMultiplier ?? 1;
+      multiplier *= getQualityScaledMultiplier(def.trainingGainMultiplier ?? 1, item.quality ?? 1);
     }
   }
   return multiplier;
@@ -80,7 +81,7 @@ function computeEquipmentFormRecoveryMultiplier(equipment) {
   let multiplier = 1;
   for (const item of equipment ?? []) {
     const def = BALANCE.EQUIPMENT.DEFINITIONS[item?.id];
-    if (def?.formRecoveryMultiplier) multiplier *= def.formRecoveryMultiplier;
+    if (def?.formRecoveryMultiplier) multiplier *= getQualityScaledMultiplier(def.formRecoveryMultiplier, item.quality ?? 1);
   }
   return multiplier;
 }
