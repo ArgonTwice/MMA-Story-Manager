@@ -1908,6 +1908,21 @@ const BALANCE = {
     MAX_AGE: 27,
     BASE_SKILL_MEAN: 35,
     SKILL_SPREAD: 14,
+    /**
+     * Signing bonus economy — deliberately its own pricing, decoupled from
+     * RECRUITMENT_MARKET's (a starting-roster signature is a flat "prime de
+     * signature", not the ongoing market's per-skill pricing). Every
+     * candidate's cost = clamp(SIGNING_BONUS_BASE + SIGNING_BONUS_PER_SKILL_POINT
+     * * meanSkill, SIGNING_BONUS_MIN, SIGNING_BONUS_MAX) — the clamp
+     * guarantees every single signature costs between 1500$ and 3000$
+     * regardless of how the skill roll landed, so recruiting is never free
+     * and the player manages real treasury pressure (25000$ starting funds)
+     * from day one.
+     */
+    SIGNING_BONUS_BASE: 1500,
+    SIGNING_BONUS_PER_SKILL_POINT: 30,
+    SIGNING_BONUS_MIN: 1500,
+    SIGNING_BONUS_MAX: 3000,
   },
 
   // ---------------------------------------------------------------------

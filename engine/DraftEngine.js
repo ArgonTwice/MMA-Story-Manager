@@ -37,20 +37,32 @@ function pick(rng, list) {
   return list[Math.floor(rng() * list.length)];
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 /**
- * Generates one candidate ({ fighter, cost }) from a skill mean/spread and
- * age range — the shared shape both generateInitialDraftPool and
- * generateRecruitmentPool build on.
+ * Generates one candidate ({ fighter, cost }) from a skill mean/spread, an
+ * age range, and the CALLER's own cost economy (baseCost/costPerSkillPoint,
+ * clamped to [minCost, maxCost]) — the shared shape
+ * generateInitialDraftPool/generateRecruitmentPool/
+ * generateRivalGymStarterRoster all build on, each with their own pricing
+ * (a starting-roster signing bonus is a different economy than the ongoing
+ * market's per-skill pricing — see BALANCE.INITIAL_DRAFT vs
+ * BALANCE.RECRUITMENT_MARKET).
  * @param {Object} options
  * @param {number} options.skillMean
  * @param {number} options.skillSpread
  * @param {number} options.minAge
  * @param {number} options.maxAge
+ * @param {number} options.baseCost
+ * @param {number} options.costPerSkillPoint
+ * @param {number} options.minCost
+ * @param {number} options.maxCost
  * @param {() => number} options.rng
  * @returns {{ fighter: Fighter, cost: number }}
  */
-function generateCandidate({ skillMean, skillSpread, minAge, maxAge, rng }) {
-  const cfg = BALANCE.RECRUITMENT_MARKET;
+function generateCandidate({ skillMean, skillSpread, minAge, maxAge, baseCost, costPerSkillPoint, minCost, maxCost, rng }) {
   const identity = generateFighterIdentity(rng);
 
   const skills = Object.fromEntries(
@@ -69,7 +81,7 @@ function generateCandidate({ skillMean, skillSpread, minAge, maxAge, rng }) {
   });
 
   const skillMeanActual = Object.values(skills).reduce((sum, value) => sum + value, 0) / SKILL_KEYS.length;
-  const cost = Math.round(cfg.BASE_COST + cfg.COST_PER_SKILL_POINT * skillMeanActual);
+  const cost = Math.round(clamp(baseCost + costPerSkillPoint * skillMeanActual, minCost, maxCost));
 
   return { fighter, cost };
 }
@@ -91,6 +103,10 @@ export function generateInitialDraftPool({ rng = Math.random } = {}) {
       skillSpread: cfg.SKILL_SPREAD,
       minAge: cfg.MIN_AGE,
       maxAge: cfg.MAX_AGE,
+      baseCost: cfg.SIGNING_BONUS_BASE,
+      costPerSkillPoint: cfg.SIGNING_BONUS_PER_SKILL_POINT,
+      minCost: cfg.SIGNING_BONUS_MIN,
+      maxCost: cfg.SIGNING_BONUS_MAX,
       rng,
     })
   );
@@ -115,6 +131,10 @@ export function generateRecruitmentPool({ playerState, rng = Math.random }) {
       skillSpread: cfg.SKILL_SPREAD,
       minAge: cfg.MIN_AGE,
       maxAge: cfg.MAX_AGE,
+      baseCost: cfg.BASE_COST,
+      costPerSkillPoint: cfg.COST_PER_SKILL_POINT,
+      minCost: 0,
+      maxCost: Infinity,
       rng,
     })
   );
@@ -147,6 +167,12 @@ export function generateRivalGymStarterRoster({ reputation, count = 3, rng = Mat
       skillSpread: cfg.SKILL_SPREAD,
       minAge: cfg.MIN_AGE,
       maxAge: cfg.MAX_AGE,
+      // A rival gym's own roster is never bought by the player — cost is
+      // computed but simply discarded below (.fighter only).
+      baseCost: cfg.BASE_COST,
+      costPerSkillPoint: cfg.COST_PER_SKILL_POINT,
+      minCost: 0,
+      maxCost: Infinity,
       rng,
     }).fighter
   );

@@ -30,6 +30,18 @@ test('generateInitialDraftPool returns BALANCE.INITIAL_DRAFT.POOL_SIZE real-name
   }
 });
 
+test('generateInitialDraftPool never offers a free signing — every cost lands within BALANCE.INITIAL_DRAFT\'s SIGNING_BONUS_MIN-MAX window', () => {
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const pool = generateInitialDraftPool({ rng: seededRng(seed) });
+    for (const { cost } of pool) {
+      assert.ok(
+        cost >= BALANCE.INITIAL_DRAFT.SIGNING_BONUS_MIN && cost <= BALANCE.INITIAL_DRAFT.SIGNING_BONUS_MAX,
+        `cost ${cost} must fall within [${BALANCE.INITIAL_DRAFT.SIGNING_BONUS_MIN}, ${BALANCE.INITIAL_DRAFT.SIGNING_BONUS_MAX}] (seed ${seed})`
+      );
+    }
+  }
+});
+
 test('generateInitialDraftPool never touches PlayerState/WorldState — pure generation only', () => {
   const pool = generateInitialDraftPool({ rng: seededRng(2) });
   assert.equal(pool.length, BALANCE.INITIAL_DRAFT.POOL_SIZE);

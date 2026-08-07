@@ -350,8 +350,11 @@ class WebApp {
     this.lastWeekEconomy = null;
     this.journalTab = 'world';
     this.fightSetupDone = false;
-    this.gameplanChoices = { A: {}, B: {} };
-    this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
+    // Only the player's own corner (A) is ever player-configured — the
+    // opponent (B) always fights their own AI gameplan/natural weight cut
+    // (see _confirmFightSetup).
+    this.gameplanChoices = { A: {} };
+    this.weightCutChoices = { A: 'NATUREL' };
     this.academyPool = [];
     /** { [fighterId]: { forme, moral } } snapshot taken at the start of the current week — see _startNewWeek()/_showFighterProfile()'s trend arrows. Runtime-only, never persisted. */
     this.weekStartSnapshot = {};
@@ -1532,8 +1535,11 @@ class WebApp {
     this.fightView = new FightNightView({ combatEngine: this.combatEngine });
     this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false);
     this.fightSetupDone = false;
-    this.gameplanChoices = { A: {}, B: {} };
-    this.weightCutChoices = { A: 'NATUREL', B: 'NATUREL' };
+    // Only the player's own corner (A) is ever player-configured — the
+    // opponent (B) always fights their own AI gameplan/natural weight cut
+    // (see _confirmFightSetup).
+    this.gameplanChoices = { A: {} };
+    this.weightCutChoices = { A: 'NATUREL' };
     this._renderFight();
   }
 
@@ -1833,40 +1839,49 @@ class WebApp {
     this._showModal(content, { blocking: true });
   }
 
+  /**
+   * The player only ever configures their OWN corner (A) — the opponent (B)
+   * fights their own AI gameplan, derived from their style/stats (see
+   * ui/FightNightView.js#defaultGameplanForFighter, applied automatically in
+   * _confirmFightSetup by never passing a B gameplan at all). There used to
+   * be a full "Coin B" card here letting the player also puppet the
+   * opponent's target/distance/tempo/weight-cut, which made no narrative
+   * sense (the player doesn't corner the other gym's fighter).
+   */
   _renderFightSetup(panel) {
+    const opponentName = this.fightCard?.fighterB?.name ?? 'l\'adversaire';
     panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Preparation du combat' }));
     panel.appendChild(el('pre', { class: 'card', style: 'white-space:pre-wrap;font-family:inherit;font-size:13px;', text: this.fightView.toCardText() }));
+    panel.appendChild(el('p', { class: 'fighter-meta', text: `${opponentName} suit son propre plan de jeu, base sur son style et ses stats.` }));
 
-    for (const [key, label] of [['A', this.fightCard?.fighterA?.name ?? 'Coin A'], ['B', this.fightCard?.fighterB?.name ?? 'Coin B']]) {
-      const card = el('div', { class: 'card' }, [el('div', { class: 'card-title', text: `Coin ${key} — ${label}` })]);
+    const card = el('div', { class: 'card' }, [el('div', { class: 'card-title', text: `Coin A — ${this.fightCard?.fighterA?.name ?? 'Vous'}` })]);
 
-      card.appendChild(el('p', { class: 'fighter-meta', text: 'Coupe de poids' }));
-      card.appendChild(
-        el(
-          'div',
-          { class: 'slot-row' },
-          Object.keys(WEIGHT_CUT_LABELS).map((profileKey) =>
-            el('button', {
-              class: `activity-chip${this.weightCutChoices[key] === profileKey ? ' selected' : ''}`,
-              text: WEIGHT_CUT_LABELS[profileKey],
-              onclick: () => {
-                this.weightCutChoices = { ...this.weightCutChoices, [key]: profileKey };
-                this._renderFight();
-              },
-            })
-          )
+    card.appendChild(el('p', { class: 'fighter-meta', text: 'Coupe de poids' }));
+    card.appendChild(
+      el(
+        'div',
+        { class: 'slot-row' },
+        Object.keys(WEIGHT_CUT_LABELS).map((profileKey) =>
+          el('button', {
+            class: `activity-chip${this.weightCutChoices.A === profileKey ? ' selected' : ''}`,
+            text: WEIGHT_CUT_LABELS[profileKey],
+            onclick: () => {
+              this.weightCutChoices = { ...this.weightCutChoices, A: profileKey };
+              this._renderFight();
+            },
+          })
         )
-      );
+      )
+    );
 
-      card.appendChild(el('p', { class: 'fighter-meta', text: 'Cible' }));
-      card.appendChild(this._gameplanChipRow(key, 'target', TARGET_LABELS));
-      card.appendChild(el('p', { class: 'fighter-meta', text: 'Distance' }));
-      card.appendChild(this._gameplanChipRow(key, 'distance', DISTANCE_LABELS));
-      card.appendChild(el('p', { class: 'fighter-meta', text: 'Tempo' }));
-      card.appendChild(this._gameplanChipRow(key, 'tempo', TEMPO_LABELS));
+    card.appendChild(el('p', { class: 'fighter-meta', text: 'Cible' }));
+    card.appendChild(this._gameplanChipRow('A', 'target', TARGET_LABELS));
+    card.appendChild(el('p', { class: 'fighter-meta', text: 'Distance' }));
+    card.appendChild(this._gameplanChipRow('A', 'distance', DISTANCE_LABELS));
+    card.appendChild(el('p', { class: 'fighter-meta', text: 'Tempo' }));
+    card.appendChild(this._gameplanChipRow('A', 'tempo', TEMPO_LABELS));
 
-      panel.appendChild(card);
-    }
+    panel.appendChild(card);
 
     panel.appendChild(
       el('button', {
@@ -1896,8 +1911,13 @@ class WebApp {
 
   _confirmFightSetup() {
     this.combatEngine.selectWeightCutProfile('A', this.weightCutChoices.A);
-    this.combatEngine.selectWeightCutProfile('B', this.weightCutChoices.B);
-    this.fightView.setGameplans({ A: this.gameplanChoices.A, B: this.gameplanChoices.B });
+    // The opponent (B) always cuts weight naturally — the player never
+    // corners the other gym's fighter, so there is no UI to choose it for them.
+    this.combatEngine.selectWeightCutProfile('B', 'NATUREL');
+    // B intentionally omitted: FightNightView#setGameplans falls back to
+    // defaultGameplanForFighter(fighterB) — their own style/stats-driven AI
+    // gameplan — whenever no explicit B plan is passed.
+    this.fightView.setGameplans({ A: this.gameplanChoices.A });
     this.fightSetupDone = true;
     this._beginCombatPlayback();
   }

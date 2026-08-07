@@ -103,6 +103,44 @@ const SUBMISSION_SUCCESS_PHRASES = [
   '{name} verrouille la cle de bras, la soumission se rapproche !',
 ];
 
+// Pure texture — never anchored to an actual engine outcome, just fills out
+// the round's rhythm between the real, engine-decided beats below (see
+// _generateRoundBeats's FEINT/FOOTWORK/CORNER fillers).
+const FEINT_PHRASES = [
+  '{name} feinte du gauche pour tester la reaction de {opp}.',
+  '{name} teste la distance avec un jab de mesure.',
+  '{name} bouge la tete, hors de portee des coups de {opp}.',
+  '{name} pompe le jab sans s\'engager encore.',
+  '{name} change de garde pour brouiller les reperes de {opp}.',
+  '{name} feinte un low-kick puis se ravise.',
+];
+const FOOTWORK_PHRASES = [
+  '{name} circule sur le pourtour de la cage.',
+  '{name} coupe l\'octogone pour fermer l\'angle sur {opp}.',
+  'Les deux combattants se jaugent au centre.',
+  '{opp} recule vers la cage pour souffler un instant.',
+  '{name} garde le centre et impose son rythme.',
+  '{name} pivote pour se replacer face a {opp}.',
+];
+const CORNER_PHRASES = [
+  'Le coin de {name} crie des consignes depuis l\'exterieur.',
+  'La foule s\'anime a chaque echange.',
+  'L\'arbitre surveille de pres la distance de securite.',
+  'Les deux coins s\'observent, prets a intervenir a la pause.',
+];
+const GROUND_AND_POUND_PHRASES = [
+  '{name} martele {opp} au sol avec des coups au visage !',
+  '{name} maintient la garde montee et place des coups courts.',
+  '{name} cherche a stabiliser la position avant d\'enchainer les frappes.',
+  '{name} pese de tout son poids et lache des coups au corps depuis le sol.',
+];
+const ESCAPE_PHRASES = [
+  '{name} parvient a se degager et revient debout !',
+  '{name} recupere la garde et neutralise l\'attaque au sol.',
+  '{name} se replace et evite le pire.',
+  '{name} agrippe la cage pour se relever malgre la pression.',
+];
+
 function fillPhrase(phrase, name, opp) {
   return phrase.replace('{name}', name).replace('{opp}', opp);
 }
@@ -330,34 +368,79 @@ export class FightNightView {
    * @param {Object} log - The raw CombatEngine round log (round, actions, finish...).
    * @returns {{ timestamp: string, text: string }[]}
    */
+  /**
+   * Builds 10-25 beats per round (BALANCE.COMBAT... no dedicated constant
+   * needed — the range itself is the spec) rather than a fixed handful of
+   * lines: a mix of pure-texture filler (feints, footwork, corner chatter —
+   * never anchored to an engine outcome) woven around the round's two REAL,
+   * engine-decided action beats (log.actions.A/B — target/distance/
+   * takedown/submission, exactly as CombatEngine computed them), plus an
+   * extra ground-and-pound/escape flourish whenever a takedown actually
+   * landed this round. The beat COUNT and every filler CHOICE are
+   * deterministic functions of (round, corner, action-shape) — never
+   * Math.random — so the same fight replayed from the same seed always
+   * narrates identically, even though it now reads like a real live feed.
+   */
   _generateRoundBeats(log) {
     const nameA = this._fighterA.identity.name;
     const nameB = this._fighterB.identity.name;
     const roundSeconds = BALANCE.COMBAT.ROUND_DURATION_SECONDS;
 
+    const beatCount = 10 + stableIndex(`${log.round}-beatcount`, 16); // 10..25
+
     const lines = [];
     lines.push(log.round === 1 ? 'La cloche retentit, le combat commence !' : `Round ${log.round} — les coins liberent les combattants.`);
 
+    const actionSeedA = log.actions ? `${log.round}-A-${log.actions.A.target}-${log.actions.A.distance}-${log.actions.A.takedownSuccess}` : null;
+    const actionSeedB = log.actions ? `${log.round}-B-${log.actions.B.target}-${log.actions.B.distance}-${log.actions.B.takedownSuccess}` : null;
+
+    // Pure texture, filling out the round's rhythm before/between the real action.
+    const fillerPool = [...FEINT_PHRASES, ...FOOTWORK_PHRASES, ...CORNER_PHRASES];
+    const fillerBeats = (n, seedPrefix) =>
+      Array.from({ length: n }, (_, i) => {
+        const subject = i % 2 === 0 ? [nameA, nameB] : [nameB, nameA];
+        return fillPhrase(pickPhrase(fillerPool, `${seedPrefix}-${i}`), subject[0], subject[1]);
+      });
+
+    // Extra ground-sequence flavor for whichever corner(s) actually landed a takedown this round.
+    const groundBeats = [];
     if (log.actions) {
-      lines.push(describeAction(log.actions.A, nameA, nameB, `${log.round}-A-${log.actions.A.target}-${log.actions.A.distance}-${log.actions.A.takedownSuccess}`));
-      lines.push(describeAction(log.actions.B, nameB, nameA, `${log.round}-B-${log.actions.B.target}-${log.actions.B.distance}-${log.actions.B.takedownSuccess}`));
+      for (const [key, opponentKey, name, opp] of [
+        ['A', 'B', nameA, nameB],
+        ['B', 'A', nameB, nameA],
+      ]) {
+        const action = log.actions[key];
+        if (action.takedownSuccess || action.clinchTakedownLanded) {
+          groundBeats.push(fillPhrase(pickPhrase(GROUND_AND_POUND_PHRASES, `${log.round}-${key}-gnp`), name, opp));
+          groundBeats.push(fillPhrase(pickPhrase(ESCAPE_PHRASES, `${log.round}-${key}-escape`), opp, name));
+        }
+      }
     }
 
-    const totalDamage = log.damageDealt.A + log.damageDealt.B;
-    if (totalDamage > 15) {
-      lines.push('Les deux combattants echangent avec intensite, l\'assistance est debout !');
-    } else if (totalDamage < 4) {
-      lines.push('Round plus tactique, les deux coins jaugent la distance.');
-    }
+    const closingCount = 1; // damage assessment / finish, added at the very end.
+    const openingCount = lines.length;
+    const actionCount = log.actions ? 2 : 0;
+    const fillerNeeded = Math.max(0, beatCount - openingCount - actionCount - groundBeats.length - closingCount);
+    const leadFillerCount = Math.ceil(fillerNeeded / 2);
+    const trailFillerCount = fillerNeeded - leadFillerCount;
+
+    lines.push(...fillerBeats(leadFillerCount, `${log.round}-lead`));
+    if (log.actions) lines.push(describeAction(log.actions.A, nameA, nameB, actionSeedA));
+    lines.push(...fillerBeats(Math.floor(trailFillerCount / 2), `${log.round}-mid`));
+    if (log.actions) lines.push(describeAction(log.actions.B, nameB, nameA, actionSeedB));
+    lines.push(...groundBeats);
+    lines.push(...fillerBeats(trailFillerCount - Math.floor(trailFillerCount / 2), `${log.round}-trail`));
 
     if (log.finish) {
       const winnerName = log.finish.winnerKey === 'A' ? nameA : nameB;
       const loserName = log.finish.winnerKey === 'A' ? nameB : nameA;
       const template = FINISH_BEAT_LINES[log.finish.method];
-      if (template) lines.push(template.replace('{winner}', winnerName).replace('{loser}', loserName));
-      else lines.push(`La cloche finale sonne le round ${log.round}.`);
+      lines.push(template ? template.replace('{winner}', winnerName).replace('{loser}', loserName) : `La cloche finale sonne le round ${log.round}.`);
     } else {
-      lines.push(`Fin du round ${log.round} — retour au coin.`);
+      const totalDamage = log.damageDealt.A + log.damageDealt.B;
+      if (totalDamage > 15) lines.push('Les deux combattants echangent avec intensite, l\'assistance est debout !');
+      else if (totalDamage < 4) lines.push('Round plus tactique, les deux coins jaugent la distance.');
+      else lines.push(`Fin du round ${log.round} — retour au coin.`);
     }
 
     const count = lines.length;
