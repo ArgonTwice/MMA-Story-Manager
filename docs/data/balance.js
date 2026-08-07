@@ -1893,57 +1893,65 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
-  // INITIAL_DRAFT — the zero-fighter "Nouvelle Partie" -> Draft/Mercato
-  // opening flow (see engine/DraftEngine.js, web/app.js's
-  // _showInitialDraftModal). A brand new gym starts with an EMPTY roster
-  // and must spend its starting funds signing MIN_PICKS-MAX_PICKS
-  // prospects from a generated pool before play begins — no more silent
-  // free auto-fill.
-  // ---------------------------------------------------------------------
-  INITIAL_DRAFT: {
-    POOL_SIZE: 8,
-    MIN_PICKS: 2,
-    MAX_PICKS: 3,
-    MIN_AGE: 19,
-    MAX_AGE: 27,
-    BASE_SKILL_MEAN: 35,
-    SKILL_SPREAD: 14,
-    /**
-     * Signing bonus economy — deliberately its own pricing, decoupled from
-     * RECRUITMENT_MARKET's (a starting-roster signature is a flat "prime de
-     * signature", not the ongoing market's per-skill pricing). Every
-     * candidate's cost = clamp(SIGNING_BONUS_BASE + SIGNING_BONUS_PER_SKILL_POINT
-     * * meanSkill, SIGNING_BONUS_MIN, SIGNING_BONUS_MAX) — the clamp
-     * guarantees every single signature costs between 1500$ and 3000$
-     * regardless of how the skill roll landed, so recruiting is never free
-     * and the player manages real treasury pressure (25000$ starting funds)
-     * from day one.
-     */
-    SIGNING_BONUS_BASE: 1500,
-    SIGNING_BONUS_PER_SKILL_POINT: 30,
-    SIGNING_BONUS_MIN: 1500,
-    SIGNING_BONUS_MAX: 3000,
-  },
-
-  // ---------------------------------------------------------------------
   // RECRUITMENT_MARKET — the permanent, always-open recruitment pool the
   // player can browse from the Effectif tab any week (see
   // engine/DraftEngine.js#generateRecruitmentPool, web/app.js's
   // _showRecruitmentMarketModal) — distinct from ACADEMY_DRAFT's
   // once-a-year FREE pick and from TRANSFER_MARKET's autonomous rival-gym
-  // activity: this is the player paying, on demand, any week.
+  // activity: this is the player paying, on demand, any week. A brand new
+  // gym starts with ZERO fighters and reaches the Hub directly (no more
+  // mandatory "Initial Draft" step) — this market is the only way fighters
+  // ever join the roster.
   // ---------------------------------------------------------------------
   RECRUITMENT_MARKET: {
     POOL_SIZE: 6,
     MIN_AGE: 19,
-    MAX_AGE: 30,
+    MAX_AGE: 34,
     BASE_SKILL_MEAN: 30,
     SKILL_SPREAD: 15,
     /** Skill-mean bonus per point of GYM.reputation (0-100) — mirrors ACADEMY_DRAFT's own precedent: a bigger-name gym attracts sharper free-agent talent too. */
     REPUTATION_SKILL_MEAN_BONUS_PER_POINT: 0.15,
-    /** Signing cost = BASE_COST + PER_SKILL_POINT * (fighter's mean skill) — a rough but legible "you get what you pay for" price tag, no hidden formula. */
-    BASE_COST: 500,
-    COST_PER_SKILL_POINT: 25,
+
+    /**
+     * Rolled per candidate (highest tier whose minRoll the roll clears
+     * wins), same shape/spirit as ACADEMY_DRAFT.POTENTIAL_TIERS — most
+     * candidates stay plain PROSPECTs (cheap), a genuine "pepite" is rare
+     * and priced accordingly (see COST_GROWTH_PER_RATING_POINT below).
+     */
+    POTENTIAL_TIERS: {
+      PROSPECT: { label: 'Prospect', minRoll: 0, skillMeanBonus: 0 },
+      CONFIRME: { label: 'Confirme', minRoll: 0.65, skillMeanBonus: 18 },
+      PEPITE: { label: 'Pepite', minRoll: 0.92, skillMeanBonus: 35 },
+    },
+
+    /**
+     * Signing cost = max(MIN_COST, COST_BASE * COST_GROWTH_PER_RATING_POINT
+     * ** Fighter#getOverallRating() * ageMultiplier) — deliberately
+     * EXPONENTIAL rather than linear in rating, so cost stays low and flat
+     * across ordinary prospects but climbs steeply for a genuine standout:
+     * a weak/average prospect (Overall ~15-25) lands around 800$-2000$, a
+     * confirmed talent (Overall ~35) around 3000$, and a real pepite/prime
+     * veteran (Overall ~50-70+) reaches 5000$-15000$+ — real transfer
+     * markets show the same shape (a handful of elite signings cost far
+     * more than proportionally to their rating, not a flat per-point rate).
+     */
+    COST_BASE: 500,
+    COST_GROWTH_PER_RATING_POINT: 1.05,
+    MIN_COST: 800,
+    /** Weekly wage (Fighter#weeklySalary, deducted by engine/EconomyEngine.js) = signing cost * this ratio — scaled to this codebase's actual early-game economy (rent ~800$/week, coach ~300$/week baseline), see engine/EconomyEngine.js's own header note on why BALANCE.ECONOMY.SALARIES.FIGHTER_BASE_WEEKLY's much larger tiers are NOT reused here. */
+    SALARY_RATIO_OF_COST: 0.045,
+    /**
+     * Reuses BALANCE.AGE's own PROSPECT/PEAK/VETERAN/DECLINING age bands
+     * (see GROWTH_MULTIPLIER_BY_AGE) as the "potentiel lie a l'age" signal:
+     * a young fighter still has room to grow (premium), a fighter past
+     * DECLINE_START_AGE is priced as a fading asset (discount).
+     */
+    AGE_COST_MULTIPLIER: {
+      PROSPECT: 1.15,
+      PEAK: 1.0,
+      VETERAN: 0.85,
+      DECLINING: 0.65,
+    },
   },
 };
 

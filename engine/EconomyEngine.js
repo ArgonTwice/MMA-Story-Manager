@@ -2,13 +2,18 @@
  * engine/EconomyEngine.js
  * ---------------------------------------------------------------------------
  * Weekly financial resolution for the player's gym: rent, coach payroll,
- * equipment upkeep, and passive income (memberships/local sponsors), plus
- * an insolvency crisis response when the treasury collapses.
+ * fighter payroll, equipment upkeep, and passive income (memberships/local
+ * sponsors), plus an insolvency crisis response when the treasury collapses.
  *
- * Deliberately out of scope here: fighter salaries/contracts (a future
- * ContractEngine's job — BALANCE.ECONOMY.SALARIES.FIGHTER_BASE_WEEKLY is
- * reserved for it). This engine only touches the four line items the gym
- * itself is billed for.
+ * Fighter payroll sums each roster fighter's own Fighter#weeklySalary — set
+ * once at signing time by engine/DraftEngine.js's Recruitment Market, scaled
+ * to this codebase's actual early-game economy (rent ~800$/week,
+ * coach ~300$/week) rather than BALANCE.ECONOMY.SALARIES.FIGHTER_BASE_WEEKLY's
+ * much larger tiers (up to 15000$/week for CHAMPION), which stay reserved
+ * for a future full ContractEngine modeling an established, late-game
+ * roster rather than a fresh 25000$-funded gym's first hires. A fighter who
+ * was never paid a signing wage (an old save, a free Academy Draft pick)
+ * simply carries weeklySalary === 0 and costs nothing here.
  *
  * Every money/reputation change goes through PlayerState's own mutation
  * methods (changeMoney/changeReputation/removeCoach), which already publish
@@ -56,6 +61,7 @@ export function processWeeklyExpenses(playerState) {
     (sum, coach) => sum + (coach.salary ?? econ.SALARIES.COACH_BASE_WEEKLY),
     0
   );
+  const fighterPayroll = playerState.roster.reduce((sum, fighter) => sum + (fighter.weeklySalary ?? 0), 0);
   const equipmentMaintenance = playerState.equipment.reduce((sum, item) => {
     const def = BALANCE.EQUIPMENT.DEFINITIONS[item?.id];
     return sum + (def?.weeklyMaintenanceCost ?? 0);
@@ -68,9 +74,10 @@ export function processWeeklyExpenses(playerState) {
   if (passiveIncome !== 0) playerState.changeMoney(passiveIncome, 'WEEKLY_PASSIVE_INCOME');
   if (rent !== 0) playerState.changeMoney(-rent, 'WEEKLY_RENT');
   if (coachPayroll !== 0) playerState.changeMoney(-coachPayroll, 'WEEKLY_COACH_PAYROLL');
+  if (fighterPayroll !== 0) playerState.changeMoney(-fighterPayroll, 'WEEKLY_FIGHTER_PAYROLL');
   if (equipmentMaintenance !== 0) playerState.changeMoney(-equipmentMaintenance, 'WEEKLY_EQUIPMENT_MAINTENANCE');
 
-  const netChange = passiveIncome - rent - coachPayroll - equipmentMaintenance;
+  const netChange = passiveIncome - rent - coachPayroll - fighterPayroll - equipmentMaintenance;
 
   let insolvent = false;
   let firedCoachId = null;
@@ -100,6 +107,7 @@ export function processWeeklyExpenses(playerState) {
   const summary = {
     rent,
     coachPayroll,
+    fighterPayroll,
     equipmentMaintenance,
     passiveIncome,
     netChange,

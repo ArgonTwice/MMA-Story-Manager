@@ -245,6 +245,21 @@ export class Fighter {
       scoutOffers: config.contracts?.scoutOffers ? [...config.contracts.scoutOffers] : [],
     };
 
+    /**
+     * Weekly wage owed while on the PLAYER's own roster — set once at
+     * signing time by engine/DraftEngine.js's Recruitment Market (based on
+     * this fighter's Overall rating/age at the moment of signing; never
+     * recomputed afterward, same "locked in at signing" spirit as a real
+     * contract) and deducted by engine/EconomyEngine.js#processWeeklyExpenses
+     * alongside rent/coach payroll. Zero for a fighter nobody ever paid a
+     * wage to (an old save, an Academy Draft free pick, a rival-gym fighter
+     * hydrated transiently for a bout). Deliberately NOT the same field as
+     * contracts.currentContract, which is a rival-gym/TransferMarket concept
+     * only — engine/GymStipulations.js relies on player roster fighters
+     * always carrying currentContract === null.
+     */
+    this.weeklySalary = config.weeklySalary ?? 0;
+
     /** Health record. */
     this.medical = {
       injuredUntil: config.medical?.injuredUntil ?? null,
@@ -821,6 +836,7 @@ export class Fighter {
         blacklist: [...this.contracts.blacklist],
         scoutOffers: [...this.contracts.scoutOffers],
       },
+      weeklySalary: this.weeklySalary,
       medical: {
         injuredUntil: this.medical.injuredUntil,
         injuriesHistory: [...this.medical.injuriesHistory],

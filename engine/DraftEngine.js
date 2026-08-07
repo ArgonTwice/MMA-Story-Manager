@@ -1,28 +1,39 @@
 /**
  * engine/DraftEngine.js
  * ---------------------------------------------------------------------------
- * Player-facing fighter recruitment, in two flavors that share the same
- * generation logic (generateProspectPool):
+ * Player-facing fighter recruitment: the permanent Recruitment Market
+ * (Effectif tab, one signing at a time, any week — not gated to once-a-year
+ * like engine/AcademyEngine.js's free Academy Draft, and not autonomous/
+ * rival-only like engine/TransferMarket.js), plus the starter roster used to
+ * seed a brand-new rival gym at game creation.
  *
- *   - Initial Draft ("Mercato de demarrage"): a brand new gym starts with
- *     STRICTLY ZERO fighters (see web/app.js's btnNewGame handler, which no
- *     longer calls the old bootstrapRoster() auto-fill) and must spend its
- *     starting funds signing BALANCE.INITIAL_DRAFT.MIN_PICKS-MAX_PICKS
- *     prospects from a generated pool before entering the gym at all.
- *   - Recruitment Market: the same idea, permanently available (not
- *     gated to once-a-year like engine/AcademyEngine.js's free Academy
- *     Draft, and not autonomous/rival-only like engine/TransferMarket.js)
- *     from the Effectif tab, one signing at a time, any week.
+ * There used to be a mandatory "Initial Draft" step blocking entry into a
+ * brand-new game (0 fighters, forced picks before the Hub was reachable) —
+ * removed: a new gym now goes straight to the Hub with an empty roster, and
+ * the Recruitment Market below is the only way fighters ever join it.
  *
  * Every candidate carries real Prenom+Nom identities via
  * engine/FighterGenerator.js#generateFighterIdentity (data/names.js) —
- * never the old `${style} Prospect` placeholder.
+ * never a placeholder like "${style} Prospect".
+ *
+ * Pricing (see BALANCE.RECRUITMENT_MARKET): signing cost and weekly wage
+ * both grow with the candidate's actual Fighter#getOverallRating() on an
+ * EXPONENTIAL curve (COST_BASE * COST_GROWTH_PER_RATING_POINT ** rating),
+ * not a flat per-skill-point rate — a weak prospect stays cheap
+ * (800$-2000$-ish) while a genuine "pepite" (an occasional high-tier roll,
+ * see POTENTIAL_TIERS) or an experienced veteran at their peak costs
+ * dramatically more (5000$-15000$+), the same "a handful of great players
+ * cost far more than proportionally to their rating" curve real transfer
+ * markets show. Age further multiplies cost/wage via AGE_COST_MULTIPLIER,
+ * reusing BALANCE.AGE's existing PROSPECT/PEAK/VETERAN/DECLINING bands
+ * (see classifyAgeBand) rather than inventing a new age concept.
  *
  * Pure generation only, like engine/AcademyEngine.js/engine/TransferMarket.js:
- * this module builds Fighter instances and returns them with a signing
- * cost — it never touches PlayerState itself. The caller (web/app.js)
- * decides whether/when to call PlayerState#addFighter() and
- * PlayerState#changeMoney() for the chosen candidate(s).
+ * this module builds Fighter instances and returns them with a signing cost
+ * (and, for the Recruitment Market, a weekly wage) — it never touches
+ * PlayerState itself. The caller (web/app.js) decides whether/when to call
+ * PlayerState#addFighter()/#changeMoney() and set Fighter#weeklySalary for
+ * the chosen candidate.
  * ---------------------------------------------------------------------------
  */
 
@@ -42,85 +53,102 @@ function clamp(value, min, max) {
 }
 
 /**
- * Generates one candidate ({ fighter, cost }) from a skill mean/spread, an
- * age range, and the CALLER's own cost economy (baseCost/costPerSkillPoint,
- * clamped to [minCost, maxCost]) — the shared shape
- * generateInitialDraftPool/generateRecruitmentPool/
- * generateRivalGymStarterRoster all build on, each with their own pricing
- * (a starting-roster signing bonus is a different economy than the ongoing
- * market's per-skill pricing — see BALANCE.INITIAL_DRAFT vs
- * BALANCE.RECRUITMENT_MARKET).
+ * Rolls one of `tiers` (highest tier whose minRoll the roll clears wins) —
+ * same shape/semantics as engine/AcademyEngine.js#rollPotentialTier.
+ * @param {() => number} rng
+ * @param {Object} tiers - BALANCE.RECRUITMENT_MARKET.POTENTIAL_TIERS.
+ * @returns {{ key: string, label: string, skillMeanBonus: number }}
+ */
+function rollPotentialTier(rng, tiers) {
+  const roll = rng();
+  let selected = null;
+  for (const [key, tier] of Object.entries(tiers)) {
+    if (roll >= tier.minRoll) selected = { key, ...tier };
+  }
+  return selected;
+}
+
+/**
+ * Classifies an age into the same PROSPECT/PEAK/VETERAN/DECLINING bands
+ * BALANCE.AGE.GROWTH_MULTIPLIER_BY_AGE already uses for training gains —
+ * reused here (via its own AGE_COST_MULTIPLIER) so "potential" is priced
+ * off a concept this codebase already treats as canonical, not a new one.
+ * @param {number} age
+ * @returns {'PROSPECT'|'PEAK'|'VETERAN'|'DECLINING'}
+ */
+function classifyAgeBand(age) {
+  const ageCfg = BALANCE.AGE;
+  if (age < ageCfg.PEAK_AGE_RANGE.MIN) return 'PROSPECT';
+  if (age <= ageCfg.PEAK_AGE_RANGE.MAX) return 'PEAK';
+  if (age <= ageCfg.DECLINE_START_AGE) return 'VETERAN';
+  return 'DECLINING';
+}
+
+/**
+ * Generates one candidate from a skill mean/spread, an age range, and the
+ * caller's own pricing knobs — the shared shape generateRecruitmentPool/
+ * generateRivalGymStarterRoster both build on.
  * @param {Object} options
  * @param {number} options.skillMean
  * @param {number} options.skillSpread
  * @param {number} options.minAge
  * @param {number} options.maxAge
- * @param {number} options.baseCost
- * @param {number} options.costPerSkillPoint
+ * @param {number} options.costBase
+ * @param {number} options.costGrowthPerRatingPoint
  * @param {number} options.minCost
- * @param {number} options.maxCost
+ * @param {number} options.salaryRatioOfCost
+ * @param {Object} [options.ageCostMultiplier] - { PROSPECT, PEAK, VETERAN, DECLINING }, defaults to no age adjustment (all 1).
+ * @param {Object} [options.potentialTiers] - BALANCE.RECRUITMENT_MARKET.POTENTIAL_TIERS, or omitted for no tier variance/label.
  * @param {() => number} options.rng
- * @returns {{ fighter: Fighter, cost: number }}
+ * @returns {{ fighter: Fighter, cost: number, weeklySalary: number, potentialLabel: string|null }}
  */
-function generateCandidate({ skillMean, skillSpread, minAge, maxAge, baseCost, costPerSkillPoint, minCost, maxCost, rng }) {
+function generateCandidate({
+  skillMean,
+  skillSpread,
+  minAge,
+  maxAge,
+  costBase,
+  costGrowthPerRatingPoint,
+  minCost,
+  salaryRatioOfCost,
+  ageCostMultiplier = null,
+  potentialTiers = null,
+  rng,
+}) {
   const identity = generateFighterIdentity(rng);
+  const potential = potentialTiers ? rollPotentialTier(rng, potentialTiers) : null;
+  const effectiveSkillMean = skillMean + (potential?.skillMeanBonus ?? 0);
 
   const skills = Object.fromEntries(
-    SKILL_KEYS.map((key) => [key, Math.max(1, Math.round(skillMean + (rng() * 2 - 1) * skillSpread))])
+    SKILL_KEYS.map((key) => [key, Math.max(1, Math.round(effectiveSkillMean + (rng() * 2 - 1) * skillSpread))])
   );
+  const age = minAge + Math.floor(rng() * (maxAge - minAge + 1));
 
   const fighter = new Fighter({
-    identity: {
-      name: identity.name,
-      age: minAge + Math.floor(rng() * (maxAge - minAge + 1)),
-      style: pick(rng, STARTING_STYLES),
-      weightClass: 'Poids Welter',
-    },
+    identity: { name: identity.name, age, style: pick(rng, STARTING_STYLES), weightClass: 'Poids Welter' },
     attributes: { skills },
     psychology: { personality: generatePersonality(rng) },
   });
 
-  const skillMeanActual = Object.values(skills).reduce((sum, value) => sum + value, 0) / SKILL_KEYS.length;
-  const cost = Math.round(clamp(baseCost + costPerSkillPoint * skillMeanActual, minCost, maxCost));
+  const rating = fighter.getOverallRating();
+  const ageMultiplier = ageCostMultiplier?.[classifyAgeBand(age)] ?? 1;
+  const cost = Math.round(Math.max(minCost, costBase * costGrowthPerRatingPoint ** rating * ageMultiplier));
+  const weeklySalary = Math.round(cost * salaryRatioOfCost);
 
-  return { fighter, cost };
+  return { fighter, cost, weeklySalary, potentialLabel: potential?.label ?? null };
 }
 
 /**
- * Generates the "Mercato de demarrage" pool a brand-new gym drafts its very
- * first roster from — see BALANCE.INITIAL_DRAFT for pool size/age/skill
- * tuning. Pure: never touches PlayerState/WorldState.
- *
- * @param {Object} [options]
- * @param {() => number} [options.rng] - Random source in [0, 1). Defaults to Math.random.
- * @returns {{ fighter: Fighter, cost: number }[]}
- */
-export function generateInitialDraftPool({ rng = Math.random } = {}) {
-  const cfg = BALANCE.INITIAL_DRAFT;
-  return Array.from({ length: cfg.POOL_SIZE }, () =>
-    generateCandidate({
-      skillMean: cfg.BASE_SKILL_MEAN,
-      skillSpread: cfg.SKILL_SPREAD,
-      minAge: cfg.MIN_AGE,
-      maxAge: cfg.MAX_AGE,
-      baseCost: cfg.SIGNING_BONUS_BASE,
-      costPerSkillPoint: cfg.SIGNING_BONUS_PER_SKILL_POINT,
-      minCost: cfg.SIGNING_BONUS_MIN,
-      maxCost: cfg.SIGNING_BONUS_MAX,
-      rng,
-    })
-  );
-}
-
-/**
- * Generates the permanent recruitment market's pool — quality scales with
- * the gym's own Reputation (same "State drives generation" precedent as
- * engine/AcademyEngine.js). Pure: never touches PlayerState/WorldState.
+ * Generates the permanent recruitment market's pool — quality (and thus
+ * price) scales with the gym's own Reputation (same "State drives
+ * generation" precedent as engine/AcademyEngine.js), and occasionally rolls
+ * a genuine high-potential "pepite" (see BALANCE.RECRUITMENT_MARKET.POTENTIAL_TIERS).
+ * Pure: never touches PlayerState/WorldState.
  *
  * @param {Object} options
  * @param {Object} options.playerState - A PlayerState instance (reads .reputation only).
  * @param {() => number} [options.rng] - Random source in [0, 1). Defaults to Math.random.
- * @returns {{ fighter: Fighter, cost: number }[]}
+ * @returns {{ fighter: Fighter, cost: number, weeklySalary: number, potentialLabel: string|null }[]}
  */
 export function generateRecruitmentPool({ playerState, rng = Math.random }) {
   const cfg = BALANCE.RECRUITMENT_MARKET;
@@ -131,10 +159,12 @@ export function generateRecruitmentPool({ playerState, rng = Math.random }) {
       skillSpread: cfg.SKILL_SPREAD,
       minAge: cfg.MIN_AGE,
       maxAge: cfg.MAX_AGE,
-      baseCost: cfg.BASE_COST,
-      costPerSkillPoint: cfg.COST_PER_SKILL_POINT,
-      minCost: 0,
-      maxCost: Infinity,
+      costBase: cfg.COST_BASE,
+      costGrowthPerRatingPoint: cfg.COST_GROWTH_PER_RATING_POINT,
+      minCost: cfg.MIN_COST,
+      salaryRatioOfCost: cfg.SALARY_RATIO_OF_COST,
+      ageCostMultiplier: cfg.AGE_COST_MULTIPLIER,
+      potentialTiers: cfg.POTENTIAL_TIERS,
       rng,
     })
   );
@@ -167,15 +197,15 @@ export function generateRivalGymStarterRoster({ reputation, count = 3, rng = Mat
       skillSpread: cfg.SKILL_SPREAD,
       minAge: cfg.MIN_AGE,
       maxAge: cfg.MAX_AGE,
-      // A rival gym's own roster is never bought by the player — cost is
-      // computed but simply discarded below (.fighter only).
-      baseCost: cfg.BASE_COST,
-      costPerSkillPoint: cfg.COST_PER_SKILL_POINT,
-      minCost: 0,
-      maxCost: Infinity,
+      // A rival gym's own roster is never bought by the player — cost/wage
+      // are computed but simply discarded below (.fighter only).
+      costBase: cfg.COST_BASE,
+      costGrowthPerRatingPoint: cfg.COST_GROWTH_PER_RATING_POINT,
+      minCost: cfg.MIN_COST,
+      salaryRatioOfCost: cfg.SALARY_RATIO_OF_COST,
       rng,
     }).fighter
   );
 }
 
-export default { generateInitialDraftPool, generateRecruitmentPool, generateRivalGymStarterRoster };
+export default { generateRecruitmentPool, generateRivalGymStarterRoster };

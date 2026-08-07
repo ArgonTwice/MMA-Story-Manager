@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 
 import EventBus from '../core/EventBus.js';
 import BALANCE from '../data/balance.js';
+import Fighter from '../models/Fighter.js';
 import PlayerState from '../state/PlayerState.js';
 import { processWeeklyExpenses, ECONOMY_EVENTS } from './EconomyEngine.js';
 
@@ -47,6 +48,23 @@ test('a coach with no explicit salary falls back to BALANCE.ECONOMY.SALARIES.COA
   const summary = processWeeklyExpenses(player);
 
   assert.equal(summary.coachPayroll, BALANCE.ECONOMY.SALARIES.COACH_BASE_WEEKLY);
+});
+
+test('roster fighters with a weeklySalary set are deducted as fighterPayroll; a fighter with no salary (0) costs nothing', () => {
+  const player = new PlayerState({ gymName: 'Payroll Gym', money: 10000 });
+  const paidFighter = new Fighter({ identity: { name: 'Paid Fighter' } });
+  paidFighter.weeklySalary = 900;
+  const freeFighter = new Fighter({ identity: { name: 'Free Fighter' } });
+  player.addFighter(paidFighter);
+  player.addFighter(freeFighter);
+
+  const summary = processWeeklyExpenses(player);
+
+  assert.equal(summary.fighterPayroll, 900);
+  assert.equal(
+    summary.netChange,
+    summary.passiveIncome - summary.rent - summary.coachPayroll - summary.fighterPayroll - summary.equipmentMaintenance
+  );
 });
 
 test('breaching the debt threshold triggers an insolvency crisis: lays off the weakest coach and costs reputation', () => {

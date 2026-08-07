@@ -33,7 +33,7 @@ import { HistoryEngine } from './engine/HistoryEngine.js';
 import { SocialEngine } from './engine/SocialEngine.js';
 
 import { generateAcademyPool, isAcademyDraftAvailable } from './engine/AcademyEngine.js';
-import { generateInitialDraftPool, generateRecruitmentPool, generateRivalGymStarterRoster } from './engine/DraftEngine.js';
+import { generateRecruitmentPool, generateRivalGymStarterRoster } from './engine/DraftEngine.js';
 import { assertNoIntraGymMatch } from './engine/Matchmaking.js';
 import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from './engine/StoryAnalyzer.js';
 
@@ -366,9 +366,6 @@ class WebApp {
     this.undergroundFilter = 'ALL';
     /** In-progress Underground Circuit setup ({ challenge, fighterId, gymId, opponentId }), or null — see _showUndergroundSetupModal(). Runtime-only, never persisted. */
     this._undergroundSetup = null;
-    /** This "Nouvelle Partie" session's generated draft pool ({ fighter, cost }[]) and the fighter ids currently picked — see _startInitialDraft(). Runtime-only. */
-    this._initialDraftPool = [];
-    this._initialDraftSelectedIds = [];
     /** The permanent Recrutement market's currently-open pool ({ fighter, cost }[]) — regenerated each time the modal opens, see _showRecruitmentMarketModal(). */
     this._recruitmentPool = [];
     /** In-progress official-fight opponent setup ({ fighterId, gymId, opponentId }), or null — mirrors _undergroundSetup's shape: a competitive bout's opponent always comes from a rival gym's roster, never the player's own (see engine/Matchmaking.js). */
@@ -441,12 +438,11 @@ class WebApp {
   _wireStartScreen() {
     this.dom.btnNewGame.addEventListener('click', () => {
       try {
-        // A brand new gym starts with STRICTLY ZERO fighters — no more
-        // silent bootstrapRoster() auto-fill with placeholder
-        // "${style} Prospect" names. The player must draft their first
-        // MIN_PICKS-MAX_PICKS fighters from a real, named prospect pool
-        // (see _startInitialDraft/_showInitialDraftModal) before
-        // _enterGame() ever runs.
+        // A brand new gym starts with STRICTLY ZERO fighters and goes
+        // STRAIGHT to the Hub — no mandatory Draft step blocking entry
+        // anymore. The permanent Recrutement market (Effectif tab, see
+        // _showRecruitmentMarketModal) is always there whenever the player
+        // decides they're ready to sign their first fighters.
         this.gameState.newGame({
           gymName: this.dom.newGymName.value || undefined,
           country: this.dom.newGymCountry.value || undefined,
@@ -464,7 +460,10 @@ class WebApp {
           const starterRoster = generateRivalGymStarterRoster({ reputation, rng: this.rng });
           this.gameState.worldState.addRivalGym({ name, reputation, roster: starterRoster.map((fighter) => fighter.toJSON()) });
         }
-        this._startInitialDraft();
+        this._isBrandNewGame = true;
+        this._enterGame();
+        this._autosave();
+        this._showWelcomeModal();
       } catch (error) {
         // A failure here used to fail completely silently: the click handler
         // would throw, the start screen would just sit there, and nothing in
@@ -520,100 +519,43 @@ class WebApp {
     });
   }
 
-  // ---- INITIAL DRAFT (zero-fighter "Nouvelle Partie" opening mercato) -------------
+  // ---- WELCOME (immersive "Nouvelle Partie" intro) ---------------------------------
 
-  _startInitialDraft() {
-    this._initialDraftPool = generateInitialDraftPool({ rng: this.rng });
-    this._initialDraftSelectedIds = [];
-    this._showInitialDraftModal();
-  }
-
-  _showInitialDraftModal() {
-    const cfg = BALANCE.INITIAL_DRAFT;
-    const budget = this.gameState.playerState.money;
-    const remaining = budget - this._initialDraftSelectedCost();
+  /**
+   * A brand-new gym no longer opens on a mandatory Draft — it opens
+   * straight on the Hub, roster empty, with this one-time immersive
+   * welcome instead: a dynamic, in-character pitch ("you, a manager
+   * building a club from nothing") naming the gym/country the player just
+   * typed in, pointing them at the permanent Recrutement market
+   * (Effectif tab) whenever they're ready to sign their first fighters.
+   * Closing it chains into the existing mechanical First Steps onboarding
+   * (Readiness/Loyaute/Planning), unchanged.
+   */
+  _showWelcomeModal() {
+    const { gymName, country, money } = this.gameState.playerState;
+    const place = country ? ` a ${country}` : '';
 
     const content = el('div', {}, [
-      el('h2', { class: 'section-title', text: '\u{1F94A} Draft Initiale — Mercato de demarrage' }),
+      el('h2', { class: 'section-title', text: '\u{1F94A} Bienvenue au sommet — ou plutot, tout en bas' }),
       el('p', {
-        text: `Votre salle demarre sans combattant. Choisissez ${cfg.MIN_PICKS} a ${cfg.MAX_PICKS} recrues parmi les prospects ci-dessous, dans la limite de votre budget de depart.`,
+        text: `${gymName}${place} n'est encore rien : une adresse, ${Math.round(money).toLocaleString('fr-FR')}$ en caisse, et pas un seul combattant sous contrat. Personne ne connait votre nom — pas encore.`,
       }),
-      el('p', { class: 'fighter-meta', text: `Budget restant : ${Math.round(remaining).toLocaleString('fr-FR')}$ / ${Math.round(budget).toLocaleString('fr-FR')}$` }),
-      ...this._initialDraftPool.map((candidate) => this._buildDraftCandidateCard(candidate, remaining)),
+      el('p', {
+        text: "C'est vous, desormais, le manager. Chaque signature, chaque contrat, chaque combat porte votre empreinte. Un promoteur inconnu peut batir un empire ; un mauvais choix peut tout couler avant meme le premier combat.",
+      }),
+      el('p', {
+        text: "Rendez-vous dans l'onglet Effectif des que vous etes pret : le Marche de Recrutement y est ouvert en permanence pour signer vos premiers combattants, a votre rythme et selon votre budget.",
+      }),
       el('button', {
         class: 'btn btn-gold btn-block',
-        text: `Confirmer la draft (${this._initialDraftSelectedIds.length}/${cfg.MAX_PICKS})`,
-        disabled: this._isInitialDraftReady() ? null : 'disabled',
-        onclick: () => this._confirmInitialDraft(),
+        text: 'Prendre les commandes',
+        onclick: () => {
+          this._hideModal();
+          this._maybeShowFirstStepsOnboarding();
+        },
       }),
     ]);
     this._showModal(content, { blocking: true });
-  }
-
-  _buildDraftCandidateCard(candidate, remaining) {
-    const { fighter, cost } = candidate;
-    const selected = this._initialDraftSelectedIds.includes(fighter.identity.id);
-    const atMaxPicks = this._initialDraftSelectedIds.length >= BALANCE.INITIAL_DRAFT.MAX_PICKS;
-    const disabled = !selected && (atMaxPicks || cost > remaining);
-
-    return el(
-      'div',
-      {
-        class: `fighter-card selectable${selected ? ' selected' : ''}`,
-        onclick: disabled ? null : () => this._toggleInitialDraftPick(fighter.identity.id),
-      },
-      [
-        el('div', { class: 'fighter-head' }, [
-          el('div', {}, [
-            el('div', { class: 'fighter-name', text: fighter.identity.name }),
-            el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.identity.age} ans — Note ${fighter.getOverallRating()}` }),
-          ]),
-          el('span', { class: 'badge badge-blue', text: `${cost.toLocaleString('fr-FR')}$` }),
-        ]),
-      ]
-    );
-  }
-
-  _toggleInitialDraftPick(fighterId) {
-    if (this._initialDraftSelectedIds.includes(fighterId)) {
-      this._initialDraftSelectedIds = this._initialDraftSelectedIds.filter((id) => id !== fighterId);
-    } else if (this._initialDraftSelectedIds.length < BALANCE.INITIAL_DRAFT.MAX_PICKS) {
-      this._initialDraftSelectedIds = [...this._initialDraftSelectedIds, fighterId];
-    }
-    this._showInitialDraftModal();
-  }
-
-  _initialDraftSelectedCost() {
-    return this._initialDraftPool
-      .filter((candidate) => this._initialDraftSelectedIds.includes(candidate.fighter.identity.id))
-      .reduce((sum, candidate) => sum + candidate.cost, 0);
-  }
-
-  _isInitialDraftReady() {
-    const cfg = BALANCE.INITIAL_DRAFT;
-    const count = this._initialDraftSelectedIds.length;
-    if (count < cfg.MIN_PICKS || count > cfg.MAX_PICKS) return false;
-    return this._initialDraftSelectedCost() <= this.gameState.playerState.money;
-  }
-
-  _confirmInitialDraft() {
-    const chosen = this._initialDraftPool.filter((candidate) => this._initialDraftSelectedIds.includes(candidate.fighter.identity.id));
-    const totalCost = chosen.reduce((sum, candidate) => sum + candidate.cost, 0);
-
-    for (const { fighter } of chosen) {
-      this.gameState.playerState.addFighter(fighter);
-      telemetry.recordFighterRecruited();
-    }
-    this.gameState.playerState.changeMoney(-totalCost, 'INITIAL_DRAFT');
-
-    this._initialDraftPool = [];
-    this._initialDraftSelectedIds = [];
-    this._hideModal();
-
-    this._isBrandNewGame = true;
-    this._enterGame();
-    this._autosave();
-    this._maybeShowFirstStepsOnboarding();
   }
 
   _enterGame() {
@@ -734,6 +676,7 @@ class WebApp {
           el('div', { class: 'card-title', text: 'Charges (derniere semaine)' }),
           el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Loyer' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.rent)}$` })]),
           el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Salaires coachs' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.coachPayroll)}$` })]),
+          el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Salaires combattants' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.fighterPayroll)}$` })]),
           el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Entretien equipements' }), el('span', { class: 'list-row-value', text: `-${Math.round(e.equipmentMaintenance)}$` })]),
           el('div', { class: 'list-row' }, [el('span', { class: 'list-row-label', text: 'Revenus passifs' }), el('span', { class: 'list-row-value', text: `+${Math.round(e.passiveIncome)}$` })]),
           el('div', { class: 'list-row' }, [
@@ -932,7 +875,7 @@ class WebApp {
 
     const content = el('div', {}, [
       el('h2', { class: 'section-title', text: '\u{1F4B0} Marche de Recrutement' }),
-      el('p', { text: 'Recrutez de nouveaux combattants a tout moment, contre remuneration — independamment de la Draft Annuelle de l\'Academie.' }),
+      el('p', { text: 'Recrutez de nouveaux combattants a tout moment, contre une prime de signature et un salaire hebdomadaire — independamment de la Draft Annuelle de l\'Academie.' }),
       el('p', { class: 'fighter-meta', text: `Tresorerie : ${Math.round(playerState.money).toLocaleString('fr-FR')}$ — Effectif ${playerState.roster.length}/${playerState.getRosterCapacity()}` }),
       rosterFull ? el('p', { text: 'Effectif au complet — liberez une place avant de recruter.' }) : null,
       ...this._recruitmentPool.map((candidate) => this._buildRecruitmentCandidateCard(candidate, rosterFull)),
@@ -943,37 +886,43 @@ class WebApp {
   }
 
   _buildRecruitmentCandidateCard(candidate, rosterFull) {
-    const { fighter, cost } = candidate;
+    const { fighter, cost, weeklySalary, potentialLabel } = candidate;
     const { playerState } = this.gameState;
     const affordable = !rosterFull && playerState.money >= cost;
 
     return el('div', { class: 'fighter-card' }, [
       el('div', { class: 'fighter-head' }, [
         el('div', {}, [
-          el('div', { class: 'fighter-name', text: fighter.identity.name }),
+          el('div', { class: 'fighter-name' }, [
+            fighter.identity.name,
+            potentialLabel && potentialLabel !== 'Prospect' ? el('span', { class: 'badge badge-nickname', text: potentialLabel }) : null,
+          ]),
           el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.identity.age} ans — Note ${fighter.getOverallRating()}` }),
         ]),
         el('span', { class: 'badge badge-blue', text: `${cost.toLocaleString('fr-FR')}$` }),
       ]),
+      el('div', { class: 'fighter-meta', text: `Salaire hebdomadaire : ${weeklySalary.toLocaleString('fr-FR')}$/semaine` }),
       el('button', {
         class: 'btn btn-gold btn-sm',
         text: 'Signer',
         disabled: affordable ? null : 'disabled',
-        onclick: () => this._signRecruit(fighter, cost),
+        onclick: () => this._signRecruit(candidate),
       }),
     ]);
   }
 
-  _signRecruit(fighter, cost) {
+  _signRecruit(candidate) {
+    const { fighter, cost, weeklySalary } = candidate;
     const { playerState } = this.gameState;
     if (playerState.roster.length >= playerState.getRosterCapacity() || playerState.money < cost) return;
 
+    fighter.weeklySalary = weeklySalary;
     playerState.addFighter(fighter);
     playerState.changeMoney(-cost, 'RECRUITMENT_MARKET');
     telemetry.recordFighterRecruited();
-    this._recruitmentPool = this._recruitmentPool.filter((candidate) => candidate.fighter.identity.id !== fighter.identity.id);
+    this._recruitmentPool = this._recruitmentPool.filter((c) => c.fighter.identity.id !== fighter.identity.id);
 
-    this._showToast(`\u{1F4DD} ${fighter.identity.name} signe au gym.`);
+    this._showToast(`\u{1F4DD} ${fighter.identity.name} signe au gym (${weeklySalary.toLocaleString('fr-FR')}$/semaine).`);
     this._renderRecruitmentMarketModal();
     this._renderTopbar();
     this._autosave();
