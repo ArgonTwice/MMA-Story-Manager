@@ -52,6 +52,7 @@ import { recordLeagueFightResult, getPromotionProgress } from './engine/LeagueEn
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from './engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from './engine/PressConferenceEngine.js';
 import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from './engine/HallOfFameEngine.js';
+import AudioEngine from './engine/AudioEngine.js';
 import { generateHiringPool, hireStaff } from './engine/StaffEngine.js';
 import {
   getNextTierUpgradeCost,
@@ -281,7 +282,17 @@ function el(tag, attrs = {}, children = []) {
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
     else if (key === 'html') node.innerHTML = value;
-    else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
+    else if (key === 'onclick' && tag === 'button' && typeof value === 'function') {
+      // A single choke point for "clic sur un bouton d'interface" — every
+      // button built through this helper gets the click SFX for free,
+      // rather than every one of this app's ~100 onclick call sites having
+      // to remember to add it individually. AudioEngine itself is the mute
+      // guard (see AudioEngine#_withContext) so this is always safe to call.
+      node.addEventListener('click', (event) => {
+        AudioEngine.playClick();
+        value(event);
+      });
+    } else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
     else if (value !== null && value !== undefined) node.setAttribute(key, value);
   }
   for (const child of [].concat(children)) {
@@ -394,6 +405,7 @@ class WebApp {
     this._wireStartScreen();
     this._wireNav();
     this._wireModalDismiss();
+    this._wireMuteToggle();
 
     const hasAutosave = SaveManager.listSlots().includes(AUTOSAVE_SLOT);
     this.dom.continueBlock.classList.toggle('hidden', !hasAutosave);
@@ -433,6 +445,7 @@ class WebApp {
       tbMoney: document.getElementById('tbMoney'),
       tbRep: document.getElementById('tbRep'),
       tbHype: document.getElementById('tbHype'),
+      btnMuteToggle: document.getElementById('btnMuteToggle'),
       panels: {
         hub: document.getElementById('panel-hub'),
         roster: document.getElementById('panel-roster'),
@@ -531,6 +544,29 @@ class WebApp {
         this._hideModal();
       }
     });
+  }
+
+  /**
+   * The 🔊/🔇 header toggle — deliberately a raw addEventListener rather
+   * than el()'s onclick (which itself calls AudioEngine.playClick()): a
+   * click on the mute button toggling INTO muted should not also fire a
+   * click sound, and un-muting doesn't need its own confirmation chime
+   * either. AudioEngine.isMuted() is read once here at boot to reflect
+   * whatever was persisted from a previous session (see AudioEngine's own
+   * localStorage-backed constructor).
+   */
+  _wireMuteToggle() {
+    this._syncMuteButton();
+    this.dom.btnMuteToggle.addEventListener('click', () => {
+      AudioEngine.toggleMuted();
+      this._syncMuteButton();
+    });
+  }
+
+  _syncMuteButton() {
+    const muted = AudioEngine.isMuted();
+    this.dom.btnMuteToggle.textContent = muted ? '\u{1F507}' : '\u{1F50A}';
+    this.dom.btnMuteToggle.setAttribute('aria-label', muted ? 'Activer le son' : 'Couper le son');
   }
 
   // ---- WELCOME (immersive "Nouvelle Partie" intro) ---------------------------------
@@ -895,6 +931,7 @@ class WebApp {
     if (!def || playerState.money < def.purchaseCost) return;
     playerState.changeMoney(-def.purchaseCost, `EQUIPMENT_PURCHASE:${equipmentId}`);
     playerState.addEquipmentItem({ id: equipmentId });
+    AudioEngine.playCash();
     this._renderTopbar();
     this._showToast(`\u{1F6E0}\u{FE0F} ${def.label} achete.`);
     this._showGymFacilityModal();
@@ -905,6 +942,7 @@ class WebApp {
     const cost = getNextTierUpgradeCost(playerState);
     const upgraded = cost !== null && playerState.upgradeFacility(cost);
     if (upgraded) {
+      AudioEngine.playCash();
       this._renderTopbar();
       this._showToast(`\u{2B06}\u{FE0F} ${playerState.getFacilityTier().label} — nouvelle capacite atteinte.`);
     }
@@ -1165,6 +1203,7 @@ class WebApp {
     telemetry.recordFighterRecruited();
     this._recruitmentPool = this._recruitmentPool.filter((c) => c.fighter.identity.id !== fighter.identity.id);
 
+    AudioEngine.playCash();
     this._showToast(`\u{1F4DD} ${fighter.identity.name} signe au gym (${weeklySalary.toLocaleString('fr-FR')}$/semaine).`);
     this._renderRecruitmentMarketModal();
     this._renderTopbar();
@@ -2188,6 +2227,7 @@ class WebApp {
       this._finishCombatPlayback();
       return;
     }
+    AudioEngine.playGong(); // Round bell — this single choke point covers both "round starts" and, by the same token, "the previous round just ended".
     this._combatPlayback = { beats: step.round.beats, revealedCount: 0, playing: true, timerId: null };
     this._renderFight();
     this._scheduleNextBeat();
@@ -2211,6 +2251,7 @@ class WebApp {
     playback.timerId = setTimeout(() => {
       if (this._combatPlayback !== playback) return; // a newer round/playback superseded this timer — stale, ignore.
       playback.revealedCount += 1;
+      AudioEngine.playHit();
       this._renderFight();
       this._scheduleNextBeat();
     }, 1400);
@@ -2254,6 +2295,13 @@ class WebApp {
     }
     const result = this.combatEngine.getSnapshot().result;
     this.fightResultsThisYear.push(result);
+
+    AudioEngine.playGong(); // Final bell.
+    // The player's own corner is always 'A' in this normal Combat-tab flow (see _confirmFightSetup).
+    if (result.winner === 'A') {
+      AudioEngine.playVictory();
+      if (result.purses?.A?.gymShare > 0) AudioEngine.playCash();
+    }
 
     // LeagueEngine: only sanctioned WFC Combat-tab fights count toward
     // promotion/relegation — this is that single call site (Underground
