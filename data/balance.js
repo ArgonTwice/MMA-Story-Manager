@@ -712,6 +712,38 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
+  // CONFIDENCE — ring/cage self-belief, distinct from MORALE (which reacts
+  // to pay/injuries/drama events too). Only fight results move it (see
+  // engine/CombatEngine.js#_processPostMatchRewards), and it nudges
+  // initiative-taking mid-fight (see its momentum computation) rather than
+  // training gains — a separate, narrower dial from MORALE by design.
+  // ---------------------------------------------------------------------
+  CONFIDENCE: {
+    MIN: 0,
+    MAX: 100,
+    /** A fighter starts perfectly neutral — CombatEngine's confidence-driven momentum bonus is EXACTLY zero at this value (see MOMENTUM_BONUS_SCALE below), so an untested fighter's first fight is unaffected by this system. */
+    STARTING_VALUE: 50,
+
+    EVENTS: {
+      WIN_FIGHT: 8,
+      /** Extra bump on top of WIN_FIGHT for winning BY FINISH specifically ("la confiance augmente avec les victoires/finishs") — CombatEngine applies both together on a finish win. */
+      WIN_FIGHT_FINISH_BONUS: 7,
+      LOSE_FIGHT: -10,
+    },
+
+    /**
+     * Momentum bonus per point of confidence above/below STARTING_VALUE,
+     * folded additively into CombatEngine's momentumMultiplier (see
+     * _computeRoundOffense) alongside the existing readiness-driven bonus —
+     * a confident fighter presses the action a little harder, a shaken one
+     * a little less. Deliberately small: at the THRESHOLDS-like extremes
+     * (confidence 0 or 100), the swing is only +/-0.1, a fraction of
+     * momentum's own 0-2 range.
+     */
+    MOMENTUM_BONUS_SCALE: 0.002,
+  },
+
+  // ---------------------------------------------------------------------
   // TRAINING — camps, drills, attribute gains
   // ---------------------------------------------------------------------
   TRAINING: {

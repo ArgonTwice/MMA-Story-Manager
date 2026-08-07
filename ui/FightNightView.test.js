@@ -49,6 +49,26 @@ test('presentMatchup returns a fight card with both fighters\' Readiness/nicknam
   assert.equal(card.fighterA.nickname, null);
 });
 
+test('the fight card hides Coin B\'s exact Readiness/Overall and replaces them with a qualitative Rapport de Scouting — Coin A keeps full precise numbers', () => {
+  const { combatEngine, fighterA, fighterB } = makeEngineWithPlayerState();
+  const view = new FightNightView({ combatEngine });
+
+  const card = view.presentMatchup(fighterA, fighterB, 'WFC', false);
+
+  assert.ok(typeof card.fighterA.readiness === 'number');
+  assert.ok(typeof card.fighterA.overallRating === 'number');
+  assert.equal(card.fighterA.scoutingReport, null);
+
+  assert.equal(card.fighterB.readiness, null);
+  assert.equal(card.fighterB.overallRating, null);
+  assert.ok(Array.isArray(card.fighterB.scoutingReport));
+  assert.ok(card.fighterB.scoutingReport.length > 0);
+
+  const cardText = view.toCardText();
+  assert.ok(cardText.includes('Rapport de Scouting'));
+  assert.ok(!cardText.includes('Readiness') || cardText.indexOf('Readiness') < cardText.indexOf('Rapport de Scouting'), 'Readiness should only ever be printed for Coin A, before the B section');
+});
+
 test('setGameplans defaults each corner to its own style\'s primary distance/target when not explicitly provided', () => {
   const { combatEngine, fighterA, fighterB } = makeEngineWithPlayerState();
   fighterA.identity.style = 'Lutte'; // GROUND-affinity style
@@ -201,6 +221,60 @@ test('toResultText shows a dramatic banner for a finish but not for a decision',
   assert.ok(dramaticSeeds[0].view.toResultText().includes(dramaticSeeds[0].banner.dramaticBanner));
 
   assert.equal(decisionSeeds[0].banner.dramaticBanner, null, 'a decision/draw should not carry a dramaticBanner');
+});
+
+test('a round-1 KO/TKO/Submission narrates as a short 1-3 beat flash sequence instead of the full 10-25 beat build-up', () => {
+  const flashSeeds = [];
+
+  for (let seed = 1; seed <= 60 && flashSeeds.length === 0; seed += 1) {
+    const playerState = new PlayerState({ money: 25000 });
+    const worldState = new WorldState();
+    // An extreme mismatch reliably produces an early, dramatic finish — see
+    // the neighboring "toResultText..." test's own note on skill-gap sizing.
+    const fighterA = makeFighter('Hammer', 95);
+    const fighterB = makeFighter('Bag', 5);
+    playerState.addFighter(fighterA);
+    playerState.addFighter(fighterB);
+    const combatEngine = new CombatEngine({ playerState, worldState, rng: createSeededRng(seed) });
+    const view = new FightNightView({ combatEngine });
+    view.presentMatchup(fighterA, fighterB, 'WFC', false);
+    view.setGameplans();
+    view.simulateToCompletion();
+
+    const [firstRound] = view.getRoundLogs();
+    if (firstRound.round === 1 && firstRound.finish && ['KO', 'TKO', 'SUBMISSION'].includes(firstRound.finish.method)) {
+      flashSeeds.push(firstRound);
+    }
+  }
+
+  assert.ok(flashSeeds.length > 0, 'sanity: expected at least one round-1 KO/TKO/Submission across 60 seeds with this extreme mismatch');
+  assert.ok(flashSeeds[0].beats.length <= 3, `expected a flash finish to narrate in <= 3 beats, got ${flashSeeds[0].beats.length}`);
+  assert.ok(flashSeeds[0].beats.length >= 1);
+});
+
+test('beat count scales with the round\'s actual damage intensity: a high-damage round narrates with more beats than a low-damage one', () => {
+  const highIntensityLog = {
+    round: 2,
+    actions: {
+      A: { target: 'HEAD', distance: 'STRIKING', rawDamage: 12, takedownAttempted: false, takedownSuccess: false, clinchAttempted: false, clinchTakedownLanded: false, submissionAttempted: false, submissionSuccess: false },
+      B: { target: 'HEAD', distance: 'STRIKING', rawDamage: 10, takedownAttempted: false, takedownSuccess: false, clinchAttempted: false, clinchTakedownLanded: false, submissionAttempted: false, submissionSuccess: false },
+    },
+    damageDealt: { A: 12, B: 10 },
+    finish: null,
+  };
+  const lowIntensityLog = {
+    ...highIntensityLog,
+    damageDealt: { A: 1, B: 0.5 },
+  };
+
+  const { combatEngine, fighterA, fighterB } = makeEngineWithPlayerState();
+  const view = new FightNightView({ combatEngine });
+  view.presentMatchup(fighterA, fighterB, 'WFC', false);
+
+  const highBeats = view._generateRoundBeats(highIntensityLog);
+  const lowBeats = view._generateRoundBeats(lowIntensityLog);
+
+  assert.ok(highBeats.length > lowBeats.length, `expected the high-damage round to narrate with more beats (high=${highBeats.length}, low=${lowBeats.length})`);
 });
 
 test('a world record broken during the fight is captured and surfaced in the result banner (only while HistoryEngine is attached)', () => {

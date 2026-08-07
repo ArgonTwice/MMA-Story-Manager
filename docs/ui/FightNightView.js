@@ -26,6 +26,7 @@
 import BALANCE from '../data/balance.js';
 import EventBus from '../core/EventBus.js';
 import { COMBAT_STATES, FINISH_METHODS } from '../engine/CombatEngine.js';
+import { generateScoutingReport } from '../engine/ScoutingEngine.js';
 import { WORLD_EVENTS } from '../state/WorldState.js';
 
 /** Distinct celebratory banner text for a dramatic finish — a plain decision falls back to a neutral headline instead. */
@@ -193,6 +194,13 @@ function formatClock(secondsRemaining) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Dramatic finishes eligible for the round-1 "flash" beat sequence (see _generateFlashFinishBeats) — DOCTOR_STOPPAGE is deliberately excluded: it reads as accumulated damage catching up, not a sudden finish. */
+const FLASH_FINISH_METHODS = new Set([FINISH_METHODS.KO, FINISH_METHODS.TKO, FINISH_METHODS.SUBMISSION]);
+
 /** Sensible default gameplan for a fighter whose corner didn't explicitly choose one — leans on their own style's primary distance/target affinity (see BALANCE.COMBAT.STYLE_BONUSES), same spirit as tools/SimRunner.js's headless gameplanForStyle but without that file's coach-AI randomness (a human corner can always override via setGameplans before simulating). */
 function defaultGameplanForFighter(fighter) {
   const styleBonus = BALANCE.COMBAT.STYLE_BONUSES[fighter.identity.style] ?? BALANCE.COMBAT.STYLE_BONUSES.DEFAULT;
@@ -323,8 +331,17 @@ export class FightNightView {
 
   // ---- view-model builders ----------------------------------------------------
 
-  _buildFighterCardEntry(fighter) {
-    return {
+  /**
+   * @param {Object} fighter
+   * @param {boolean} [isOpponent=false] - True for the corner the player
+   *   does NOT manage (Coin B): exact Readiness/Overall are withheld and
+   *   replaced with a qualitative scoutingReport (see
+   *   engine/ScoutingEngine.js) — "Rapport de Scouting sous incertitude"
+   *   instead of exposing tape the player was never given. The player's
+   *   own fighter (Coin A) keeps the full precise numbers, same as before.
+   */
+  _buildFighterCardEntry(fighter, isOpponent = false) {
+    const base = {
       id: fighter.identity.id,
       name: fighter.identity.name,
       nickname: fighter.identity.nickname,
@@ -332,17 +349,19 @@ export class FightNightView {
       age: fighter.identity.age,
       record: fighter.getRecordString(),
       legacyStage: fighter.getLegacyStage(),
-      readiness: Math.round(fighter.getReadiness()),
-      overallRating: fighter.getOverallRating(),
     };
+    if (isOpponent) {
+      return { ...base, readiness: null, overallRating: null, scoutingReport: generateScoutingReport(fighter) };
+    }
+    return { ...base, readiness: Math.round(fighter.getReadiness()), overallRating: fighter.getOverallRating(), scoutingReport: null };
   }
 
   _buildFightCard(orgId, isTitle) {
     return {
       orgId,
       isTitle,
-      fighterA: this._buildFighterCardEntry(this._fighterA),
-      fighterB: this._buildFighterCardEntry(this._fighterB),
+      fighterA: this._buildFighterCardEntry(this._fighterA, false),
+      fighterB: this._buildFighterCardEntry(this._fighterB, true),
     };
   }
 
@@ -386,7 +405,19 @@ export class FightNightView {
     const nameB = this._fighterB.identity.name;
     const roundSeconds = BALANCE.COMBAT.ROUND_DURATION_SECONDS;
 
-    const beatCount = 10 + stableIndex(`${log.round}-beatcount`, 16); // 10..25
+    // A round-1 KO/TKO/Submission doesn't play out the standard 10-25-beat
+    // build-up — it feels sudden, over in a handful of lines, same "KO
+    // eclair" a real broadcast would cut to instantly rather than narrate
+    // round-by-round tension for a fight that never got that far.
+    if (log.round === 1 && log.finish && FLASH_FINISH_METHODS.has(log.finish.method)) {
+      return this._generateFlashFinishBeats(log, nameA, nameB, roundSeconds);
+    }
+
+    // Beat count reflects this round's actual intensity rather than a flat
+    // range: a tactical, low-damage round stays short, a back-and-forth
+    // war runs long — capped at 25 either way.
+    const totalDamage = log.damageDealt.A + log.damageDealt.B;
+    const beatCount = clamp(6 + Math.round(totalDamage * 0.8), 6, 25);
 
     const lines = [];
     lines.push(log.round === 1 ? 'La cloche retentit, le combat commence !' : `Round ${log.round} — les coins liberent les combattants.`);
@@ -437,7 +468,6 @@ export class FightNightView {
       const template = FINISH_BEAT_LINES[log.finish.method];
       lines.push(template ? template.replace('{winner}', winnerName).replace('{loser}', loserName) : `La cloche finale sonne le round ${log.round}.`);
     } else {
-      const totalDamage = log.damageDealt.A + log.damageDealt.B;
       if (totalDamage > 15) lines.push('Les deux combattants echangent avec intensite, l\'assistance est debout !');
       else if (totalDamage < 4) lines.push('Round plus tactique, les deux coins jaugent la distance.');
       else lines.push(`Fin du round ${log.round} — retour au coin.`);
@@ -448,6 +478,37 @@ export class FightNightView {
       const secondsRemaining = roundSeconds * (1 - (index + 1) / count);
       return { timestamp: formatClock(secondsRemaining), text };
     });
+  }
+
+  /**
+   * 1-3 beats total, compressed into the opening seconds of the round
+   * rather than spread across the full 5 minutes — a flash KO/TKO/
+   * Submission doesn't wait for a slow build-up.
+   * @param {Object} log
+   * @param {string} nameA
+   * @param {string} nameB
+   * @param {number} roundSeconds
+   * @returns {{ timestamp: string, text: string }[]}
+   */
+  _generateFlashFinishBeats(log, nameA, nameB, roundSeconds) {
+    const winnerKey = log.finish.winnerKey;
+    const finisherName = winnerKey === 'A' ? nameA : nameB;
+    const victimName = winnerKey === 'A' ? nameB : nameA;
+    const finisherAction = log.actions?.[winnerKey];
+
+    const beatTarget = 1 + stableIndex(`${log.round}-flash`, 3); // 1..3
+    const lines = [];
+    if (beatTarget >= 3) lines.push(`La cloche sonne a peine que ${finisherName} s'avance, en chasse.`);
+    if (beatTarget >= 2 && finisherAction) {
+      lines.push(describeAction(finisherAction, finisherName, victimName, `${log.round}-flash-action`));
+    }
+    const template = FINISH_BEAT_LINES[log.finish.method];
+    lines.push(template ? template.replace('{winner}', finisherName).replace('{loser}', victimName) : `Fin eclair du round ${log.round}.`);
+
+    return lines.map((text, index) => ({
+      timestamp: formatClock(Math.max(0, roundSeconds - 5 - index * 20)),
+      text,
+    }));
   }
 
   _buildResultBanner() {
@@ -491,13 +552,17 @@ export class FightNightView {
   /** @returns {string} The pre-fight card, as plain text. */
   toCardText() {
     const card = this._buildFightCard(this._orgId, this._isTitle);
-    const line = (f) =>
+    const ownLine = (f) =>
       `${f.name}${f.nickname ? ` "${f.nickname}"` : ''} (${f.style}, ${f.age} ans, ${f.record}, ${f.legacyStage}) — ` +
       `Readiness ${f.readiness}, Overall ${f.overallRating}`;
+    const opponentLine = (f) =>
+      `${f.name}${f.nickname ? ` "${f.nickname}"` : ''} (${f.style}, ${f.age} ans, ${f.record}, ${f.legacyStage})\n` +
+      `  Rapport de Scouting :\n` +
+      f.scoutingReport.map((observation) => `    - ${observation}`).join('\n');
     return [
       `=== ${card.fighterA.name} vs ${card.fighterB.name}${card.isTitle ? ' — COMBAT DE TITRE' : ''} ===`,
-      line(card.fighterA),
-      line(card.fighterB),
+      ownLine(card.fighterA),
+      opponentLine(card.fighterB),
     ].join('\n');
   }
 

@@ -387,3 +387,34 @@ test('getDistanceRating is NOT adjusted by form/moral (unlike getOverallRating) 
 
   assert.equal(ratingAfterCrash, ratingAtFullForm);
 });
+
+// ---- confidence (distinct from moral) ----------------------------------------
+
+test('a new fighter starts at BALANCE.CONFIDENCE.STARTING_VALUE', () => {
+  const fighter = makeFighter();
+  assert.equal(fighter.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE);
+});
+
+test('adjustConfidence clamps to [CONFIDENCE.MIN, CONFIDENCE.MAX] and never touches moral', () => {
+  const fighter = makeFighter();
+  const moralBefore = fighter.attributes.moral;
+
+  fighter.adjustConfidence(999);
+  assert.equal(fighter.attributes.confidence, BALANCE.CONFIDENCE.MAX);
+
+  fighter.adjustConfidence(-9999);
+  assert.equal(fighter.attributes.confidence, BALANCE.CONFIDENCE.MIN);
+  assert.equal(fighter.attributes.moral, moralBefore);
+});
+
+test('confidence round-trips through toJSON/fromJSON, and an old save missing the field defaults to STARTING_VALUE', () => {
+  const fighter = makeFighter();
+  fighter.adjustConfidence(20);
+  const restored = Fighter.fromJSON(fighter.toJSON());
+  assert.equal(restored.attributes.confidence, fighter.attributes.confidence);
+
+  const legacySave = fighter.toJSON();
+  delete legacySave.attributes.confidence;
+  const fromLegacySave = Fighter.fromJSON(legacySave);
+  assert.equal(fromLegacySave.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE);
+});

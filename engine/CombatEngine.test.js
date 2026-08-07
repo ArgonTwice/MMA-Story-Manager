@@ -959,3 +959,54 @@ test('startingStaminaOverride lets a corner start weigh-in below full stamina, a
   assert.ok(Math.abs(engine.context.live.A.stamina - engine.context.live.A.staminaMax * 0.5) < 1e-9);
   assert.equal(engine.context.live.B.stamina, engine.context.live.B.staminaMax, 'B has no override and must start at full stamina as usual');
 });
+
+// ---- Confidence (distinct from moral): fight results move it, and it nudges initiative mid-fight ----
+
+test('a fighter with above-neutral confidence lands more raw damage in round 1 than an identical fighter at neutral confidence, all else equal', () => {
+  const buildAndScoreRoundOne = (confidenceA) => {
+    const a = makeFighter('A', 50, { attributes: { confidence: confidenceA } });
+    const b = makeFighter('B', 50);
+    const engine = new CombatEngine({ rng: createSeededRng(42) });
+    engine.setupMatch(a, b, 'WFC', false);
+    engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'BALANCED' });
+    engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'BALANCED' });
+    engine.executeNextStep(); // processes INIT -> WEIGH_IN
+    engine.executeNextStep(); // processes WEIGH_IN -> INTRO
+    engine.executeNextStep(); // processes INTRO -> ROUND_START
+    engine.executeNextStep(); // processes ROUND_START -> ROUND_SIMULATION (round counter only, no log yet)
+    const step = engine.executeNextStep(); // processes ROUND_SIMULATION itself -> carries the round log
+    return step.log.damageDealt.A;
+  };
+
+  const neutralDamage = buildAndScoreRoundOne(BALANCE.CONFIDENCE.STARTING_VALUE);
+  const confidentDamage = buildAndScoreRoundOne(BALANCE.CONFIDENCE.MAX);
+
+  assert.ok(confidentDamage > neutralDamage, `expected higher confidence to land more damage (neutral=${neutralDamage}, confident=${confidentDamage})`);
+});
+
+test('confidence is unaffected by moral-only events and vice versa — the two dials move independently', () => {
+  const a = makeFighter('A', 50);
+  a.adjustMorale(-40);
+  assert.equal(a.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE);
+  a.adjustConfidence(-40);
+  assert.equal(a.attributes.moral, 50 - 40);
+});
+
+test('a fight winner\'s confidence rises more from a finish than from a decision, and a loser\'s always falls', () => {
+  const winByFinish = (() => {
+    const a = makeFighter('Finisher', 90);
+    const b = makeFighter('Victim', 10);
+    const engine = new CombatEngine({ rng: createSeededRng(1) });
+    engine.setupMatch(a, b, 'WFC', false);
+    engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+    engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+    const result = engine.simulateFullMatch();
+    return { a, b, result };
+  })();
+
+  assert.ok(!DECISION_METHODS.has(winByFinish.result.method), 'sanity: expected this heavily lopsided matchup to end by finish, not decision');
+  if (winByFinish.result.winner === 'A') {
+    assert.equal(winByFinish.a.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE + BALANCE.CONFIDENCE.EVENTS.WIN_FIGHT + BALANCE.CONFIDENCE.EVENTS.WIN_FIGHT_FINISH_BONUS);
+    assert.equal(winByFinish.b.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE + BALANCE.CONFIDENCE.EVENTS.LOSE_FIGHT);
+  }
+});

@@ -120,6 +120,10 @@ function clampMorale(value) {
   return Math.min(BALANCE.MORALE.MAX, Math.max(BALANCE.MORALE.MIN, value));
 }
 
+function clampConfidence(value) {
+  return Math.min(BALANCE.CONFIDENCE.MAX, Math.max(BALANCE.CONFIDENCE.MIN, value));
+}
+
 function clampForm(value) {
   return Math.min(BALANCE.FORM.MAX, Math.max(BALANCE.FORM.MIN, value));
 }
@@ -179,6 +183,8 @@ export class Fighter {
       },
       forme: clampForm(config.attributes?.forme ?? BALANCE.FORM.STARTING_VALUE),
       moral: clampMorale(config.attributes?.moral ?? BALANCE.MORALE.STARTING_VALUE),
+      /** Ring/cage self-belief, distinct from moral (which reacts to everything — pay, injuries, drama events): confidence moves only with fight results (see CombatEngine#_processPostMatchRewards) and nudges initiative-taking mid-fight (see CombatEngine's momentum computation). Starts perfectly neutral, same "STARTING_VALUE === no effect yet" baseline as moral. */
+      confidence: clampConfidence(config.attributes?.confidence ?? BALANCE.CONFIDENCE.STARTING_VALUE),
       /** Phase 3.1 v1/v2: weekly-persisted physical load, spent/recovered by WEEKLY_PLANNING activities. See getReadiness(). */
       physicalFatigue: clampPhysicalFatigue(config.attributes?.physicalFatigue ?? BALANCE.PHYSICAL_FATIGUE.STARTING_VALUE),
       /** Phase 3.1 v2: weekly-persisted cognitive/promotional load — "Charge Mentale", spent by VIDEO_PREP/MEDIA_SPONSORS. See getReadiness(). */
@@ -702,6 +708,13 @@ export class Fighter {
   /**
    * @param {number} delta
    */
+  adjustConfidence(delta) {
+    this.attributes.confidence = clampConfidence(this.attributes.confidence + delta);
+  }
+
+  /**
+   * @param {number} delta
+   */
   adjustForm(delta) {
     this.attributes.forme = clampForm(this.attributes.forme + delta);
   }
@@ -815,6 +828,7 @@ export class Fighter {
         skills: { ...this.attributes.skills },
         forme: this.attributes.forme,
         moral: this.attributes.moral,
+        confidence: this.attributes.confidence,
         physicalFatigue: this.attributes.physicalFatigue,
         mentalFatigue: this.attributes.mentalFatigue,
       },

@@ -739,8 +739,14 @@ export class CombatEngine {
 
       if (outcome === 'win') {
         fighter.adjustMorale(wonTitle ? BALANCE.MORALE.EVENTS.WIN_TITLE : BALANCE.MORALE.EVENTS.WIN_FIGHT);
+        // Confidence rewards THIS win specifically (unlike morale, it never
+        // reacts to pay/injuries/drama) — an extra bump for winning by
+        // finish on top of the base win bonus.
+        const finishBonus = byFinish ? BALANCE.CONFIDENCE.EVENTS.WIN_FIGHT_FINISH_BONUS : 0;
+        fighter.adjustConfidence(BALANCE.CONFIDENCE.EVENTS.WIN_FIGHT + finishBonus);
       } else if (outcome === 'loss') {
         fighter.adjustMorale(BALANCE.MORALE.EVENTS.LOSE_FIGHT);
+        fighter.adjustConfidence(BALANCE.CONFIDENCE.EVENTS.LOSE_FIGHT);
       }
 
       // Vale Tudo: an extra trait/archetype-driven morale swing from having
@@ -1111,7 +1117,17 @@ export class CombatEngine {
     // (see _computeReadinessCombatModifiers), snapshotted at weigh-in —
     // additive rather than multiplicative, since a multiplicative bonus
     // would be inert for a fighter who starts the match at full momentum.
-    const momentumMultiplier = clamp(attackerLive.momentum / BALANCE.MOMENTUM.MAX + attackerLive.readinessMomentumBonus, 0, 2);
+    // confidenceMomentumBonus is the same shape, driven by
+    // attributes.confidence instead — zero for any fighter still at
+    // BALANCE.CONFIDENCE.STARTING_VALUE (a fresh Fighter's default), so it
+    // only ever nudges a fighter who has actually won or lost fights before.
+    const confidenceMomentumBonus =
+      (attacker.attributes.confidence - BALANCE.CONFIDENCE.STARTING_VALUE) * BALANCE.CONFIDENCE.MOMENTUM_BONUS_SCALE;
+    const momentumMultiplier = clamp(
+      attackerLive.momentum / BALANCE.MOMENTUM.MAX + attackerLive.readinessMomentumBonus + confidenceMomentumBonus,
+      0,
+      2
+    );
     const moraleMultiplier = this._computeMoraleMultiplier(attacker.attributes.moral);
     const staminaMultiplier =
       attackerLive.stamina <= BALANCE.COMBAT.STAMINA.LOW_STAMINA_THRESHOLD
