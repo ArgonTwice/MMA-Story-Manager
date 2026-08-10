@@ -213,6 +213,35 @@ export function getWeightClassRanking(playerState, worldState, weightClass, limi
     .slice(0, limit);
 }
 
+/**
+ * V3.6 ("Fight Week, Logistique et Preparation Predictive" item 3): the
+ * full "classement officiel" board for the gym's regional org — every
+ * BALANCE.PHYSICAL.WEIGHT_CLASSES division (both genders), each with its
+ * own Top-N ranking (see getWeightClassRanking above). A single call
+ * builds the whole board web/app.js's "Classements Officiels" modal needs,
+ * rather than the UI looping calls itself per division.
+ *
+ * @param {Object} playerState
+ * @param {Object} worldState
+ * @param {Object} [options]
+ * @param {number} [options.limit=15] - Top-N per division (spec default: Top 15).
+ * @returns {{ org: Object, byGender: { M: {id:string,label:string,ranking:Object[]}[], F: {id:string,label:string,ranking:Object[]}[] } }}
+ */
+export function getAllWeightClassRankings(playerState, worldState, { limit = 15 } = {}) {
+  const org = resolveRegionalOrg(playerState.country);
+  const byGender = {};
+
+  for (const gender of Object.keys(BALANCE.PHYSICAL.WEIGHT_CLASSES)) {
+    byGender[gender] = BALANCE.PHYSICAL.WEIGHT_CLASSES[gender].map((division) => ({
+      id: division.id,
+      label: division.label,
+      ranking: getWeightClassRanking(playerState, worldState, division.label, limit),
+    }));
+  }
+
+  return { org, byGender };
+}
+
 export default {
   getCurrentTier,
   getWinrate,
@@ -223,4 +252,5 @@ export default {
   getPromotionProgress,
   resolveRegionalOrg,
   getWeightClassRanking,
+  getAllWeightClassRankings,
 };

@@ -2526,6 +2526,90 @@ const BALANCE = {
       CHANCE_PER_LOYALTY_POINT_BELOW_THRESHOLD: 0.006,
     },
   },
+
+  // ---------------------------------------------------------------------
+  // FIGHT_WEEK — V3.6: engine/FightWeekEngine.js's fight-scheduling and
+  // pre-fight-camp/logistics layer. Signing a Combat-tab fight no longer
+  // simulates it instantly — it books a date 3-4 weeks out
+  // (MIN/MAX_WEEKS_OUT), and the gym plans for it week by week:
+  //   - CAMP_ORIENTATIONS: a weekly training-camp direction choice for the
+  //     booked fighter, applied by FightWeekEngine#applyWeeklyCampOrientation
+  //     (called from engine/ProgressionEngine.js#advanceWeek) instead of
+  //     the normal Planning-tab weekly slots for that one fighter.
+  //   - WEIGHT_CUT_CHOICES: a friendlier 3-tier relabeling of 3 of
+  //     BALANCE.WEIGH_IN.PROFILES's existing 4 keys (NATUREL/MODERE/EXTREME
+  //     — INTENSIF stays reachable only as a WEIGH_IN profile, not exposed
+  //     here) — the SAME underlying weigh-in/missed-weight mechanic
+  //     CombatEngine already resolves, just chosen earlier (fight week)
+  //     instead of at the old instant pre-fight screen.
+  //   - LOGISTICS: a genuinely new one-off transport/hotel choice, paid
+  //     for once during fight week, that nudges the booked fighter's
+  //     Fatigue/Moral (and so their Readiness, see Fighter#getReadiness())
+  //     going into the bout.
+  // ---------------------------------------------------------------------
+  FIGHT_WEEK: {
+    MIN_WEEKS_OUT: 3,
+    MAX_WEEKS_OUT: 4,
+
+    CAMP_ORIENTATIONS: {
+      SPARRING_INTENSIF: {
+        label: 'Sparring Intensif',
+        description: "Rounds intensifs contre les partenaires du gym — muscle la frappe et le sol, coute cher en fatigue physique.",
+        skillKeys: ['boxe', 'jambes', 'sol'],
+        skillGainPerWeek: 0.5,
+        physicalFatiguePerWeek: 9,
+        mentalFatiguePerWeek: 1,
+      },
+      ANALYSE_VIDEO: {
+        label: 'Analyse Video',
+        description: "Etude de l'adversaire et du gameplan — affute l'intelligence de combat, fatigue surtout mentalement.",
+        skillKeys: ['intelligence'],
+        skillGainPerWeek: 1.2,
+        physicalFatiguePerWeek: 1,
+        mentalFatiguePerWeek: 5,
+      },
+      CARDIO_FOCUS: {
+        label: 'Cardio Focus',
+        description: "Travail du souffle et de l'endurance — booste le cardio, fatigue modere.",
+        skillKeys: ['cardio'],
+        skillGainPerWeek: 1.2,
+        physicalFatiguePerWeek: 5,
+        mentalFatiguePerWeek: 2,
+      },
+    },
+    /** Default orientation a freshly-scheduled fight starts with, until the player picks one. */
+    DEFAULT_CAMP_ORIENTATION: 'ANALYSE_VIDEO',
+
+    WEIGHT_CUT_CHOICES: {
+      PRUDENT: { label: 'Prudent', profileKey: 'NATUREL', description: 'Pas de coupe de poids agressive — le plus sur, mais laisse le moins de marge de forme.' },
+      MODERE: { label: 'Modere', profileKey: 'MODERE', description: 'Une coupe raisonnable — petit risque de pesee manquee, petit gain de forme.' },
+      EXTREME: { label: 'Extreme', profileKey: 'EXTREME', description: 'Une coupe extreme — grosse prise de risque sur la pesee, mais le plus de marge de forme si elle passe.' },
+    },
+
+    LOGISTICS: {
+      ECONOMIQUE: {
+        label: 'Economique (low-cost / motel)',
+        description: 'Vol low-cost et motel bas de gamme — le moins cher, mais fatigue le combattant et plombe son moral.',
+        cost: 300,
+        physicalFatigueDelta: 8,
+        moraleDelta: -8,
+      },
+      STANDARD: {
+        label: 'Standard (vol direct / hotel 3*)',
+        description: 'Vol direct et hotel correct — cout modere, sans impact particulier.',
+        cost: 900,
+        physicalFatigueDelta: 0,
+        moraleDelta: 0,
+      },
+      LUXE: {
+        label: 'Luxe / VIP (vol business / hotel 5*)',
+        description: 'Vol Business et hotel 5 etoiles — cher, mais le combattant arrive frais et confiant.',
+        cost: 2500,
+        physicalFatigueDelta: -8,
+        moraleDelta: 10,
+      },
+    },
+  },
 };
 
 export default deepFreeze(BALANCE);

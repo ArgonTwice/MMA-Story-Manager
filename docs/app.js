@@ -48,7 +48,7 @@ import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExp
 
 import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from './engine/UndergroundEngine.js';
 import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from './engine/GymStipulations.js';
-import { recordLeagueFightResult, getPromotionProgress, resolveRegionalOrg, getWeightClassRanking } from './engine/LeagueEngine.js';
+import { recordLeagueFightResult, getPromotionProgress, resolveRegionalOrg, getWeightClassRanking, getAllWeightClassRankings } from './engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from './engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from './engine/PressConferenceEngine.js';
 import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from './engine/HallOfFameEngine.js';
@@ -56,6 +56,17 @@ import AudioEngine from './engine/AudioEngine.js';
 import { computeWeeklyMerchandisingIncome } from './engine/SocialFeedEngine.js';
 import { generateHiringPool, hireStaff } from './engine/StaffEngine.js';
 import { getScoutableGyms, sendScout, computeBuyoutFee, buyoutRivalFighter } from './engine/MercatoEngine.js';
+import {
+  scheduleFight,
+  getDaysUntilFight,
+  isFightWeek,
+  isFightDue,
+  setCampOrientation,
+  setWeightCutChoice,
+  resolveWeightCutProfileKey,
+  setLogisticsChoice,
+  cancelScheduledFight,
+} from './engine/FightWeekEngine.js';
 import {
   getNextTierUpgradeCost,
   getNextTier,
@@ -172,7 +183,6 @@ const METHOD_LABELS = Object.freeze({
 const TARGET_LABELS = Object.freeze({ HEAD: 'Tete', BODY: 'Corps', LEGS: 'Jambes' });
 const DISTANCE_LABELS = Object.freeze({ STRIKING: 'Frappe', CLINCH: 'Clinch', GROUND: 'Sol' });
 const TEMPO_LABELS = Object.freeze({ CONSERVATIVE: 'Prudent', BALANCED: 'Equilibre', AGGRESSIVE: 'Agressif' });
-const WEIGHT_CUT_LABELS = Object.freeze({ NATUREL: 'Naturel', MODERE: 'Modere', INTENSIF: 'Intensif', EXTREME: 'Extreme' });
 
 const TROPHY_ICONS = Object.freeze({
   [TROPHY_CATEGORIES.RIVALRY_OF_THE_YEAR]: '\u{2694}\u{FE0F}',
@@ -1740,6 +1750,16 @@ class WebApp {
     for (const poached of summary.poachingReport ?? []) {
       bits.push(`\u{1F6A8} ${poached.fighterName} a ete debauche par ${poached.gymName} !`);
     }
+    const scheduledFight = this.gameState.playerState.scheduledFight;
+    if (scheduledFight) {
+      if (isFightDue(scheduledFight, this.gameState.worldState.currentDay)) {
+        bits.push('\u{1F94A} Le combat programme est pret — rendez-vous dans l\'onglet Combat.');
+      } else if (isFightWeek(scheduledFight, this.gameState.worldState.currentDay)) {
+        bits.push('\u{1F9F3} La Fight Week a commence — preparez la logistique dans l\'onglet Combat.');
+      } else if (summary.fightWeekReport) {
+        bits.push(`\u{1F3CB}\u{FE0F} Camp d'entrainement : ${BALANCE.FIGHT_WEEK.CAMP_ORIENTATIONS[summary.fightWeekReport.orientationId]?.label ?? ''}.`);
+      }
+    }
     const net = Math.round(summary.economyReport.netChange);
     bits.push(`Semaine resolue — jour ${this.gameState.worldState.currentDay}. Solde net ${net >= 0 ? '+' : ''}${net}$.`);
     this._showToast(bits.join(' '));
@@ -1811,6 +1831,11 @@ class WebApp {
       return;
     }
 
+    if (this.gameState.playerState.scheduledFight) {
+      this._renderFightWeek(panel);
+      return;
+    }
+
     this._renderFightPicker(panel);
   }
 
@@ -1878,6 +1903,13 @@ class WebApp {
             ])
           )
         )
+      );
+      panel.appendChild(
+        el('button', {
+          class: 'btn btn-outline btn-block',
+          text: '\u{1F3C6} Classements Officiels (Top 15)',
+          onclick: () => this._showRankingsModal(),
+        })
       );
     }
 
@@ -1955,13 +1987,20 @@ class WebApp {
     panel.appendChild(
       el('button', {
         class: 'btn btn-gold btn-block',
-        text: 'Lancer le combat',
+        text: 'Signer le combat',
         disabled: setup.fighterId && setup.gymId && setup.opponentId ? null : 'disabled',
         onclick: () => this._startFight(),
       })
     );
   }
 
+  /**
+   * V3.6 "Fight Week": picking an opponent no longer fights instantly — it
+   * BOOKS the fight 3-4 weeks out (engine/FightWeekEngine.js#scheduleFight)
+   * and hands the Combat tab over to the Fight Week countdown/camp/
+   * logistics view (see _renderFightWeek) until that date actually
+   * arrives — see _confirmFightWeekArrival().
+   */
   _startFight() {
     const setup = this._fightOpponentSetup;
     const { playerState, worldState } = this.gameState;
@@ -1973,12 +2012,56 @@ class WebApp {
     assertNoIntraGymMatch(fighterA, fighterB, playerState);
     assertGenderMatch(fighterA, fighterB, { allowMixedGender: setup.allowMixedGender });
 
-    if (isMainEventEligible({ fighterA, fighterB, opponentGymReputation: gym?.reputation ?? 0 })) {
+    const orgId = resolveRegionalOrg(playerState.country).id;
+    const record = scheduleFight(playerState, worldState, {
+      fighterId: fighterA.identity.id,
+      gymId: gym.id,
+      opponentId: fighterB.identity.id,
+      orgId,
+      rng: this.rng,
+    });
+    const weeksOut = Math.round((record.fightDay - record.scheduledDay) / BALANCE.CALENDAR.DAYS_PER_WEEK);
+
+    this._fightOpponentSetup = null;
+    AudioEngine.playClick();
+    this._showToast(`\u{1F4C5} Combat signe contre ${fighterB.identity.name} — dans ${weeksOut} semaines.`);
+    this._renderFight();
+    this._renderTopbar();
+    this._autosave();
+  }
+
+  /**
+   * Runs once the booked fight's date has actually arrived (see
+   * _renderFightWeek's "Se rendre au combat" button, only enabled once
+   * engine/FightWeekEngine.js#isFightDue agrees). Re-validates both
+   * corners are still available (a booked opponent can have been bought
+   * out/poached/retired mid-camp) before handing off to the same press
+   * conference / launch flow the old instant-fight flow used.
+   */
+  _confirmFightWeekArrival() {
+    const { playerState, worldState } = this.gameState;
+    const scheduledFight = playerState.scheduledFight;
+    if (!scheduledFight || !isFightDue(scheduledFight, worldState.currentDay)) return;
+
+    const gym = worldState.rivalGyms.find((g) => g.id === scheduledFight.gymId);
+    const opponentEntry = (gym?.roster ?? []).find((entry) => entry.identity.id === scheduledFight.opponentId);
+    const fighterA = playerState.getFighter(scheduledFight.fighterId);
+
+    if (!gym || !opponentEntry || !fighterA || fighterA.isInjured(worldState.currentDay)) {
+      cancelScheduledFight(playerState);
+      this._showToast('\u{1F6AB} Combat annule — un des deux combattants n\'est plus disponible.');
+      this._renderFight();
+      return;
+    }
+
+    const fighterB = Fighter.fromJSON(opponentEntry);
+
+    if (isMainEventEligible({ fighterA, fighterB, opponentGymReputation: gym.reputation ?? 0 })) {
       this._showPressConferenceModal(fighterA, fighterB, gym);
       return;
     }
 
-    this._launchFight(fighterA, fighterB, gym, null);
+    this._beginScheduledFightCombat(fighterA, fighterB, gym, null);
   }
 
   _showPressConferenceModal(fighterA, fighterB, gym) {
@@ -1997,7 +2080,7 @@ class WebApp {
               onclick: () => {
                 applyPressConferenceChoice(stance.id, { fighterA, fighterB, worldState: this.gameState.worldState });
                 this._hideModal();
-                this._launchFight(fighterA, fighterB, gym, { purseMultiplier: stance.purseMultiplier });
+                this._beginScheduledFightCombat(fighterA, fighterB, gym, { purseMultiplier: stance.purseMultiplier });
               },
             }),
           ])
@@ -2005,6 +2088,14 @@ class WebApp {
       ),
     ]);
     this._showModal(content, { blocking: true });
+  }
+
+  /** Finalizes the Fight Week booking (capturing its resolved weight-cut choice) and hands off to _launchFight — the single place a scheduled fight actually becomes a live CombatEngine match. */
+  _beginScheduledFightCombat(fighterA, fighterB, gym, rules) {
+    const { playerState } = this.gameState;
+    this._pendingWeightCutProfileKey = resolveWeightCutProfileKey(playerState.scheduledFight);
+    cancelScheduledFight(playerState);
+    this._launchFight(fighterA, fighterB, gym, rules);
   }
 
   _launchFight(fighterA, fighterB, gym, rules) {
@@ -2019,8 +2110,217 @@ class WebApp {
     // opponent (B) always fights their own AI gameplan/natural weight cut
     // (see _confirmFightSetup).
     this.gameplanChoices = { A: {} };
-    this.weightCutChoices = { A: 'NATUREL' };
+    // Resolved from the Fight Week Logistique weight-cut choice (see
+    // _beginScheduledFightCombat) — falls back to NATUREL if somehow unset.
+    this.weightCutChoices = { A: this._pendingWeightCutProfileKey ?? 'NATUREL' };
+    this._pendingWeightCutProfileKey = null;
     this._renderFight();
+  }
+
+  // ---- FIGHT WEEK (V3.6: scheduling, camp orientation, logistics) -------------------
+
+  /** The Combat tab's countdown/camp-orientation view, shown for as long as PlayerState#scheduledFight is set (see _renderFight). */
+  _renderFightWeek(panel) {
+    const { playerState, worldState } = this.gameState;
+    const scheduledFight = playerState.scheduledFight;
+    const gym = worldState.rivalGyms.find((g) => g.id === scheduledFight.gymId);
+    const opponentEntry = (gym?.roster ?? []).find((entry) => entry.identity.id === scheduledFight.opponentId);
+    const fighterA = playerState.getFighter(scheduledFight.fighterId);
+
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F4C5} Fight Week' }));
+
+    if (!gym || !opponentEntry || !fighterA) {
+      panel.appendChild(el('p', { text: 'Ce combat n\'est plus possible — un des deux combattants n\'est plus disponible.' }));
+      panel.appendChild(
+        el('button', {
+          class: 'btn btn-danger btn-block',
+          text: 'Annuler le combat',
+          onclick: () => {
+            cancelScheduledFight(playerState);
+            this._showToast('\u{1F6AB} Combat annule.');
+            this._renderFight();
+          },
+        })
+      );
+      return;
+    }
+
+    const opponent = Fighter.fromJSON(opponentEntry);
+    const daysLeft = getDaysUntilFight(scheduledFight, worldState.currentDay);
+    const fightWeek = isFightWeek(scheduledFight, worldState.currentDay);
+    const due = isFightDue(scheduledFight, worldState.currentDay);
+
+    panel.appendChild(
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: `${fighterA.identity.name} vs ${opponent.identity.name}` }),
+        el('p', { class: 'fighter-meta', text: `${gym.name ?? gym.id} — ${opponent.identity.style} — ${opponent.career.wins}-${opponent.career.losses}-${opponent.career.draws}` }),
+        el('p', { text: due ? 'Le combat peut avoir lieu.' : `Combat dans ${daysLeft} jour(s).` }),
+      ])
+    );
+
+    if (!fightWeek) {
+      const orientation = BALANCE.FIGHT_WEEK.CAMP_ORIENTATIONS[scheduledFight.campOrientation];
+      panel.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card-title', text: '\u{1F3CB}\u{FE0F} Orientation du Camp d\'Entrainement' }),
+          el(
+            'div',
+            { class: 'slot-row' },
+            Object.entries(BALANCE.FIGHT_WEEK.CAMP_ORIENTATIONS).map(([id, def]) =>
+              el('button', {
+                class: `activity-chip${scheduledFight.campOrientation === id ? ' selected' : ''}`,
+                text: def.label,
+                onclick: () => {
+                  setCampOrientation(playerState, id);
+                  this._renderFight();
+                },
+              })
+            )
+          ),
+          el('p', { class: 'fighter-meta', text: orientation?.description ?? '' }),
+        ])
+      );
+    } else {
+      panel.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card-title', text: '\u{1F9F3} Fight Week Logistique' }),
+          el('p', {
+            class: 'fighter-meta',
+            text: `Coupe de poids : ${scheduledFight.weightCutChoice ? BALANCE.FIGHT_WEEK.WEIGHT_CUT_CHOICES[scheduledFight.weightCutChoice].label : 'Non choisie'} — Logistique : ${scheduledFight.logisticsChoice ? BALANCE.FIGHT_WEEK.LOGISTICS[scheduledFight.logisticsChoice].label : 'Non choisie'}`,
+          }),
+          el('button', {
+            class: 'btn btn-outline btn-block',
+            text: '\u{1F9F3} Preparer le Fight Week',
+            onclick: () => this._showFightWeekLogistiqueModal(),
+          }),
+        ])
+      );
+    }
+
+    panel.appendChild(
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: 'Se rendre au combat',
+        disabled: due ? null : 'disabled',
+        onclick: () => this._confirmFightWeekArrival(),
+      })
+    );
+  }
+
+  /** The pre-fight logistics modal — weight cut (relabeled WEIGH_IN profiles) plus the one-off transport/hotel choice. Reachable once fight week starts (see _renderFightWeek). */
+  _showFightWeekLogistiqueModal() {
+    const { playerState } = this.gameState;
+    const scheduledFight = playerState.scheduledFight;
+    if (!scheduledFight) {
+      this._hideModal();
+      return;
+    }
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F9F3} Fight Week Logistique' }),
+
+      el(
+        'div',
+        { class: 'card' },
+        [
+          el('div', { class: 'card-title', text: 'Coupe de poids' }),
+          ...Object.entries(BALANCE.FIGHT_WEEK.WEIGHT_CUT_CHOICES).map(([id, def]) =>
+            el('div', { class: 'list-row' }, [
+              el('div', {}, [
+                el('div', { class: 'list-row-label', text: def.label + (scheduledFight.weightCutChoice === id ? ' ✓' : '') }),
+                el('div', { class: 'fighter-meta', text: def.description }),
+              ]),
+              el('button', {
+                class: `btn btn-sm ${scheduledFight.weightCutChoice === id ? 'btn-gold' : 'btn-outline'}`,
+                text: 'Choisir',
+                onclick: () => {
+                  setWeightCutChoice(playerState, id);
+                  this._showFightWeekLogistiqueModal();
+                },
+              }),
+            ])
+          ),
+        ]
+      ),
+
+      el(
+        'div',
+        { class: 'card' },
+        [
+          el('div', { class: 'card-title', text: 'Transport & Hebergement' }),
+          ...Object.entries(BALANCE.FIGHT_WEEK.LOGISTICS).map(([id, def]) =>
+            el('div', { class: 'list-row' }, [
+              el('div', {}, [
+                el('div', {
+                  class: 'list-row-label',
+                  text: `${def.label} — ${def.cost.toLocaleString('fr-FR')}$${scheduledFight.logisticsChoice === id ? ' ✓' : ''}`,
+                }),
+                el('div', { class: 'fighter-meta', text: def.description }),
+              ]),
+              el('button', {
+                class: `btn btn-sm ${scheduledFight.logisticsChoice === id ? 'btn-gold' : 'btn-outline'}`,
+                text: scheduledFight.logisticsChoice ? (scheduledFight.logisticsChoice === id ? 'Choisi' : 'Indisponible') : 'Choisir',
+                disabled: scheduledFight.logisticsChoice ? 'disabled' : null,
+                onclick: () => {
+                  const result = setLogisticsChoice(playerState, id);
+                  if (result.success) {
+                    AudioEngine.playCash();
+                    this._showToast(`\u{1F9F3} Logistique ${def.label} reservee (${result.cost.toLocaleString('fr-FR')}$).`);
+                    this._renderTopbar();
+                  } else if (result.reason === 'INSUFFICIENT_FUNDS') {
+                    this._showToast('\u{26A0}\u{FE0F} Fonds insuffisants pour cette option.');
+                  }
+                  this._showFightWeekLogistiqueModal();
+                },
+              }),
+            ])
+          ),
+        ]
+      ),
+
+      el('button', {
+        class: 'btn btn-outline btn-block',
+        text: 'Fermer',
+        onclick: () => {
+          this._hideModal();
+          this._renderFight();
+        },
+      }),
+    ]);
+    this._showModal(content);
+  }
+
+  /** V3.6 item 3: the full "Classements Officiels" board — Top 15 for every weight-class division, both genders, in the gym's regional org (see engine/LeagueEngine.js#getAllWeightClassRankings). */
+  _showRankingsModal() {
+    const { playerState, worldState } = this.gameState;
+    const board = getAllWeightClassRankings(playerState, worldState, { limit: 15 });
+    const genderLabels = { M: 'Hommes', F: 'Femmes' };
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `\u{1F3C6} Classements Officiels — ${board.org.label}` }),
+      ...Object.entries(board.byGender).flatMap(([gender, divisions]) => [
+        el('h3', { class: 'section-title', text: genderLabels[gender] ?? gender }),
+        ...divisions.map((division) =>
+          el('div', { class: 'card' }, [
+            el('div', { class: 'card-title', text: division.label }),
+            division.ranking.length === 0
+              ? el('p', { class: 'fighter-meta', text: 'Aucun combattant recense dans cette categorie.' })
+              : el(
+                  'div',
+                  {},
+                  division.ranking.map((entry, index) =>
+                    el('div', { class: 'list-row' }, [
+                      el('span', { class: 'list-row-label', text: `#${index + 1} ${entry.name} (${entry.gymName})` }),
+                      el('span', { class: 'list-row-value', text: `${entry.overallRating} — ${entry.record}` }),
+                    ])
+                  )
+                ),
+          ])
+        ),
+      ]),
+      el('button', { class: 'btn btn-gold btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
   }
 
   // ---- UNDERGROUND CIRCUIT (Phase Underground) ---------------------------------------
@@ -2333,23 +2633,9 @@ class WebApp {
 
     const card = el('div', { class: 'card' }, [el('div', { class: 'card-title', text: `Coin A — ${this.fightCard?.fighterA?.name ?? 'Vous'}` })]);
 
-    card.appendChild(el('p', { class: 'fighter-meta', text: 'Coupe de poids' }));
-    card.appendChild(
-      el(
-        'div',
-        { class: 'slot-row' },
-        Object.keys(WEIGHT_CUT_LABELS).map((profileKey) =>
-          el('button', {
-            class: `activity-chip${this.weightCutChoices.A === profileKey ? ' selected' : ''}`,
-            text: WEIGHT_CUT_LABELS[profileKey],
-            onclick: () => {
-              this.weightCutChoices = { ...this.weightCutChoices, A: profileKey };
-              this._renderFight();
-            },
-          })
-        )
-      )
-    );
+    // Weight cut is now decided during Fight Week (see _showFightWeekLogistiqueModal)
+    // — this.weightCutChoices.A was already resolved from that choice in _launchFight.
+    card.appendChild(el('p', { class: 'fighter-meta', text: `Coupe de poids (choisie en Fight Week) : ${this.weightCutChoices.A}` }));
 
     card.appendChild(el('p', { class: 'fighter-meta', text: 'Cible' }));
     card.appendChild(this._gameplanChipRow('A', 'target', TARGET_LABELS));

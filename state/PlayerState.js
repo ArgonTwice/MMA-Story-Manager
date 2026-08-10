@@ -48,6 +48,10 @@ export const PLAYER_EVENTS = Object.freeze({
   SUBSCRIBERS_CHANGED: 'community:subscribers_changed',
   /** The "Filmer les combattants" toggle was flipped. */
   FILMING_TOGGLED: 'community:filming_toggled',
+  /** engine/FightWeekEngine.js: a Combat-tab fight was booked (scheduled), updated (camp/weight-cut/logistics choice), or cleared (fought, or cancelled). */
+  FIGHT_SCHEDULED: 'fightWeek:scheduled',
+  FIGHT_SCHEDULE_UPDATED: 'fightWeek:schedule_updated',
+  FIGHT_SCHEDULE_CLEARED: 'fightWeek:schedule_cleared',
 });
 
 let idCounter = 0;
@@ -127,6 +131,16 @@ export class PlayerState {
     this.subscribers = config.subscribers ?? BALANCE.COMMUNITY_MANAGER.STARTING_SUBSCRIBERS;
     /** "Filmer les combattants" toggle: boosts subscriber growth/merchandising income, but costs morale for Introverti fighters (see engine/SocialFeedEngine.js#applyFilmingMoralePenalty). Off by default. */
     this.filmingEnabled = config.filmingEnabled ?? false;
+
+    /**
+     * engine/FightWeekEngine.js: the gym's one currently-booked Combat-tab
+     * fight, or null if none is booked. Shape: { fighterId, gymId,
+     * opponentId, orgId, isTitle, rules, scheduledDay, fightDay,
+     * campOrientation, campLog, weightCutChoice, logisticsChoice }. Only
+     * one booking at a time — see setScheduledFight(). Underground Circuit
+     * challenges never go through this (they stay instant).
+     */
+    this.scheduledFight = config.scheduledFight ? { ...config.scheduledFight } : null;
   }
 
   // ---- roster -----------------------------------------------------------
@@ -456,6 +470,41 @@ export class PlayerState {
     EventBus.publish(PLAYER_EVENTS.FILMING_TOGGLED, { enabled: this.filmingEnabled });
   }
 
+  // ---- fight week (V3.6) -------------------------------------------------------
+
+  /**
+   * Books a new Combat-tab fight, replacing any previous booking. Pure
+   * bookkeeping — engine/FightWeekEngine.js#scheduleFight builds the record
+   * this method stores; this class never invents scheduling data itself.
+   * @param {Object} fight - See this.scheduledFight's own shape note above.
+   * @returns {Object} The stored record.
+   */
+  setScheduledFight(fight) {
+    this.scheduledFight = { ...fight };
+    EventBus.publish(PLAYER_EVENTS.FIGHT_SCHEDULED, { scheduledFight: this.scheduledFight });
+    return this.scheduledFight;
+  }
+
+  /**
+   * Shallow-merges `changes` into the current booking (e.g. this week's
+   * camp orientation, or the final week's weight-cut/logistics choice).
+   * No-ops if nothing is currently booked.
+   * @param {Object} changes
+   * @returns {Object|null} The updated record, or null if nothing is booked.
+   */
+  updateScheduledFight(changes) {
+    if (!this.scheduledFight) return null;
+    this.scheduledFight = { ...this.scheduledFight, ...changes };
+    EventBus.publish(PLAYER_EVENTS.FIGHT_SCHEDULE_UPDATED, { scheduledFight: this.scheduledFight });
+    return this.scheduledFight;
+  }
+
+  /** Clears the current booking (fight actually fought, or cancelled). */
+  clearScheduledFight() {
+    this.scheduledFight = null;
+    EventBus.publish(PLAYER_EVENTS.FIGHT_SCHEDULE_CLEARED, {});
+  }
+
   // ---- social feed ------------------------------------------------------------
 
   /**
@@ -507,6 +556,7 @@ export class PlayerState {
       unlockedBadges: [...this.unlockedBadges],
       subscribers: this.subscribers,
       filmingEnabled: this.filmingEnabled,
+      scheduledFight: this.scheduledFight ? { ...this.scheduledFight } : null,
     };
   }
 

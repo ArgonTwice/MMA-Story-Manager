@@ -28,6 +28,7 @@ import { degradeEquipmentWeekly } from './GymInfrastructure.js';
 import { advanceWeeksAtGym } from './ScoutingEngine.js';
 import { processWeeklyCommunityManagement } from './SocialFeedEngine.js';
 import { rollWeeklyPoaching } from './MercatoEngine.js';
+import { applyWeeklyCampOrientation } from './FightWeekEngine.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -290,6 +291,11 @@ export function advanceWeek(gameState, options = {}) {
   const trainingReport = processWeeklyTraining(playerState, worldState, { rng });
   const economyReport = processWeeklyExpenses(playerState);
 
+  // V3.6 "Fight Week": while a Combat-tab fight is booked and it isn't
+  // fight week yet, the booked fighter's chosen Training Camp orientation
+  // applies instead of (on top of) their normal weekly training gains.
+  const fightWeekReport = applyWeeklyCampOrientation(playerState, worldState);
+
   // Phase F ("Staff Engine, Fog of War, League Pyramid, Infrastructure"):
   // Head Coach's weekly morale bump, staff ego/relationship conflicts,
   // equipment wear, and the Fog of War's per-fighter weeksAtGym counter all
@@ -331,6 +337,7 @@ export function advanceWeek(gameState, options = {}) {
     year: worldState.year,
     trainingReport,
     economyReport,
+    fightWeekReport,
     staffReport,
     communityManagerReport,
     narrativeReport,

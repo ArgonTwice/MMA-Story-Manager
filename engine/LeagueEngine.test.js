@@ -20,6 +20,7 @@ import {
   getPromotionProgress,
   resolveRegionalOrg,
   getWeightClassRanking,
+  getAllWeightClassRankings,
 } from './LeagueEngine.js';
 
 test('a fresh gym starts in the bottom tier (LOCAL_UNDERGROUND) with a 1x purse/passive-income multiplier', () => {
@@ -178,4 +179,39 @@ test('getWeightClassRanking respects the limit parameter', () => {
   }
   const ranking = getWeightClassRanking(playerState, worldState, 'Poids Welter', 2);
   assert.equal(ranking.length, 2);
+});
+
+test('getAllWeightClassRankings returns every M/F division for the resolved org, defaulting to a Top 15 each', () => {
+  const playerState = new PlayerState({ gymName: 'My Gym', money: 25000, country: 'France' });
+  const worldState = new WorldState();
+  playerState.addFighter(new Fighter({ identity: { name: 'Fighter M', gender: 'M', weightClass: 'Poids Welter' } }));
+  playerState.addFighter(new Fighter({ identity: { name: 'Fighter F', gender: 'F', weightClass: 'Poids Paille' } }));
+
+  const board = getAllWeightClassRankings(playerState, worldState);
+
+  assert.equal(board.org.id, resolveRegionalOrg('France').id);
+  assert.equal(board.byGender.M.length, BALANCE.PHYSICAL.WEIGHT_CLASSES.M.length);
+  assert.equal(board.byGender.F.length, BALANCE.PHYSICAL.WEIGHT_CLASSES.F.length);
+
+  const welter = board.byGender.M.find((division) => division.label === 'Poids Welter');
+  assert.equal(welter.ranking.length, 1);
+  assert.equal(welter.ranking[0].name, 'Fighter M');
+
+  const paille = board.byGender.F.find((division) => division.label === 'Poids Paille');
+  assert.equal(paille.ranking.length, 1);
+  assert.equal(paille.ranking[0].name, 'Fighter F');
+
+  const empty = board.byGender.M.find((division) => division.label === 'Poids Lourd');
+  assert.deepEqual(empty.ranking, []);
+});
+
+test('getAllWeightClassRankings respects a custom limit', () => {
+  const playerState = new PlayerState({ gymName: 'My Gym', money: 25000 });
+  const worldState = new WorldState();
+  for (let i = 0; i < 5; i += 1) {
+    playerState.addFighter(new Fighter({ identity: { name: `Fighter ${i}`, weightClass: 'Poids Welter' } }));
+  }
+  const board = getAllWeightClassRankings(playerState, worldState, { limit: 2 });
+  const welter = board.byGender.M.find((division) => division.label === 'Poids Welter');
+  assert.equal(welter.ranking.length, 2);
 });
