@@ -34,7 +34,7 @@ import { SocialEngine } from '../engine/SocialEngine.js';
 
 import { generateAcademyPool, isAcademyDraftAvailable } from '../engine/AcademyEngine.js';
 import { generateRecruitmentPool, generateRivalGymStarterRoster } from '../engine/DraftEngine.js';
-import { assertNoIntraGymMatch } from '../engine/Matchmaking.js';
+import { assertNoIntraGymMatch, isGenderMatch, assertGenderMatch } from '../engine/Matchmaking.js';
 import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from '../engine/StoryAnalyzer.js';
 
 import { GymHub } from '../ui/GymHub.js';
@@ -48,12 +48,14 @@ import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExp
 
 import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from '../engine/UndergroundEngine.js';
 import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from '../engine/GymStipulations.js';
-import { recordLeagueFightResult, getPromotionProgress } from '../engine/LeagueEngine.js';
+import { recordLeagueFightResult, getPromotionProgress, resolveRegionalOrg, getWeightClassRanking } from '../engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from '../engine/PressConferenceEngine.js';
 import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from '../engine/HallOfFameEngine.js';
 import AudioEngine from '../engine/AudioEngine.js';
+import { computeWeeklyMerchandisingIncome } from '../engine/SocialFeedEngine.js';
 import { generateHiringPool, hireStaff } from '../engine/StaffEngine.js';
+import { getScoutableGyms, sendScout, computeBuyoutFee, buyoutRivalFighter } from '../engine/MercatoEngine.js';
 import {
   getNextTierUpgradeCost,
   getNextTier,
@@ -65,101 +67,38 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 
-// ---- Underground Circuit: challenge catalog (Phase Underground) -----------------
-
-const UNDERGROUND_FILTERS = Object.freeze([
-  { key: 'ALL', label: 'Tous' },
-  { key: 'MODE', label: 'Modes' },
-  { key: 'RULESET', label: 'Regles Speciales' },
-  { key: 'STIPULATION', label: 'Enjeux Gym' },
-]);
+// ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
 /**
- * Preset challenge cards the player picks from — each one is a fixed
- * (mode, ruleset, stipulation) combination rather than a free-form builder,
- * matching the spec's own "selecteur de defis avec cartes d'affrontements."
- * Only `mode` OR `stipulation` alone actually needs a rival-gym opponent
- * fought at all — a pure ruleset card still needs one too, Underground
- * fights always being against a rival gym (see _renderUndergroundSetupModal).
+ * V3.5 refonte: "Une seule ligue clandestine mondiale permanente, sans
+ * regles exotiques, victoire uniquement par KO ou Soumission." Every
+ * remaining challenge — including the optional gym-stakes wagers below —
+ * now forces the exact same fixed ruleset (UNDERGROUND_RULESETS.KO_NO_JUDGES:
+ * no judges' decision, a finish is the only way to win) and NEVER a `mode`
+ * (Vale Tudo's purse/injury multipliers, Open Weight's cross-category
+ * bonus, and Gauntlet's multi-fight survival format are all gone — those
+ * were the "regles exotiques"). engine/UndergroundEngine.js's own
+ * VALE_TUDO/OPEN_WEIGHT/GAUNTLET/SUBMISSION_ONLY/STRIKING_STANDUP exports
+ * are intentionally left in place (still tested, just unreachable from this
+ * UI) rather than deleted — the safest way to shrink the picker without
+ * touching engine code that other tests still exercise directly.
  */
 const UNDERGROUND_CHALLENGES = Object.freeze([
   {
-    id: 'VALE_TUDO',
-    category: 'MODE',
-    mode: UNDERGROUND_MODES.VALE_TUDO,
-    ruleset: null,
-    stipulation: null,
-    icon: '\u{1FA78}',
-    title: 'Vale Tudo',
-    desc: 'Combat sans limite de rounds. Risque de blessure x3, primes x3.',
-    badgeLabel: 'RISQUE ELEVE',
-    badgeClass: 'badge-red',
-  },
-  {
-    id: 'GAUNTLET',
-    category: 'MODE',
-    mode: UNDERGROUND_MODES.GAUNTLET,
-    ruleset: null,
-    stipulation: null,
-    icon: '\u{2694}\u{FE0F}',
-    title: 'Gauntlet Survival',
-    desc: '3 a 5 combats consecutifs contre le roster d\'un gym rival, recuperation partielle de stamina entre chaque.',
-    badgeLabel: 'ENDURANCE',
-    badgeClass: 'badge-orange',
-  },
-  {
-    id: 'OPEN_WEIGHT',
-    category: 'MODE',
-    mode: UNDERGROUND_MODES.OPEN_WEIGHT,
-    ruleset: null,
-    stipulation: null,
-    icon: '\u{2696}\u{FE0F}',
-    title: 'Open Weight',
-    desc: 'Aucune restriction de categorie. Bourse bonus en cas de victoire David contre Goliath.',
-    badgeLabel: 'DAVID VS GOLIATH',
-    badgeClass: 'badge-blue',
-  },
-  {
-    id: 'SUBMISSION_ONLY',
-    category: 'RULESET',
-    mode: null,
-    ruleset: UNDERGROUND_RULESETS.SUBMISSION_ONLY,
-    stipulation: null,
-    icon: '\u{1F512}',
-    title: 'Submission Only',
-    desc: 'Victoire uniquement par soumission — les degats de frappe reduisent la resistance au sol.',
-    badgeLabel: 'SUBMISSION ONLY',
-    badgeClass: 'badge-purple',
-  },
-  {
-    id: 'KO_NO_JUDGES',
-    category: 'RULESET',
+    id: 'UNDERGROUND_MONDIAL',
     mode: null,
     ruleset: UNDERGROUND_RULESETS.KO_NO_JUDGES,
     stipulation: null,
-    icon: '\u{1F94A}',
-    title: 'KO / No Judges',
-    desc: 'Aucune decision aux points. Match nul sans prime si personne n\'est fini.',
-    badgeLabel: 'KO OBLIGATOIRE',
-    badgeClass: 'badge-purple',
-  },
-  {
-    id: 'STRIKING_STANDUP',
-    category: 'RULESET',
-    mode: null,
-    ruleset: UNDERGROUND_RULESETS.STRIKING_STANDUP,
-    stipulation: null,
-    icon: '\u{1F9CD}',
-    title: 'Striking Standup',
-    desc: 'Amener au sol desactive. Combat 100% debout.',
-    badgeLabel: 'DEBOUT UNIQUEMENT',
+    icon: '\u{1F977}',
+    title: 'Underground Mondial',
+    desc: 'La ligue clandestine mondiale — combat standard, victoire uniquement par KO/TKO ou soumission.',
+    badgeLabel: 'KO / SOUMISSION',
     badgeClass: 'badge-purple',
   },
   {
     id: 'GYM_TAKEOVER',
-    category: 'STIPULATION',
     mode: null,
-    ruleset: null,
+    ruleset: UNDERGROUND_RULESETS.KO_NO_JUDGES,
     stipulation: GYM_STIPULATIONS.GYM_TAKEOVER,
     icon: '\u{1F3DA}\u{FE0F}',
     title: 'Gym Takeover',
@@ -169,9 +108,8 @@ const UNDERGROUND_CHALLENGES = Object.freeze([
   },
   {
     id: 'COACHS_HONOUR',
-    category: 'STIPULATION',
     mode: null,
-    ruleset: null,
+    ruleset: UNDERGROUND_RULESETS.KO_NO_JUDGES,
     stipulation: GYM_STIPULATIONS.COACHS_HONOUR,
     icon: '\u{1F396}\u{FE0F}',
     title: "Coach's Honour",
@@ -181,9 +119,8 @@ const UNDERGROUND_CHALLENGES = Object.freeze([
   },
   {
     id: 'PINK_SLIP',
-    category: 'STIPULATION',
     mode: null,
-    ruleset: null,
+    ruleset: UNDERGROUND_RULESETS.KO_NO_JUDGES,
     stipulation: GYM_STIPULATIONS.PINK_SLIP,
     icon: '\u{1F4C4}',
     title: 'Pink Slip',
@@ -193,9 +130,8 @@ const UNDERGROUND_CHALLENGES = Object.freeze([
   },
   {
     id: 'SPONSORSHIP_RAID',
-    category: 'STIPULATION',
     mode: null,
-    ruleset: null,
+    ruleset: UNDERGROUND_RULESETS.KO_NO_JUDGES,
     stipulation: GYM_STIPULATIONS.SPONSORSHIP_RAID,
     icon: '\u{1F4B0}',
     title: 'Sponsorship Raid',
@@ -263,6 +199,14 @@ const STYLE_AVATARS = Object.freeze({
   Freestyle: '\u{1F300}',
   Kickboxing: '\u{1F9B6}',
 });
+
+/** French "1m78" height display — V3.5, see Fighter#identity.heightCm/engine/FighterGenerator.js#generatePhysicalProfile. */
+function formatHeightCm(heightCm) {
+  if (!heightCm) return '';
+  const meters = Math.floor(heightCm / 100);
+  const centimeters = String(heightCm % 100).padStart(2, '0');
+  return `${meters}m${centimeters}`;
+}
 
 /** Trend-arrow thresholds for the profile's Forme/Moral week-over-week delta — UI-only, mirrors gaugeClass()'s own local-threshold precedent. */
 function trendArrow(delta) {
@@ -387,8 +331,6 @@ class WebApp {
     this._isBrandNewGame = false;
     /** 'normal' | 'underground' — which sub-tab the Combat panel shows (see _renderFight()). */
     this.fightTab = 'normal';
-    /** Which UNDERGROUND_FILTERS category is active on the Underground hub. */
-    this.undergroundFilter = 'ALL';
     /** In-progress Underground Circuit setup ({ challenge, fighterId, gymId, opponentId }), or null — see _showUndergroundSetupModal(). Runtime-only, never persisted. */
     this._undergroundSetup = null;
     /** The permanent Recrutement market's currently-open pool ({ fighter, cost }[]) — regenerated each time the modal opens, see _showRecruitmentMarketModal(). */
@@ -440,6 +382,7 @@ class WebApp {
       slotList: document.getElementById('slotList'),
       newGymName: document.getElementById('newGymName'),
       newGymCountry: document.getElementById('newGymCountry'),
+      managerBackgroundChoice: document.getElementById('managerBackgroundChoice'),
       tbGymName: document.getElementById('tbGymName'),
       tbDay: document.getElementById('tbDay'),
       tbMoney: document.getElementById('tbMoney'),
@@ -474,6 +417,7 @@ class WebApp {
           gymName: this.dom.newGymName.value || undefined,
           country: this.dom.newGymCountry.value || undefined,
         });
+        this._applyManagerBackground();
         // Seeded with a starting roster (not the default empty one) so a
         // fresh game has a legal opponent from Day 1: engine/Matchmaking.js
         // now forbids a competitive bout between two of the player's own
@@ -530,6 +474,24 @@ class WebApp {
         );
       }
     });
+  }
+
+  /**
+   * V3.5: applies exactly one BALANCE.MANAGER_BACKGROUNDS bonus, read from
+   * the checked radio in the "Nouvelle Partie" form — called once, right
+   * after gameState.newGame() constructs a fresh PlayerState. Each
+   * background hands out a single kind of bonus (money/hype/reputation),
+   * never combined.
+   */
+  _applyManagerBackground() {
+    const checked = this.dom.managerBackgroundChoice.querySelector('input[name="managerBackground"]:checked');
+    const background = BALANCE.MANAGER_BACKGROUNDS[checked?.value];
+    if (!background) return;
+
+    const { playerState } = this.gameState;
+    if (background.moneyBonus) playerState.changeMoney(background.moneyBonus, `MANAGER_BACKGROUND:${background.id}`);
+    if (background.hypeBonus) playerState.changeHype(background.hypeBonus, `MANAGER_BACKGROUND:${background.id}`);
+    if (background.reputationBonus) playerState.changeReputation(background.reputationBonus, `MANAGER_BACKGROUND:${background.id}`);
   }
 
   _wireNav() {
@@ -628,7 +590,6 @@ class WebApp {
     this.fightSetupDone = false;
     this.academyPool = [];
     this.fightTab = 'normal';
-    this.undergroundFilter = 'ALL';
     this._undergroundSetup = null;
 
     this._yearChangedPending = false;
@@ -767,6 +728,32 @@ class WebApp {
           text: '\u{1F4CB} Recruter du staff',
           onclick: () => this._showStaffHiringModal(),
         }),
+      ])
+    );
+
+    const communityPlayerState = this.gameState.playerState;
+    panel.appendChild(
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4F1} Community Manager' }),
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Abonnes' }),
+          el('span', { class: 'list-row-value', text: Math.round(communityPlayerState.subscribers).toLocaleString('fr-FR') }),
+        ]),
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Revenus merchandising (est. hebdo)' }),
+          el('span', { class: 'list-row-value', text: `+${Math.round(computeWeeklyMerchandisingIncome(communityPlayerState)).toLocaleString('fr-FR')}$` }),
+        ]),
+        el('label', { class: 'checkbox-row' }, [
+          el('input', {
+            type: 'checkbox',
+            checked: communityPlayerState.filmingEnabled ? 'checked' : null,
+            onchange: (event) => {
+              communityPlayerState.setFilmingEnabled(event.target.checked);
+              this._renderHub();
+            },
+          }),
+          ' Filmer les combattants (plus d\'abonnes/revenus, mais coute du moral aux combattants Introvertis)',
+        ]),
       ])
     );
 
@@ -963,7 +950,7 @@ class WebApp {
 
   _showStaffHiringModal() {
     const playerState = this.gameState.playerState;
-    if (!this._staffHiringPool) this._staffHiringPool = generateHiringPool({ rng: this.rng });
+    if (!this._staffHiringPool) this._staffHiringPool = generateHiringPool({ reputation: playerState.reputation, rng: this.rng });
     const pool = this._staffHiringPool;
     const specialtyLabel = { STRIKING: 'Frappe', GRAPPLING: 'Grappling' };
 
@@ -1138,6 +1125,14 @@ class WebApp {
       })
     );
 
+    panel.appendChild(
+      el('button', {
+        class: 'btn btn-outline btn-block',
+        text: '\u{1F575}\u{FE0F} Mercato & Debauchage',
+        onclick: () => this._showMercatoModal(),
+      })
+    );
+
     for (const fighter of roster) {
       panel.appendChild(this._buildRosterDetailCard(fighter));
     }
@@ -1206,6 +1201,152 @@ class WebApp {
     AudioEngine.playCash();
     this._showToast(`\u{1F4DD} ${fighter.identity.name} signe au gym (${weeklySalary.toLocaleString('fr-FR')}$/semaine).`);
     this._renderRecruitmentMarketModal();
+    this._renderTopbar();
+    this._autosave();
+  }
+
+  // ---- MERCATO (V3.5: scouting + rival buyouts) ------------------------------
+
+  _showMercatoModal() {
+    this._renderMercatoModal();
+  }
+
+  _renderMercatoModal() {
+    const playerState = this.gameState.playerState;
+    const worldState = this.gameState.worldState;
+    const scoutCfg = BALANCE.MERCATO.SCOUT;
+    const scoutableGyms = getScoutableGyms(worldState.rivalGyms);
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: '\u{1F575}\u{FE0F} Mercato & Debauchage' }),
+
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Envoyer un Detecteur' }),
+        el('p', { text: `Payez ${scoutCfg.COST}$ pour denicher 1 a 3 jeunes rookies (18-23 ans) dans un petit club — libres a signer, sans frais de recrutement.` }),
+        scoutableGyms.length === 0 ? el('p', { class: 'fighter-meta', text: 'Aucun petit club a explorer pour le moment.' }) : null,
+        el('button', {
+          class: 'btn btn-gold btn-block',
+          text: `Envoyer un Detecteur (${scoutCfg.COST}$)`,
+          disabled: scoutableGyms.length > 0 && playerState.money >= scoutCfg.COST ? null : 'disabled',
+          onclick: () => this._sendMercatoScout(),
+        }),
+      ]),
+
+      ...(this._scoutedRookies && this._scoutedRookies.length > 0
+        ? [
+            el('div', { class: 'card' }, [
+              el('div', { class: 'card-title', text: 'Rookies deniches' }),
+              ...this._scoutedRookies.map((rookie) => this._buildScoutedRookieCard(rookie)),
+            ]),
+          ]
+        : []),
+
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: 'Racheter un combattant rival' }),
+        worldState.rivalGyms.length === 0
+          ? el('p', { text: 'Aucun gym rival recense.' })
+          : el(
+              'div',
+              {},
+              worldState.rivalGyms.map((gym) => this._buildMercatoRivalGymBlock(gym))
+            ),
+      ]),
+
+      el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _buildScoutedRookieCard(rookie) {
+    const { playerState } = this.gameState;
+    const rosterFull = playerState.roster.length >= playerState.getRosterCapacity();
+    return el('div', { class: 'fighter-card' }, [
+      el('div', { class: 'fighter-head' }, [
+        el('div', {}, [
+          el('div', { class: 'fighter-name', text: rookie.identity.name }),
+          el('div', { class: 'fighter-meta', text: `${rookie.identity.style} — ${rookie.identity.age} ans — Note ${rookie.getOverallRating()}` }),
+        ]),
+      ]),
+      el('button', {
+        class: 'btn btn-gold btn-sm',
+        text: 'Signer (libre)',
+        disabled: rosterFull ? 'disabled' : null,
+        onclick: () => this._signScoutedRookie(rookie),
+      }),
+    ]);
+  }
+
+  _buildMercatoRivalGymBlock(gym) {
+    const { playerState } = this.gameState;
+    const roster = (gym.roster ?? []).map((entry) => Fighter.fromJSON(entry));
+
+    return el('div', { class: 'card' }, [
+      el('div', { class: 'card-title', text: `${gym.name ?? gym.id} — Reputation ${Math.round(gym.reputation ?? 0)}` }),
+      roster.length === 0
+        ? el('p', { class: 'fighter-meta', text: 'Effectif vide.' })
+        : el(
+            'div',
+            {},
+            roster.map((fighter) => {
+              const fee = computeBuyoutFee(fighter);
+              const affordable = playerState.money >= fee && playerState.roster.length < playerState.getRosterCapacity();
+              return el('div', { class: 'list-row' }, [
+                el('span', {
+                  class: 'list-row-label',
+                  text: `${fighter.identity.name}${fighter.isChampion() ? ' \u{1F3C6}' : ''} — Note ${fighter.getOverallRating()}`,
+                }),
+                el('button', {
+                  class: 'btn btn-outline btn-sm',
+                  text: `Racheter (${fee.toLocaleString('fr-FR')}$)`,
+                  disabled: affordable ? null : 'disabled',
+                  onclick: () => this._buyoutFighter(gym.id, fighter.identity.id),
+                }),
+              ]);
+            })
+          ),
+    ]);
+  }
+
+  _sendMercatoScout() {
+    const playerState = this.gameState.playerState;
+    const cfg = BALANCE.MERCATO.SCOUT;
+    if (playerState.money < cfg.COST) return;
+
+    playerState.changeMoney(-cfg.COST, 'MERCATO_SCOUT');
+    this._scoutedRookies = sendScout({ rng: this.rng });
+    AudioEngine.playCash();
+    this._showToast(`\u{1F575}\u{FE0F} Detecteur envoye — ${this._scoutedRookies.length} rookie(s) deniche(s).`);
+    this._renderMercatoModal();
+    this._renderTopbar();
+    this._autosave();
+  }
+
+  _signScoutedRookie(rookie) {
+    const playerState = this.gameState.playerState;
+    if (playerState.roster.length >= playerState.getRosterCapacity()) return;
+
+    rookie.weeklySalary = Math.round(BALANCE.RECRUITMENT_MARKET.MIN_COST * BALANCE.RECRUITMENT_MARKET.SALARY_RATIO_OF_COST);
+    playerState.addFighter(rookie);
+    this._scoutedRookies = this._scoutedRookies.filter((r) => r.identity.id !== rookie.identity.id);
+    telemetry.recordFighterRecruited();
+
+    AudioEngine.playCash();
+    this._showToast(`\u{1F4DD} ${rookie.identity.name} signe au gym.`);
+    this._renderMercatoModal();
+    this._renderTopbar();
+    this._autosave();
+  }
+
+  _buyoutFighter(gymId, fighterId) {
+    const { playerState } = this.gameState;
+    const { worldState } = this.gameState;
+    const result = buyoutRivalFighter(playerState, worldState, gymId, fighterId);
+    if (!result.success) return;
+
+    telemetry.recordFighterRecruited();
+    AudioEngine.playCash();
+    this._showToast(`\u{1F4B8} ${result.fighter.identity.name} rachete pour ${result.fee.toLocaleString('fr-FR')}$.`);
+    this._renderMercatoModal();
     this._renderTopbar();
     this._autosave();
   }
@@ -1322,7 +1463,7 @@ class WebApp {
           ),
           el('div', {
             class: 'fighter-meta',
-            text: `${fighter.identity.age} ans — ${fighter.identity.weightClass} — ${fighter.getRecordString()} — ${fighter.getLegacyStage()}`,
+            text: `${fighter.identity.gender === 'F' ? '♀' : '♂'} ${fighter.identity.age} ans — ${formatHeightCm(fighter.identity.heightCm)} — ${fighter.identity.weightKg}kg — ${fighter.identity.weightClass} — ${fighter.getRecordString()} — ${fighter.getLegacyStage()}`,
           }),
         ]),
       ]),
@@ -1596,6 +1737,9 @@ class WebApp {
     for (const badge of newBadges) {
       bits.push(`${badge.icon} Badge debloque : ${badge.label} !`);
     }
+    for (const poached of summary.poachingReport ?? []) {
+      bits.push(`\u{1F6A8} ${poached.fighterName} a ete debauche par ${poached.gymName} !`);
+    }
     const net = Math.round(summary.economyReport.netChange);
     bits.push(`Semaine resolue — jour ${this.gameState.worldState.currentDay}. Solde net ${net >= 0 ? '+' : ''}${net}$.`);
     this._showToast(bits.join(' '));
@@ -1678,9 +1822,12 @@ class WebApp {
    * _renderUndergroundSetupModal's own (fighter, gym, their fighter) picker.
    */
   _renderFightPicker(panel) {
-    if (!this._fightOpponentSetup) this._fightOpponentSetup = { fighterId: null, gymId: null, opponentId: null };
+    if (!this._fightOpponentSetup) {
+      this._fightOpponentSetup = { fighterId: null, gymId: null, opponentId: null, allowMixedGender: false };
+    }
     const setup = this._fightOpponentSetup;
     const { playerState, worldState } = this.gameState;
+    const selectedFighter = setup.fighterId ? playerState.getFighter(setup.fighterId) : null;
 
     panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Choisir un combat' }));
     panel.appendChild(el('p', { text: 'Un combat officiel oppose toujours l\'un de vos combattants a celui d\'un gym rival — deux membres du roster ne se rencontrent qu\'en Sparring (Planning).' }));
@@ -1716,6 +1863,24 @@ class WebApp {
       );
     }
 
+    if (selectedFighter) {
+      const org = resolveRegionalOrg(playerState.country);
+      const ranking = getWeightClassRanking(playerState, worldState, selectedFighter.identity.weightClass, 5);
+      panel.appendChild(el('div', { class: 'card-title', text: `\u{1F3C6} Classement ${org.label} — ${selectedFighter.identity.weightClass}` }));
+      panel.appendChild(
+        el(
+          'div',
+          { class: 'card' },
+          ranking.map((entry, index) =>
+            el('div', { class: 'list-row' }, [
+              el('span', { class: 'list-row-label', text: `#${index + 1} ${entry.name} (${entry.gymName})` }),
+              el('span', { class: 'list-row-value', text: `${entry.overallRating} — ${entry.record}` }),
+            ])
+          )
+        )
+      );
+    }
+
     panel.appendChild(el('div', { class: 'card-title', text: 'Gym adverse' }));
     if (worldState.rivalGyms.length === 0) {
       panel.appendChild(el('p', { text: 'Aucun gym rival recense.' }));
@@ -1744,6 +1909,20 @@ class WebApp {
 
     const selectedGym = worldState.rivalGyms.find((gym) => gym.id === setup.gymId) ?? null;
     if (selectedGym) {
+      panel.appendChild(
+        el('label', { class: 'checkbox-row' }, [
+          el('input', {
+            type: 'checkbox',
+            checked: setup.allowMixedGender ? 'checked' : null,
+            onchange: (event) => {
+              setup.allowMixedGender = event.target.checked;
+              this._renderFight();
+            },
+          }),
+          ' Mode Mixte (autoriser les combats mixtes)',
+        ])
+      );
+
       panel.appendChild(el('div', { class: 'card-title', text: 'Leur combattant' }));
       const roster = selectedGym.roster ?? [];
       if (roster.length === 0) {
@@ -1751,15 +1930,18 @@ class WebApp {
       }
       for (const entry of roster) {
         const selected = setup.opponentId === entry.identity.id;
+        const genderMismatch = Boolean(selectedFighter) && !isGenderMatch(selectedFighter, entry, { allowMixedGender: setup.allowMixedGender });
         panel.appendChild(
           el(
             'div',
             {
-              class: `fighter-card selectable${selected ? ' selected' : ''}`,
-              onclick: () => {
-                setup.opponentId = entry.identity.id;
-                this._renderFight();
-              },
+              class: `fighter-card${genderMismatch ? ' gender-mismatch' : ' selectable'}${selected ? ' selected' : ''}`,
+              onclick: genderMismatch
+                ? undefined
+                : () => {
+                    setup.opponentId = entry.identity.id;
+                    this._renderFight();
+                  },
             },
             [
               el('div', { class: 'fighter-name', text: entry.identity.name }),
@@ -1789,6 +1971,7 @@ class WebApp {
     const fighterA = playerState.getFighter(setup.fighterId);
     const fighterB = Fighter.fromJSON(opponentEntry);
     assertNoIntraGymMatch(fighterA, fighterB, playerState);
+    assertGenderMatch(fighterA, fighterB, { allowMixedGender: setup.allowMixedGender });
 
     if (isMainEventEligible({ fighterA, fighterB, opponentGymReputation: gym?.reputation ?? 0 })) {
       this._showPressConferenceModal(fighterA, fighterB, gym);
@@ -1829,7 +2012,8 @@ class WebApp {
     this._fightFighterB = fighterB;
     this._teardownCombatPlayback();
     this.fightView = new FightNightView({ combatEngine: this.combatEngine });
-    this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, 'WFC', false, rules);
+    const orgId = resolveRegionalOrg(this.gameState.playerState.country).id;
+    this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, orgId, false, rules);
     this.fightSetupDone = false;
     // Only the player's own corner (A) is ever player-configured — the
     // opponent (B) always fights their own AI gameplan/natural weight cut
@@ -1845,33 +2029,11 @@ class WebApp {
     panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F573}\u{FE0F} Underground Circuit' }));
     panel.appendChild(
       el('p', {
-        text: 'Modes de jeu alternatifs a haut risque / haute recompense, contre le roster d\'un gym rival — hors sanction officielle.',
+        text: 'La ligue clandestine mondiale — victoire uniquement par KO/TKO ou soumission, contre le roster d\'un gym rival, hors sanction officielle. Optionnellement, un enjeu de gym peut etre mis en jeu.',
       })
     );
 
-    panel.appendChild(
-      el(
-        'div',
-        { class: 'subtab-row' },
-        UNDERGROUND_FILTERS.map((filter) =>
-          el('button', {
-            class: `subtab-btn${this.undergroundFilter === filter.key ? ' active' : ''}`,
-            text: filter.label,
-            onclick: () => {
-              this.undergroundFilter = filter.key;
-              this._renderFight();
-            },
-          })
-        )
-      )
-    );
-
-    const visible =
-      this.undergroundFilter === 'ALL'
-        ? UNDERGROUND_CHALLENGES
-        : UNDERGROUND_CHALLENGES.filter((challenge) => challenge.category === this.undergroundFilter);
-
-    for (const challenge of visible) {
+    for (const challenge of UNDERGROUND_CHALLENGES) {
       panel.appendChild(
         el('div', { class: 'card underground-card', onclick: () => this._showUndergroundSetupModal(challenge) }, [
           el('div', { class: 'fighter-head' }, [
@@ -1887,7 +2049,7 @@ class WebApp {
   }
 
   _showUndergroundSetupModal(challenge) {
-    this._undergroundSetup = { challenge, fighterId: null, gymId: null, opponentId: null };
+    this._undergroundSetup = { challenge, fighterId: null, gymId: null, opponentId: null, allowMixedGender: false };
     this._renderUndergroundSetupModal();
   }
 
@@ -1898,6 +2060,7 @@ class WebApp {
 
     const available = playerState.roster.filter((f) => !f.isInjured(worldState.currentDay));
     const selectedGym = worldState.rivalGyms.find((gym) => gym.id === setup.gymId) ?? null;
+    const selectedFighter = setup.fighterId ? playerState.getFighter(setup.fighterId) : null;
 
     const content = el('div', {}, [
       el('h2', { class: 'section-title', text: `${setup.challenge.icon} ${setup.challenge.title}` }),
@@ -1945,19 +2108,36 @@ class WebApp {
     }
 
     if (selectedGym && !isGauntlet) {
+      content.appendChild(
+        el('label', { class: 'checkbox-row' }, [
+          el('input', {
+            type: 'checkbox',
+            checked: setup.allowMixedGender ? 'checked' : null,
+            onchange: (event) => {
+              setup.allowMixedGender = event.target.checked;
+              this._renderUndergroundSetupModal();
+            },
+          }),
+          ' Mode Mixte (autoriser les combats mixtes)',
+        ])
+      );
+
       content.appendChild(el('div', { class: 'card-title', text: 'Leur combattant' }));
       const roster = selectedGym.roster ?? [];
       if (roster.length === 0) {
         content.appendChild(el('p', { text: 'Ce gym n\'a pas encore de combattant recrute.' }));
       }
       for (const entry of roster) {
+        const genderMismatch = Boolean(selectedFighter) && !isGenderMatch(selectedFighter, entry, { allowMixedGender: setup.allowMixedGender });
         content.appendChild(
           el('div', {
-            class: `fighter-card selectable${setup.opponentId === entry.identity.id ? ' selected' : ''}`,
-            onclick: () => {
-              setup.opponentId = entry.identity.id;
-              this._renderUndergroundSetupModal();
-            },
+            class: `fighter-card${genderMismatch ? ' gender-mismatch' : ' selectable'}${setup.opponentId === entry.identity.id ? ' selected' : ''}`,
+            onclick: genderMismatch
+              ? undefined
+              : () => {
+                  setup.opponentId = entry.identity.id;
+                  this._renderUndergroundSetupModal();
+                },
           }, [
             el('div', { class: 'fighter-name', text: entry.identity.name }),
             el('div', { class: 'fighter-meta', text: `${entry.identity.style} — ${entry.career.wins}-${entry.career.losses}-${entry.career.draws}` }),
@@ -2040,6 +2220,7 @@ class WebApp {
     } else {
       const opponentEntry = (gym.roster ?? []).find((entry) => entry.identity.id === setup.opponentId);
       const opponentFighter = Fighter.fromJSON(opponentEntry);
+      assertGenderMatch(playerFighter, opponentFighter, { allowMixedGender: setup.allowMixedGender });
 
       const result = runUndergroundFight({
         fighterA: playerFighter,
@@ -2829,16 +3010,17 @@ class WebApp {
    * reasoning as web/telemetry.js's own storage split) and only for a
    * truly brand-new game (see _isBrandNewGame, set only by the "Nouvelle
    * Partie" flow — Continuer/charger une sauvegarde never sets it, so a
-   * returning player is never re-shown this). Always resolves into
-   * _maybeOpenAcademyDraft() next, whether or not the modal actually showed,
-   * so the existing Academy Draft flow is never skipped.
+   * returning player is never re-shown this).
+   *
+   * V3.5: deliberately does NOT chain into _maybeOpenAcademyDraft() anymore
+   * — "Demarrage 100% libre", no modal gate of any kind at game launch. The
+   * Academy Draft mechanic itself is untouched and still checked at every
+   * subsequent year boundary (see the afterYearChange call sites in
+   * _showSeasonSummary/_showGala) and when loading an existing save.
    */
   _maybeShowFirstStepsOnboarding() {
     const alreadySeen = this._hasSeenOnboarding();
-    if (!this._isBrandNewGame || alreadySeen) {
-      this._maybeOpenAcademyDraft();
-      return;
-    }
+    if (!this._isBrandNewGame || alreadySeen) return;
     this._showFirstStepsOnboardingModal();
   }
 
@@ -2886,7 +3068,6 @@ class WebApp {
         onclick: () => {
           this._markOnboardingSeen();
           this._hideModal();
-          this._maybeOpenAcademyDraft();
         },
       }),
     ]);
@@ -2996,6 +3177,19 @@ class WebApp {
       el('div', { class: 'card' }, [
         el('div', { class: 'card-title', text: 'Sauvegarde automatique' }),
         el('p', { class: 'fighter-meta', text: 'La partie est sauvegardee automatiquement dans le navigateur apres chaque action importante (combat, semaine, achat...).' }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F3B5} Options Audio' }),
+        el('label', { class: 'checkbox-row' }, [
+          el('input', {
+            type: 'checkbox',
+            checked: AudioEngine.isJulModeEnabled() ? 'checked' : null,
+            onchange: (event) => {
+              AudioEngine.setJulModeEnabled(event.target.checked);
+            },
+          }),
+          ' Musique Style Jul (ambiance synthetique inspiree du style marseillais)',
+        ]),
       ]),
       el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
     ]);

@@ -844,6 +844,22 @@ function processRetirements({ summary, playerState, worldState, rng, stats, next
   }
 }
 
+/**
+ * V3.5 "Mercato": engine/MercatoEngine.js#rollWeeklyPoaching can remove a
+ * low-Loyalty fighter from the roster mid-run, outside the retirement path
+ * processRetirements() already accounts for. Folds every poached fighter
+ * into the Roster Attachment Index the same way a retirement would (measured
+ * on their departure day) and spawns a replacement, for the same
+ * "headless roster size stays constant" reason documented on
+ * processRetirements above.
+ */
+function processPoaching({ poachingReport, playerState, worldState, rng, stats, nextFighterId }) {
+  for (const poached of poachingReport) {
+    recordRosterAttachmentSample(stats, poached.fighterId, worldState.currentDay);
+    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
+  }
+}
+
 function recordWeeklyEconomy(stats, playerState, economyReport) {
   const econ = stats.economy;
   econ.weeksSimulated += 1;
@@ -1006,6 +1022,7 @@ export function runSimulation(options = {}) {
       });
 
       processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId });
+      processPoaching({ poachingReport: summary.poachingReport, playerState, worldState, rng, stats, nextFighterId });
 
       recordWeeklyEconomy(stats, playerState, summary.economyReport);
 

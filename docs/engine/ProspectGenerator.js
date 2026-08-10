@@ -25,13 +25,11 @@
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
 import { resolveLeagueForReputation } from '../data/leagues.js';
-import { generatePersonality } from './FighterGenerator.js';
+import { generatePersonality, generateGenderedIdentity, generatePhysicalProfile } from './FighterGenerator.js';
 
-/** Local flavor data for prospect names — see engine/TransferMarket.js's own header note on why each module keeps its own rather than cross-importing. */
-const FIRST_NAMES = Object.freeze([
-  'Theo', 'Ines', 'Amir', 'Luca', 'Nadia', 'Bilal', 'Romy', 'Tomas',
-  'Layla', 'Erik', 'Sofia', 'Kwame', 'Mira', 'Dante', 'Aiko', 'Noor',
-]);
+/** Local flavor data for prospect names — see engine/TransferMarket.js's own header note on why each module keeps its own rather than cross-importing. Split by gender (V3.5), see engine/FighterGenerator.js#generateGenderedIdentity. */
+const MALE_FIRST_NAMES = Object.freeze(['Theo', 'Amir', 'Luca', 'Bilal', 'Tomas', 'Erik', 'Kwame', 'Dante']);
+const FEMALE_FIRST_NAMES = Object.freeze(['Ines', 'Nadia', 'Romy', 'Layla', 'Sofia', 'Mira', 'Aiko', 'Noor']);
 const LAST_NAMES = Object.freeze([
   'Weber', 'Costa', 'Nilsson', 'Haddad', 'Rocha', 'Petrov', 'Adeyemi', 'Lund',
   'Moreno', 'Chikara', 'Baptiste', 'Serrano', 'Voss', 'Amara', 'Girard', 'Tanaka',
@@ -64,12 +62,18 @@ function generateOneProspect(themeKey, theme, year, rng) {
     })
   );
 
+  const identity = generateGenderedIdentity(rng, MALE_FIRST_NAMES, FEMALE_FIRST_NAMES, LAST_NAMES);
+  const physical = generatePhysicalProfile(rng, identity.gender);
+
   return new Fighter({
     identity: {
-      name: `${pick(rng, FIRST_NAMES)} ${pick(rng, LAST_NAMES)}`,
+      name: identity.name,
       age: cfg.MIN_AGE + Math.floor(rng() * (cfg.MAX_AGE - cfg.MIN_AGE + 1)),
       style: pick(rng, theme.styles),
-      weightClass: 'Poids Welter',
+      weightClass: physical.weightClassLabel,
+      gender: physical.gender,
+      heightCm: physical.heightCm,
+      weightKg: physical.weightKg,
       origin: `PROSPECT_WAVE:${themeKey}:${year}`,
     },
     attributes: { skills },

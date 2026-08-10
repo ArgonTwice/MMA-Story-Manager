@@ -1043,7 +1043,8 @@ const BALANCE = {
       { id: 'ACADEMIE_ELITE', label: 'Academie Elite', capacity: 30 },
     ],
 
-    STARTING_REPUTATION: 20,
+    /** V3.5: lowered from 20 — a brand-new gym starts essentially unknown, not already regionally recognized. */
+    STARTING_REPUTATION: 0,
     MAX_REPUTATION: 100,
 
     /** Player-facing "buzz" meter, separate from long-term REPUTATION. */
@@ -1461,8 +1462,23 @@ const BALANCE = {
     },
 
     HIRING_POOL_SIZE: 4,
-    MIN_SKILL: 30,
-    MAX_SKILL: 90,
+
+    /**
+     * V3.5: which coach-skill tier the hiring pool draws from is gated by
+     * the gym's current Reputation — an unknown gym can't attract elite
+     * staff no matter how much it can pay. Ordered low-to-high; the
+     * HIGHEST tier whose minReputation the gym's current reputation clears
+     * applies (same "highest qualifying tier wins" pattern this file
+     * already uses for POTENTIAL_TIERS elsewhere) — see
+     * engine/StaffEngine.js#generateHiringPool.
+     */
+    REPUTATION_SKILL_TIERS: [
+      { minReputation: 0, minSkill: 15, maxSkill: 40 },
+      { minReputation: 20, minSkill: 25, maxSkill: 55 },
+      { minReputation: 40, minSkill: 40, maxSkill: 70 },
+      { minReputation: 70, minSkill: 60, maxSkill: 95 },
+    ],
+
     SALARY_BASE_WEEKLY: 200,
     SALARY_PER_SKILL_POINT: 8,
 
@@ -2324,6 +2340,191 @@ const BALANCE = {
   // ---------------------------------------------------------------------
   GOLDEN_BOOK: {
     HISTORY_LIMIT: 100,
+  },
+
+  // ---------------------------------------------------------------------
+  // PHYSICAL — V3.5: real height/weight generation and gendered weight
+  // classes (engine/FighterGenerator.js#generatePhysicalProfile), replacing
+  // every generator's previous hardcoded `weightClass: 'Poids Welter'`.
+  // Men's and women's divisions are kept separately (real MMA promotions
+  // run separate weight-class ladders per gender) — see engine/Matchmaking.js
+  // for the gender-matching rule this enables.
+  // ---------------------------------------------------------------------
+  PHYSICAL: {
+    GENDERS: Object.freeze(['M', 'F']),
+
+    HEIGHT_CM: {
+      M: { MIN: 165, MAX: 200 },
+      F: { MIN: 155, MAX: 185 },
+    },
+
+    /**
+     * Each division's `maxKg` is the real weigh-in limit; `weightKg` is
+     * generated a few kg under that cap (fighters walk around heavier than
+     * their cut, but always weigh in under the limit) down to the previous
+     * division's cap (or a sensible floor for the lightest class).
+     */
+    WEIGHT_CLASSES: {
+      M: [
+        { id: 'MOUCHE', label: 'Poids Mouche', maxKg: 56.7 },
+        { id: 'COQ', label: 'Poids Coq', maxKg: 61.2 },
+        { id: 'PLUME', label: 'Poids Plume', maxKg: 65.8 },
+        { id: 'LEGER', label: 'Poids Leger', maxKg: 70.3 },
+        { id: 'WELTER', label: 'Poids Welter', maxKg: 77.1 },
+        { id: 'MOYEN', label: 'Poids Moyen', maxKg: 83.9 },
+        { id: 'MI_LOURD', label: 'Poids Mi-Lourd', maxKg: 93.0 },
+        { id: 'LOURD', label: 'Poids Lourd', maxKg: 120.2 },
+      ],
+      F: [
+        { id: 'PAILLE', label: 'Poids Paille', maxKg: 52.2 },
+        { id: 'MOUCHE', label: 'Poids Mouche', maxKg: 56.7 },
+        { id: 'COQ', label: 'Poids Coq', maxKg: 61.2 },
+        { id: 'PLUME', label: 'Poids Plume', maxKg: 65.8 },
+      ],
+    },
+
+    /** How far under a division's maxKg a generated weigh-in can land. */
+    WEIGHT_UNDER_CAP_KG: 6,
+  },
+
+  // ---------------------------------------------------------------------
+  // MANAGER_BACKGROUNDS — V3.5: a one-time choice at game creation
+  // (web/app.js's "Nouvelle Partie" flow), applied exactly once, right
+  // after PlayerState is constructed. Each background hands out ONE kind
+  // of starting bonus — never combined, the player picks exactly one.
+  // ---------------------------------------------------------------------
+  MANAGER_BACKGROUNDS: {
+    SPONSOR: {
+      id: 'SPONSOR',
+      label: 'Ancien Sponsor',
+      description: 'Un reseau d\'affaires solide : +10 000$ de capital de depart.',
+      moneyBonus: 10000,
+    },
+    FIGHTER: {
+      id: 'FIGHTER',
+      label: 'Ancien Combattant',
+      description: 'Un nom deja connu du public : +15 de Hype de depart.',
+      hypeBonus: 15,
+    },
+    COACH: {
+      id: 'COACH',
+      label: 'Ancien Grand Coach',
+      description: 'Une reputation batie sur des annees de coaching : +10 de Reputation de depart.',
+      reputationBonus: 10,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // REGIONAL_ORGS — V3.5: which sanctioned promotion the player's gym
+  // competes in, picked automatically from the country typed at game
+  // creation (see engine/LeagueEngine.js#resolveRegionalOrg). A THIRD,
+  // independent orgId concept alongside two that already existed:
+  //   - data/leagues.js's LEAGUES: rival-gym purse tiers, by Reputation.
+  //   - this file's own LEAGUE_PYRAMID (engine/LeagueEngine.js): the
+  //     player's Local/National/Elite promotion/relegation ladder.
+  // REGIONAL_ORGS is neither of those — it's simply WHICH orgId string
+  // (CombatEngine#setupMatch's 3rd argument, WorldState.orgRanks/
+  // orgLadders/titleHolders keys) a sanctioned Combat-tab fight is booked
+  // under, purely cosmetic/organizational. None of these three systems
+  // read each other.
+  // ---------------------------------------------------------------------
+  REGIONAL_ORGS: {
+    BRAZIL: {
+      id: 'BFC',
+      label: 'Brazil Fighting Championship',
+      countryMatch: ['bresil', 'brésil', 'brazil', 'brasil'],
+    },
+    EUROPE: {
+      id: 'EMC',
+      label: 'Euro MMA Circuit',
+      countryMatch: [
+        'europe', 'france', 'allemagne', 'germany', 'espagne', 'spain', 'italie', 'italy',
+        'angleterre', 'england', 'royaume-uni', 'royaume uni', 'uk', 'portugal',
+        'pays-bas', 'pays bas', 'netherlands', 'belgique', 'belgium', 'suisse', 'switzerland',
+        'irlande', 'ireland', 'pologne', 'poland', 'suede', 'suède', 'sweden',
+      ],
+    },
+    USA: {
+      id: 'WFC',
+      label: 'World Fighting Championship',
+      countryMatch: ['usa', 'etats-unis', 'états-unis', 'united states', 'america', 'us'],
+    },
+    /** Fallback when the typed country matches no known region — kept as 'WFC' for backward compatibility with every pre-V3.5 save/test fixture. */
+    GLOBAL: {
+      id: 'WFC',
+      label: 'World Fighting Championship',
+      countryMatch: [],
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // COMMUNITY_MANAGER — V3.5: engine/SocialFeedEngine.js's gym-wide
+  // subscriber count (TikTok/YouTube-style) and its weekly merchandising
+  // income, plus the "filmer les combattants" toggle. Deliberately
+  // SEPARATE from this file's own dormant SOCIAL_MEDIA.STARTING_FOLLOWERS/
+  // BASE_WEEKLY_GROWTH_PERCENT block above (a PER-FIGHTER follower concept
+  // that was planned but never wired to any Fighter field or engine) —
+  // COMMUNITY_MANAGER is intentionally GYM-wide instead, tracked on
+  // PlayerState#subscribers, and is the only one of the two actually
+  // implemented. SOCIAL_MEDIA.FEED_HISTORY_LIMIT/POST_LIKES (consumed by
+  // the separate, reactive engine/SocialEngine.js) are untouched.
+  // ---------------------------------------------------------------------
+  COMMUNITY_MANAGER: {
+    STARTING_SUBSCRIBERS: 0,
+
+    /** Flat weekly subscriber growth baseline, before Hype/filming modifiers. */
+    BASE_WEEKLY_GROWTH: 40,
+    /** Additional weekly growth per point of the gym's current Hype (BALANCE.GYM.HYPE). */
+    GROWTH_PER_HYPE_POINT: 6,
+    /** Multiplies the WHOLE week's growth (base + Hype-driven) while filming is enabled. */
+    FILMING_GROWTH_MULTIPLIER: 2.5,
+
+    /** Weekly merchandising/monetization income per 1000 current subscribers. */
+    INCOME_PER_1000_SUBSCRIBERS_WEEKLY: 15,
+
+    /** Applied once per week, per roster fighter carrying the 'Introverti' trait, ONLY while filming is enabled — "fait perdre du moral aux combattants timides/introvertis." */
+    FILMING_INTROVERT_MORALE_PENALTY: -6,
+  },
+
+  // ---------------------------------------------------------------------
+  // MERCATO — V3.5: engine/MercatoEngine.js's three player/rival roster
+  // interactions, distinct from the pre-existing autonomous
+  // engine/TransferMarket.js (rival gyms managing THEIR OWN rosters, no
+  // player or player-roster involvement at all):
+  //   - SCOUT: pay to send a scout to a small (low-Reputation) rival club
+  //     and unearth fresh rookie prospects to sign.
+  //   - BUYOUT: pay a large transfer fee to poach a fighter directly off a
+  //     rival gym's roster onto the player's own.
+  //   - POACHING: the reverse risk — rival gyms may try to poach the
+  //     player's OWN low-Loyalty fighters, weekly.
+  // ---------------------------------------------------------------------
+  MERCATO: {
+    SCOUT: {
+      COST: 800,
+      /** Only rival gyms at/below this Reputation count as a "petit club" a scout can be sent to. */
+      SMALL_CLUB_REPUTATION_MAX: 40,
+      ROOKIE_COUNT_MIN: 1,
+      ROOKIE_COUNT_MAX: 3,
+      ROOKIE_MIN_AGE: 18,
+      ROOKIE_MAX_AGE: 23,
+      ROOKIE_SKILL_MEAN: 32,
+      ROOKIE_SKILL_SPREAD: 14,
+    },
+
+    BUYOUT: {
+      /** Same exponential shape as RECRUITMENT_MARKET's own signing cost, scaled up sharply — a buyout is a hostile purchase, not a normal signature. */
+      MULTIPLIER_OF_RECRUITMENT_COST: 4,
+      /** Stacks on top of the above for any fighter holding at least one title. */
+      TITLE_HOLDER_EXTRA_MULTIPLIER: 3,
+    },
+
+    POACHING: {
+      /** A roster fighter below this Loyalty is at risk of being poached each week. */
+      LOYALTY_THRESHOLD: 30,
+      BASE_WEEKLY_CHANCE: 0.04,
+      /** Additional chance per point of Loyalty BELOW the threshold (the lower it is, the more likely). */
+      CHANCE_PER_LOYALTY_POINT_BELOW_THRESHOLD: 0.006,
+    },
   },
 };
 

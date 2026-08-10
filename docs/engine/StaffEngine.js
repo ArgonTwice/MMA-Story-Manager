@@ -46,22 +46,43 @@ function skillOffset(playerState, roleId) {
 }
 
 /**
+ * @param {number} reputation
+ * @returns {{ minReputation: number, minSkill: number, maxSkill: number }}
+ *   The HIGHEST BALANCE.STAFF.REPUTATION_SKILL_TIERS entry this reputation
+ *   qualifies for (tiers are declared low-to-high) — see
+ *   generateHiringPool().
+ */
+function resolveSkillTier(reputation) {
+  const tiers = BALANCE.STAFF.REPUTATION_SKILL_TIERS;
+  let selected = tiers[0];
+  for (const tier of tiers) {
+    if (reputation >= tier.minReputation) selected = tier;
+  }
+  return selected;
+}
+
+/**
  * Generates this session's hiring pool — real-named candidates for all 3
  * roles, a Striking/Grappling Coach candidate randomly leaning one
- * specialty or the other. Pure: never touches PlayerState.
+ * specialty or the other. The skill range every candidate is rolled from
+ * is gated by the gym's own Reputation (see resolveSkillTier) — an unknown
+ * gym simply never sees elite coaches in its pool, no matter its budget.
+ * Pure: never touches PlayerState.
  *
  * @param {Object} [options]
+ * @param {number} [options.reputation=0] - The hiring gym's current Reputation.
  * @param {() => number} [options.rng] - Random source in [0, 1). Defaults to Math.random.
  * @returns {{ id: string, name: string, role: string, specialty: string|null, skill: number, salary: number, relationship: number }[]}
  */
-export function generateHiringPool({ rng = Math.random } = {}) {
+export function generateHiringPool({ reputation = 0, rng = Math.random } = {}) {
   const cfg = BALANCE.STAFF;
   const roleIds = Object.keys(cfg.ROLES);
+  const tier = resolveSkillTier(reputation);
 
   return Array.from({ length: cfg.HIRING_POOL_SIZE }, (_, index) => {
     const roleId = roleIds[index % roleIds.length];
     const identity = generateFighterIdentity(rng);
-    const skill = Math.round(cfg.MIN_SKILL + rng() * (cfg.MAX_SKILL - cfg.MIN_SKILL));
+    const skill = Math.round(tier.minSkill + rng() * (tier.maxSkill - tier.minSkill));
     const specialty = roleId === 'STRIKING_GRAPPLING_COACH' ? pick(rng, ['STRIKING', 'GRAPPLING']) : null;
 
     return {

@@ -31,13 +31,11 @@
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
 import { resolveLeagueForReputation } from '../data/leagues.js';
-import { generatePersonality } from './FighterGenerator.js';
+import { generatePersonality, generateGenderedIdentity, generatePhysicalProfile } from './FighterGenerator.js';
 
-/** Local flavor data for recruit names — not a BALANCE-owned gameplay concept, same precedent as engine/AcademyEngine.js's own FIRST_NAMES/LAST_NAMES (each module keeps its own rather than cross-importing, per this codebase's established convention). */
-const FIRST_NAMES = Object.freeze([
-  'Enzo', 'Leon', 'Mattia', 'Youssef', 'Elio', 'Sana', 'Milo', 'Zoe',
-  'Adam', 'Chiara', 'Ravi', 'Selin', 'Kofi', 'Anya', 'Dario', 'Priya',
-]);
+/** Local flavor data for recruit names — not a BALANCE-owned gameplay concept, same precedent as engine/AcademyEngine.js's own FIRST_NAMES/LAST_NAMES (each module keeps its own rather than cross-importing, per this codebase's established convention). Split by gender (V3.5), see engine/FighterGenerator.js#generateGenderedIdentity. */
+const MALE_FIRST_NAMES = Object.freeze(['Enzo', 'Leon', 'Mattia', 'Youssef', 'Elio', 'Milo', 'Adam', 'Ravi', 'Kofi', 'Dario']);
+const FEMALE_FIRST_NAMES = Object.freeze(['Sana', 'Zoe', 'Chiara', 'Selin', 'Anya', 'Priya']);
 const LAST_NAMES = Object.freeze([
   'Bianchi', 'Nowak', 'Fischer', 'Alves', 'Andersson', 'Kimura', 'Osei', 'Delgado',
   'Marchetti', 'Berg', 'Sato', 'Duarte', 'Kowal', 'Vidal', 'Lindqvist', 'Onyango',
@@ -74,12 +72,18 @@ function generateRecruit(gym, year, rng) {
     SKILL_KEYS.map((key) => [key, Math.round(skillMean + (rng() * 2 - 1) * cfg.RECRUIT_SKILL_SPREAD)])
   );
 
+  const identity = generateGenderedIdentity(rng, MALE_FIRST_NAMES, FEMALE_FIRST_NAMES, LAST_NAMES);
+  const physical = generatePhysicalProfile(rng, identity.gender);
+
   const fighter = new Fighter({
     identity: {
-      name: `${pick(rng, FIRST_NAMES)} ${pick(rng, LAST_NAMES)}`,
+      name: identity.name,
       age: cfg.RECRUIT_MIN_AGE + Math.floor(rng() * (cfg.RECRUIT_MAX_AGE - cfg.RECRUIT_MIN_AGE + 1)),
       style: pick(rng, RECRUIT_STYLES),
-      weightClass: 'Poids Welter',
+      weightClass: physical.weightClassLabel,
+      gender: physical.gender,
+      heightCm: physical.heightCm,
+      weightKg: physical.weightKg,
       origin: 'TRANSFER_MARKET',
     },
     attributes: { skills },

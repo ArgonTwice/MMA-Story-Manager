@@ -44,6 +44,10 @@ export const PLAYER_EVENTS = Object.freeze({
   ACTIVE_DEAL_REMOVED: 'deals:active_deal_removed',
   /** engine/HallOfFameEngine.js: a new BALANCE.HALL_OF_FAME_BADGES entry was unlocked. */
   BADGE_UNLOCKED: 'hallOfFame:badge_unlocked',
+  /** engine/SocialFeedEngine.js: the gym's subscriber count changed. */
+  SUBSCRIBERS_CHANGED: 'community:subscribers_changed',
+  /** The "Filmer les combattants" toggle was flipped. */
+  FILMING_TOGGLED: 'community:filming_toggled',
 });
 
 let idCounter = 0;
@@ -118,6 +122,11 @@ export class PlayerState {
 
     /** engine/HallOfFameEngine.js's 20-badge catalog (BALANCE.HALL_OF_FAME_BADGES) — ids of every badge ever unlocked, permanent (never removed even if the triggering condition later stops holding). */
     this.unlockedBadges = config.unlockedBadges ? [...config.unlockedBadges] : [];
+
+    /** engine/SocialFeedEngine.js's gym-wide TikTok/YouTube-style subscriber count — see BALANCE.COMMUNITY_MANAGER. */
+    this.subscribers = config.subscribers ?? BALANCE.COMMUNITY_MANAGER.STARTING_SUBSCRIBERS;
+    /** "Filmer les combattants" toggle: boosts subscriber growth/merchandising income, but costs morale for Introverti fighters (see engine/SocialFeedEngine.js#applyFilmingMoralePenalty). Off by default. */
+    this.filmingEnabled = config.filmingEnabled ?? false;
   }
 
   // ---- roster -----------------------------------------------------------
@@ -426,6 +435,27 @@ export class PlayerState {
     return true;
   }
 
+  // ---- community manager (V3.5) ------------------------------------------------
+
+  /**
+   * @param {number} delta
+   * @param {string} [reason='']
+   * @returns {number} The new subscriber count (floored at 0).
+   */
+  changeSubscribers(delta, reason = '') {
+    this.subscribers = Math.max(0, Math.round(this.subscribers + delta));
+    EventBus.publish(PLAYER_EVENTS.SUBSCRIBERS_CHANGED, { delta, value: this.subscribers, reason });
+    return this.subscribers;
+  }
+
+  /**
+   * @param {boolean} enabled
+   */
+  setFilmingEnabled(enabled) {
+    this.filmingEnabled = Boolean(enabled);
+    EventBus.publish(PLAYER_EVENTS.FILMING_TOGGLED, { enabled: this.filmingEnabled });
+  }
+
   // ---- social feed ------------------------------------------------------------
 
   /**
@@ -475,6 +505,8 @@ export class PlayerState {
       leagueTier: this.leagueTier,
       recentFightResults: [...this.recentFightResults],
       unlockedBadges: [...this.unlockedBadges],
+      subscribers: this.subscribers,
+      filmingEnabled: this.filmingEnabled,
     };
   }
 

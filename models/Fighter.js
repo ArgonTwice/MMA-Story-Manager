@@ -169,6 +169,10 @@ export class Fighter {
       origin: config.identity?.origin ?? '',
       /** Phase 4.2: emergent nickname, earned automatically from career deeds. See evaluateNickname()/data/nicknames.js. Null until earned. */
       nickname: config.identity?.nickname ?? null,
+      /** V3.5: 'M'|'F' — see engine/FighterGenerator.js#generateGenderedIdentity and engine/Matchmaking.js's gender-matching rule. Fixed, sane defaults below keep every pre-V3.5 save/test-constructed Fighter (which never specified these) valid. */
+      gender: config.identity?.gender ?? 'M',
+      heightCm: config.identity?.heightCm ?? 178,
+      weightKg: config.identity?.weightKg ?? 77,
     };
 
     /** Combat skills + current condition/morale. */

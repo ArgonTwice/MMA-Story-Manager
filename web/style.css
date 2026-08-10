@@ -208,6 +208,19 @@ input[type='text'] {
   margin: 6px 0 0;
 }
 
+.radio-group {
+  margin: 8px 0;
+}
+
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 0;
+}
+
 /* ---- game shell / top bar ------------------------------------------------- */
 
 #gameShell {
@@ -484,6 +497,21 @@ input[type='text'] {
 
 .fighter-card.selectable {
   cursor: pointer;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 8px 0;
+}
+
+.fighter-card.gender-mismatch {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+  cursor: not-allowed;
 }
 
 .fighter-card.selected {

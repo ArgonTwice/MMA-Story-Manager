@@ -17,13 +17,22 @@
  * exclusively to tag which purse tier a RIVAL gym's autonomous
  * TransferMarket/ProspectGenerator contracts fall under, by Reputation
  * alone, with no promotion/relegation state) — the two never read each
- * other. Only web/app.js's normal ("WFC") Combat-tab fights count toward
- * league history; Underground Circuit bouts are explicitly "hors sanction
+ * other. Only web/app.js's normal Combat-tab fights count toward league
+ * history; Underground Circuit bouts are explicitly "hors sanction
  * officielle" and never call recordLeagueFightResult.
+ *
+ * V3.5 also adds a THIRD, independent orgId concept at the bottom of this
+ * file (resolveRegionalOrg/getWeightClassRanking): which sanctioned
+ * promotion (Brazil Fighting Championship / Euro MMA Circuit / World
+ * Fighting Championship) the gym's Combat-tab fights are booked under,
+ * picked once from the country typed at game creation — purely
+ * organizational, no promotion/relegation of its own, and never read by
+ * either of the two systems above.
  * ---------------------------------------------------------------------------
  */
 
 import BALANCE from '../data/balance.js';
+import Fighter from '../models/Fighter.js';
 
 /** @returns {Object} BALANCE.LEAGUE_PYRAMID.TIERS[playerState.leagueTier], falling back to the bottom tier for an unrecognized/legacy value. */
 export function getCurrentTier(playerState) {
@@ -139,6 +148,71 @@ export function getPromotionProgress(playerState) {
   };
 }
 
+// ---- V3.5: regional organizations (a 3rd, independent orgId concept) --------
+
+/**
+ * Picks which BALANCE.REGIONAL_ORGS entry the gym's Combat-tab fights are
+ * booked under, from the free-form country string typed at game creation
+ * (PlayerState.country) — a simple substring match against each region's
+ * countryMatch list, case/accent-insensitive. Falls back to GLOBAL (World
+ * Fighting Championship, id 'WFC') when the country is empty or matches no
+ * known region — the same orgId every pre-V3.5 save/test fixture already
+ * assumes, so nothing existing breaks.
+ *
+ * @param {string} country
+ * @returns {Object} One of BALANCE.REGIONAL_ORGS's entries.
+ */
+export function resolveRegionalOrg(country) {
+  const cfg = BALANCE.REGIONAL_ORGS;
+  const normalized = (country ?? '').trim().toLowerCase();
+  if (!normalized) return cfg.GLOBAL;
+
+  for (const region of Object.values(cfg)) {
+    if (region.countryMatch.some((candidate) => normalized.includes(candidate))) return region;
+  }
+  return cfg.GLOBAL;
+}
+
+/**
+ * A top-N power ranking for one weight class within the gym's regional
+ * org, gathering the player's own roster and every rival gym's roster —
+ * computed fresh on every call (rather than persisted via WorldState's own
+ * orgRanks/setOrgRanking, which exist but have no writer anywhere in this
+ * codebase) so it's always accurate and never goes stale.
+ *
+ * @param {Object} playerState
+ * @param {Object} worldState
+ * @param {string} weightClass
+ * @param {number} [limit=10]
+ * @returns {{ fighterId: string, name: string, gymName: string, overallRating: number, record: string }[]}
+ *   Sorted by overallRating, highest first.
+ */
+export function getWeightClassRanking(playerState, worldState, weightClass, limit = 10) {
+  const entries = [];
+
+  for (const fighter of playerState.roster) {
+    if (fighter.identity.weightClass === weightClass) entries.push({ fighter, gymName: playerState.gymName });
+  }
+
+  for (const gym of worldState.rivalGyms) {
+    for (const entry of gym.roster ?? []) {
+      if (entry.identity.weightClass !== weightClass) continue;
+      entries.push({ fighter: Fighter.fromJSON(entry), gymName: gym.name ?? gym.id });
+    }
+  }
+
+  return entries
+    .map(({ fighter, gymName }) => ({
+      fighterId: fighter.identity.id,
+      name: fighter.identity.name,
+      gymName,
+      overallRating: Math.round(fighter.getOverallRating()),
+      record: fighter.getRecordString(),
+    }))
+    .sort((a, b) => b.overallRating - a.overallRating)
+    .slice(0, limit);
+}
+
 export default {
   getCurrentTier,
   getWinrate,
@@ -147,4 +221,6 @@ export default {
   getPurseMultiplier,
   getPassiveIncomeMultiplier,
   getPromotionProgress,
+  resolveRegionalOrg,
+  getWeightClassRanking,
 };

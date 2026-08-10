@@ -31,7 +31,7 @@ function seededRng(seed) {
 }
 
 test('generateHiringPool returns BALANCE.STAFF.HIRING_POOL_SIZE real-named candidates covering all 3 roles, each with a nonzero salary', () => {
-  const pool = generateHiringPool({ rng: seededRng(1) });
+  const pool = generateHiringPool({ reputation: 100, rng: seededRng(1) });
   assert.equal(pool.length, BALANCE.STAFF.HIRING_POOL_SIZE);
 
   const roles = new Set(pool.map((c) => c.role));
@@ -39,10 +39,39 @@ test('generateHiringPool returns BALANCE.STAFF.HIRING_POOL_SIZE real-named candi
   assert.ok(roles.has('STRIKING_GRAPPLING_COACH'));
   assert.ok(roles.has('PHYSIO'));
 
+  const topTier = BALANCE.STAFF.REPUTATION_SKILL_TIERS[BALANCE.STAFF.REPUTATION_SKILL_TIERS.length - 1];
   for (const candidate of pool) {
     assert.ok(candidate.name.includes(' '));
     assert.ok(candidate.salary > 0);
-    assert.ok(candidate.skill >= BALANCE.STAFF.MIN_SKILL && candidate.skill <= BALANCE.STAFF.MAX_SKILL);
+    assert.ok(candidate.skill >= topTier.minSkill && candidate.skill <= topTier.maxSkill);
+  }
+});
+
+test('generateHiringPool gates the rolled skill range by the gym\'s own Reputation (V3.5)', () => {
+  const cfg = BALANCE.STAFF.REPUTATION_SKILL_TIERS;
+  const lowTier = cfg[0];
+  const highTier = cfg[cfg.length - 1];
+
+  for (let seed = 0; seed < 30; seed += 1) {
+    const lowPool = generateHiringPool({ reputation: 0, rng: seededRng(seed) });
+    for (const candidate of lowPool) {
+      assert.ok(candidate.skill >= lowTier.minSkill && candidate.skill <= lowTier.maxSkill, `low-reputation candidate skill ${candidate.skill} should stay within [${lowTier.minSkill}, ${lowTier.maxSkill}]`);
+    }
+  }
+
+  let sawHighTierSkill = false;
+  for (let seed = 0; seed < 30; seed += 1) {
+    const highPool = generateHiringPool({ reputation: 100, rng: seededRng(seed) });
+    if (highPool.some((c) => c.skill > lowTier.maxSkill)) sawHighTierSkill = true;
+  }
+  assert.ok(sawHighTierSkill, 'a max-reputation gym should be able to roll candidates above the lowest tier\'s cap');
+});
+
+test('generateHiringPool defaults to the lowest skill tier when reputation is omitted', () => {
+  const lowTier = BALANCE.STAFF.REPUTATION_SKILL_TIERS[0];
+  const pool = generateHiringPool({ rng: seededRng(1) });
+  for (const candidate of pool) {
+    assert.ok(candidate.skill >= lowTier.minSkill && candidate.skill <= lowTier.maxSkill);
   }
 });
 

@@ -39,7 +39,7 @@
 
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
-import { generateFighterIdentity, generatePersonality } from './FighterGenerator.js';
+import { generateFighterIdentity, generatePersonality, generatePhysicalProfile } from './FighterGenerator.js';
 
 const STARTING_STYLES = Object.freeze(['Boxe', 'Muay Thai', 'Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle', 'Kickboxing']);
 const SKILL_KEYS = Object.freeze(['boxe', 'jambes', 'sol', 'soumission', 'cardio', 'intelligence']);
@@ -116,6 +116,7 @@ function generateCandidate({
   rng,
 }) {
   const identity = generateFighterIdentity(rng);
+  const physical = generatePhysicalProfile(rng, identity.gender);
   const potential = potentialTiers ? rollPotentialTier(rng, potentialTiers) : null;
   const effectiveSkillMean = skillMean + (potential?.skillMeanBonus ?? 0);
 
@@ -125,7 +126,15 @@ function generateCandidate({
   const age = minAge + Math.floor(rng() * (maxAge - minAge + 1));
 
   const fighter = new Fighter({
-    identity: { name: identity.name, age, style: pick(rng, STARTING_STYLES), weightClass: 'Poids Welter' },
+    identity: {
+      name: identity.name,
+      age,
+      style: pick(rng, STARTING_STYLES),
+      weightClass: physical.weightClassLabel,
+      gender: physical.gender,
+      heightCm: physical.heightCm,
+      weightKg: physical.weightKg,
+    },
     attributes: { skills },
     psychology: { personality: generatePersonality(rng) },
   });

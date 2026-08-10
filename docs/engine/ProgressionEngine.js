@@ -26,6 +26,8 @@ import { isProspectWaveDue, generateProspectWave } from './ProspectGenerator.js'
 import { applyWeeklyStaffEffects, rollStaffConflict } from './StaffEngine.js';
 import { degradeEquipmentWeekly } from './GymInfrastructure.js';
 import { advanceWeeksAtGym } from './ScoutingEngine.js';
+import { processWeeklyCommunityManagement } from './SocialFeedEngine.js';
+import { rollWeeklyPoaching } from './MercatoEngine.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -299,9 +301,17 @@ export function advanceWeek(gameState, options = {}) {
   advanceWeeksAtGym(playerState);
   const staffReport = { moraleBonus: staffMoraleBonus, conflicts: staffConflicts };
 
+  // V3.5 "Community Manager": gym-wide subscriber growth, merchandising
+  // income, and (if filming is on) the Introverti morale penalty.
+  const communityManagerReport = processWeeklyCommunityManagement(playerState);
+
   const narrativeReport = evaluateWeeklyEvents(gameState, { rng });
   const { birthdays, retirements } = processBirthdaysAndRetirements(playerState, worldState, rng);
   const rivalGymReport = processRivalGyms(worldState, rng);
+
+  // V3.5 "Mercato": rival gyms may poach the player's own low-Loyalty
+  // fighters every week — the reverse risk of buyoutRivalFighter().
+  const poachingReport = rollWeeklyPoaching(playerState, worldState, rng);
 
   // Phase V2.7 ("Le Monde Vivant"): the autonomous transfer market runs
   // once per season boundary — rival gyms recruit/extend/release entirely
@@ -322,10 +332,12 @@ export function advanceWeek(gameState, options = {}) {
     trainingReport,
     economyReport,
     staffReport,
+    communityManagerReport,
     narrativeReport,
     birthdays,
     retirements,
     rivalGymReport,
+    poachingReport,
     transferMarketReport,
     prospectWaveReport,
   };

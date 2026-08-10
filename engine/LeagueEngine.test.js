@@ -7,7 +7,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import BALANCE from '../data/balance.js';
+import Fighter from '../models/Fighter.js';
 import PlayerState from '../state/PlayerState.js';
+import WorldState from '../state/WorldState.js';
 import {
   getCurrentTier,
   getWinrate,
@@ -16,6 +18,8 @@ import {
   getPurseMultiplier,
   getPassiveIncomeMultiplier,
   getPromotionProgress,
+  resolveRegionalOrg,
+  getWeightClassRanking,
 } from './LeagueEngine.js';
 
 test('a fresh gym starts in the bottom tier (LOCAL_UNDERGROUND) with a 1x purse/passive-income multiplier', () => {
@@ -117,4 +121,61 @@ test('a higher league tier scales purses and passive income up (ELITE_MONDIALE >
   assert.ok(getPurseMultiplier(national) > getPurseMultiplier(local));
   assert.ok(getPurseMultiplier(elite) > getPurseMultiplier(national));
   assert.ok(getPassiveIncomeMultiplier(elite) > getPassiveIncomeMultiplier(local));
+});
+
+// ---- V3.5: regional organizations -----------------------------------------
+
+test('resolveRegionalOrg matches Brazil/Europe/USA countries case-insensitively, and falls back to GLOBAL (WFC) otherwise', () => {
+  assert.equal(resolveRegionalOrg('Bresil').id, BALANCE.REGIONAL_ORGS.BRAZIL.id);
+  assert.equal(resolveRegionalOrg('BRAZIL').id, BALANCE.REGIONAL_ORGS.BRAZIL.id);
+  assert.equal(resolveRegionalOrg('France').id, BALANCE.REGIONAL_ORGS.EUROPE.id);
+  assert.equal(resolveRegionalOrg('USA').id, BALANCE.REGIONAL_ORGS.USA.id);
+  assert.equal(resolveRegionalOrg('Atlantis').id, BALANCE.REGIONAL_ORGS.GLOBAL.id);
+  assert.equal(resolveRegionalOrg('').id, BALANCE.REGIONAL_ORGS.GLOBAL.id);
+  assert.equal(resolveRegionalOrg(null).id, BALANCE.REGIONAL_ORGS.GLOBAL.id);
+});
+
+test('resolveRegionalOrg defaults every unmatched/empty country to the same \'WFC\' id every pre-V3.5 fixture already assumes', () => {
+  assert.equal(resolveRegionalOrg(undefined).id, 'WFC');
+});
+
+test('getWeightClassRanking gathers the player\'s roster and every rival gym\'s roster in one weight class, sorted by rating descending', () => {
+  const playerState = new PlayerState({ gymName: 'My Gym', money: 25000 });
+  const worldState = new WorldState();
+
+  const strongPlayer = new Fighter({
+    identity: { name: 'Strong Player', weightClass: 'Poids Welter' },
+    attributes: { skills: { boxe: 90, jambes: 90, sol: 90, soumission: 90, cardio: 90, intelligence: 90 } },
+  });
+  const weakPlayer = new Fighter({
+    identity: { name: 'Weak Player', weightClass: 'Poids Welter' },
+    attributes: { skills: { boxe: 10, jambes: 10, sol: 10, soumission: 10, cardio: 10, intelligence: 10 } },
+  });
+  const otherWeightClass = new Fighter({ identity: { name: 'Off Class', weightClass: 'Poids Lourd' } });
+  playerState.addFighter(strongPlayer);
+  playerState.addFighter(weakPlayer);
+  playerState.addFighter(otherWeightClass);
+
+  const rivalFighter = new Fighter({
+    identity: { name: 'Rival Mid', weightClass: 'Poids Welter' },
+    attributes: { skills: { boxe: 50, jambes: 50, sol: 50, soumission: 50, cardio: 50, intelligence: 50 } },
+  });
+  worldState.addRivalGym({ name: 'Rival Gym', reputation: 50, roster: [rivalFighter.toJSON()] });
+
+  const ranking = getWeightClassRanking(playerState, worldState, 'Poids Welter');
+  assert.equal(ranking.length, 3);
+  assert.equal(ranking[0].name, 'Strong Player');
+  assert.equal(ranking[ranking.length - 1].name, 'Weak Player');
+  assert.ok(!ranking.some((entry) => entry.name === 'Off Class'), 'a different weight class should never appear in this ranking');
+  assert.ok(ranking.every((entry) => typeof entry.overallRating === 'number'));
+});
+
+test('getWeightClassRanking respects the limit parameter', () => {
+  const playerState = new PlayerState({ gymName: 'My Gym', money: 25000 });
+  const worldState = new WorldState();
+  for (let i = 0; i < 5; i += 1) {
+    playerState.addFighter(new Fighter({ identity: { name: `Fighter ${i}`, weightClass: 'Poids Welter' } }));
+  }
+  const ranking = getWeightClassRanking(playerState, worldState, 'Poids Welter', 2);
+  assert.equal(ranking.length, 2);
 });

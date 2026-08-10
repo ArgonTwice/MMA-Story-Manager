@@ -26,6 +26,11 @@
  */
 
 const STORAGE_KEY = 'mma_gym_manager.audio_muted';
+const JUL_MODE_STORAGE_KEY = 'mma_gym_manager.audio_jul_mode';
+
+/** ~95 BPM sixteenth-note step, 8 steps per looping bar — see AudioEngine#_scheduleJulBar. */
+const JUL_STEP_SECONDS = 0.16;
+const JUL_STEPS_PER_BAR = 8;
 
 function createStorageAdapter() {
   try {
@@ -55,6 +60,8 @@ class AudioEngine {
     this._storage = storage;
     this._ctx = null;
     this._muted = this._storage.getItem(STORAGE_KEY) === '1';
+    this._julModeEnabled = this._storage.getItem(JUL_MODE_STORAGE_KEY) === '1';
+    this._julTimerId = null;
   }
 
   /** @returns {boolean} True if sound is currently muted. */
@@ -68,12 +75,41 @@ class AudioEngine {
   setMuted(muted) {
     this._muted = Boolean(muted);
     this._storage.setItem(STORAGE_KEY, this._muted ? '1' : '0');
+    if (this._muted) this._stopJulLoop();
+    else if (this._julModeEnabled) this._startJulLoop();
   }
 
   /** @returns {boolean} The new muted state. */
   toggleMuted() {
     this.setMuted(!this._muted);
     return this._muted;
+  }
+
+  // ---- "Musique Style Jul" ambiance loop ---------------------------------------
+
+  /** @returns {boolean} True if the synthesized Marseille-rap-inspired ambiance loop is enabled. */
+  isJulModeEnabled() {
+    return this._julModeEnabled;
+  }
+
+  /**
+   * Toggles the looping trap-hi-hat/808-bass ambiance (BALANCE-free — this
+   * is presentation, not gameplay). Persists like the mute preference.
+   * Starts/stops the actual loop immediately (unless currently muted, in
+   * which case it stays silent until unmuted — see setMuted()).
+   * @param {boolean} enabled
+   */
+  setJulModeEnabled(enabled) {
+    this._julModeEnabled = Boolean(enabled);
+    this._storage.setItem(JUL_MODE_STORAGE_KEY, this._julModeEnabled ? '1' : '0');
+    if (this._julModeEnabled && !this._muted) this._startJulLoop();
+    else this._stopJulLoop();
+  }
+
+  /** @returns {boolean} The new JUL-mode state. */
+  toggleJulMode() {
+    this.setJulModeEnabled(!this._julModeEnabled);
+    return this._julModeEnabled;
   }
 
   // ---- named cues -------------------------------------------------------------
@@ -131,6 +167,57 @@ class AudioEngine {
       this._ctx = null;
     }
     return this._ctx;
+  }
+
+  /** Starts (or restarts) the looping JUL-mode ambiance. No-ops silently with no Web Audio API available. */
+  _startJulLoop() {
+    this._stopJulLoop();
+    if (!this._getContext()) return;
+    this._scheduleJulBar();
+  }
+
+  /** Stops the looping JUL-mode ambiance, if running. Already-scheduled notes simply finish playing out. */
+  _stopJulLoop() {
+    if (this._julTimerId !== null) {
+      clearTimeout(this._julTimerId);
+      this._julTimerId = null;
+    }
+  }
+
+  /**
+   * Schedules one 8-step "Marseille rap style" bar (808-ish kick, a low
+   * bass stab, trap-adjacent hi-hat ticks, a snare-like noise burst on the
+   * backbeats) then re-arms itself for the next bar — a simple generic
+   * synthesized trap/rap ambiance, never a reproduction of any real song.
+   */
+  _scheduleJulBar() {
+    if (this._muted || !this._julModeEnabled) return;
+    const ctx = this._getContext();
+    if (!ctx) return;
+
+    try {
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      const barStart = ctx.currentTime + 0.05;
+
+      for (let step = 0; step < JUL_STEPS_PER_BAR; step += 1) {
+        const t = barStart + step * JUL_STEP_SECONDS;
+
+        if (step === 0 || step === 4) {
+          this._tone(ctx, { frequency: 60, start: t, duration: 0.22, type: 'sine', peakGain: 0.22 });
+        }
+        if (step === 0) {
+          this._tone(ctx, { frequency: 45, start: t, duration: 0.5, type: 'triangle', peakGain: 0.12 });
+        }
+        if (step === 2 || step === 6) {
+          this._noiseBurst(ctx, { start: t, duration: 0.12, peakGain: 0.14, filterFrequency: 1800 });
+        }
+        this._noiseBurst(ctx, { start: t, duration: 0.04, peakGain: 0.05, filterFrequency: 7000 });
+      }
+    } catch {
+      // Synthesis is best-effort ambiance — a failure here should never surface to the player.
+    }
+
+    this._julTimerId = setTimeout(() => this._scheduleJulBar(), JUL_STEPS_PER_BAR * JUL_STEP_SECONDS * 1000);
   }
 
   /** Runs `fn(ctx, currentTime)` if sound is enabled and a context is available — every named cue routes through this single guarded entry point. Never throws. */

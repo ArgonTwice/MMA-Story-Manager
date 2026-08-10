@@ -38,4 +38,37 @@ export function assertNoIntraGymMatch(fighterA, fighterB, playerState) {
   }
 }
 
-export default { assertNoIntraGymMatch };
+/**
+ * V3.5: real MMA promotions run strictly separate men's/women's divisions —
+ * a competitive bout matches identity.gender by default. web/app.js's
+ * opponent pickers use this same predicate to grey out cross-gender
+ * opponents, and only bypass it when the player has explicitly checked a
+ * "Mode Mixte" toggle (allowMixedGender: true).
+ *
+ * @param {Object} fighterA - A Fighter instance.
+ * @param {Object} fighterB - A Fighter instance.
+ * @param {Object} [options]
+ * @param {boolean} [options.allowMixedGender=false]
+ * @returns {boolean}
+ */
+export function isGenderMatch(fighterA, fighterB, { allowMixedGender = false } = {}) {
+  if (allowMixedGender) return true;
+  return fighterA.identity.gender === fighterB.identity.gender;
+}
+
+/**
+ * @param {Object} fighterA - A Fighter instance.
+ * @param {Object} fighterB - A Fighter instance.
+ * @param {Object} [options]
+ * @param {boolean} [options.allowMixedGender=false]
+ * @throws {Error} If the genders don't match and Mode Mixte isn't explicitly allowed.
+ */
+export function assertGenderMatch(fighterA, fighterB, { allowMixedGender = false } = {}) {
+  if (isGenderMatch(fighterA, fighterB, { allowMixedGender })) return;
+  throw new Error(
+    'Matchmaking: un combat officiel oppose strictement des combattants du meme genre ' +
+      '(Hommes contre Hommes, Femmes contre Femmes), sauf en Mode Mixte explicitement active.'
+  );
+}
+
+export default { assertNoIntraGymMatch, isGenderMatch, assertGenderMatch };

@@ -91,6 +91,7 @@ test('SPARRING_INJURY silently produces no event when the roster is empty', () =
 
 test('MEDIA_CLASH swings a fighter\'s morale and the gym\'s reputation', () => {
   const gameState = makeGameState();
+  gameState.playerState.reputation = 50; // headroom so a negative reputationDelta isn't floor-clamped at 0 (V3.5 lowered STARTING_REPUTATION to 0).
   const fighter = gameState.playerState.roster[0];
   const moraleBefore = fighter.attributes.moral;
   const repBefore = gameState.playerState.reputation;
@@ -119,6 +120,7 @@ test('DOPING_CONTROL: a passed test changes nothing beyond the headline', () => 
 
 test('DOPING_CONTROL: a failed test is a scandal — reputation and morale both take a heavy hit', () => {
   const gameState = makeGameState();
+  gameState.playerState.reputation = 50; // headroom so a negative reputationDelta isn't floor-clamped at 0 (V3.5 lowered STARTING_REPUTATION to 0).
   const fighter = gameState.playerState.roster[0];
   const moraleBefore = fighter.attributes.moral;
   const repBefore = gameState.playerState.reputation;

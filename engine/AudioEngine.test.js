@@ -173,3 +173,85 @@ test('a muted engine never touches the AudioContext at all', () => {
     globalThis.window = originalWindow;
   }
 });
+
+// ---- "Musique Style Jul" ambiance loop ----------------------------------------
+
+test('JUL mode is off by default, persists through setJulModeEnabled/toggleJulMode, and a fresh engine reads back a stored preference', () => {
+  const storage = makeMemoryStorage();
+  const engine = new AudioEngine({ storage });
+  assert.equal(engine.isJulModeEnabled(), false);
+
+  engine.setJulModeEnabled(true);
+  assert.equal(engine.isJulModeEnabled(), true);
+  assert.equal(storage.getItem('mma_gym_manager.audio_jul_mode'), '1');
+  engine.setJulModeEnabled(false); // stop the loop before this test ends
+
+  assert.equal(engine.toggleJulMode(), true);
+  engine.setJulModeEnabled(false);
+
+  const engine2 = new AudioEngine({ storage: (() => { const s = makeMemoryStorage(); s.setItem('mma_gym_manager.audio_jul_mode', '1'); return s; })() });
+  assert.equal(engine2.isJulModeEnabled(), true);
+});
+
+test('enabling JUL mode with no Web Audio API available (Node) is a safe no-op — no dangling timer', () => {
+  const engine = new AudioEngine({ storage: makeMemoryStorage() });
+  assert.doesNotThrow(() => engine.setJulModeEnabled(true));
+  assert.equal(engine._julTimerId, null, 'no context available means no loop should ever have been scheduled');
+  engine.setJulModeEnabled(false);
+});
+
+test('enabling JUL mode against a mock AudioContext schedules one bar\'s worth of kick/bass/hihat/snare synthesis', () => {
+  const { MockContext, calls } = makeMockAudioContext();
+  const originalWindow = globalThis.window;
+  globalThis.window = { AudioContext: MockContext };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.setJulModeEnabled(true);
+    assert.ok(engine._julTimerId !== null, 'a bar should be scheduled to loop');
+    // 8 steps: kick x2 + bass x1 = 3 oscillator tones; hihat x8 + snare x2 = 10 noise bursts.
+    assert.equal(calls.oscillatorsStarted, 3);
+    assert.equal(calls.buffersStarted, 10);
+    engine.setJulModeEnabled(false); // stop the loop before this test ends
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('muting stops the JUL loop, and unmuting resumes it if still enabled', () => {
+  const { MockContext } = makeMockAudioContext();
+  const originalWindow = globalThis.window;
+  globalThis.window = { AudioContext: MockContext };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.setJulModeEnabled(true);
+    assert.ok(engine._julTimerId !== null);
+
+    engine.setMuted(true);
+    assert.equal(engine._julTimerId, null, 'muting should stop the loop');
+
+    engine.setMuted(false);
+    assert.ok(engine._julTimerId !== null, 'unmuting should resume the loop since JUL mode is still enabled');
+
+    engine.setJulModeEnabled(false);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('disabling JUL mode stops the loop', () => {
+  const { MockContext } = makeMockAudioContext();
+  const originalWindow = globalThis.window;
+  globalThis.window = { AudioContext: MockContext };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.setJulModeEnabled(true);
+    assert.ok(engine._julTimerId !== null);
+    engine.setJulModeEnabled(false);
+    assert.equal(engine._julTimerId, null);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});

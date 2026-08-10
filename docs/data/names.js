@@ -13,9 +13,13 @@
  * ---------------------------------------------------------------------------
  */
 
-export const FIRST_NAMES = Object.freeze([
+/** V3.5: split by gender (see BALANCE.PHYSICAL.GENDERS/engine/FighterGenerator.js#generateGenderedIdentity) — was one unisex, ungendered pool. */
+export const MALE_FIRST_NAMES = Object.freeze([
   'Thomas', 'Julien', 'Marco', 'Karim', 'Hugo', 'Anthony', 'Damien', 'Mathis',
   'Jonas', 'Samuel', 'Gabriel', 'Victor', 'Yannick', 'Lucas', 'Simon', 'Fabio',
+]);
+
+export const FEMALE_FIRST_NAMES = Object.freeze([
   'Elena', 'Chloe', 'Manon', 'Alicia', 'Sarah', 'Jade', 'Laura', 'Naomi',
 ]);
 
@@ -25,4 +29,4 @@ export const LAST_NAMES = Object.freeze([
   'Keller', 'Hoffmann', 'Andrade', 'Ferraz', 'Correia', 'Duval', 'Marchand', 'Leroy',
 ]);
 
-export default { FIRST_NAMES, LAST_NAMES };
+export default { MALE_FIRST_NAMES, FEMALE_FIRST_NAMES, LAST_NAMES };

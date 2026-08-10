@@ -24,13 +24,11 @@
 
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
-import { generatePersonality } from './FighterGenerator.js';
+import { generatePersonality, generateGenderedIdentity, generatePhysicalProfile } from './FighterGenerator.js';
 
-/** Local flavor data for prospect names — not a BALANCE-owned gameplay concept, same precedent as tools/SimRunner.js's own FIRST_NAMES/LAST_NAMES. */
-const FIRST_NAMES = Object.freeze([
-  'Alex', 'Sacha', 'Kylian', 'Noe', 'Malo', 'Ines', 'Yanis', 'Lena',
-  'Rayan', 'Camille', 'Diego', 'Amina', 'Kenji', 'Nina', 'Bruno', 'Fatou',
-]);
+/** Local flavor data for prospect names — not a BALANCE-owned gameplay concept, same precedent as tools/SimRunner.js's own FIRST_NAMES/LAST_NAMES. Split by gender (V3.5), see engine/FighterGenerator.js#generateGenderedIdentity. */
+const MALE_FIRST_NAMES = Object.freeze(['Kylian', 'Malo', 'Yanis', 'Rayan', 'Diego', 'Kenji', 'Bruno', 'Noe']);
+const FEMALE_FIRST_NAMES = Object.freeze(['Alex', 'Sacha', 'Ines', 'Lena', 'Camille', 'Amina', 'Nina', 'Fatou']);
 const LAST_NAMES = Object.freeze([
   'Moreau', 'Silva', 'Nakamura', 'Diallo', 'Kowalski', 'Rossi', 'Novak', 'Santos',
   'Petit', 'Ivanov', 'Costa', 'Haddad', 'Larsson', 'Okafor', 'Dubois', 'Reyes',
@@ -89,12 +87,18 @@ export function generateAcademyPool({ playerState, rng = Math.random }) {
       SKILL_KEYS.map((key) => [key, Math.round(skillMean + (rng() * 2 - 1) * cfg.SKILL_SPREAD)])
     );
 
+    const identity = generateGenderedIdentity(rng, MALE_FIRST_NAMES, FEMALE_FIRST_NAMES, LAST_NAMES);
+    const physical = generatePhysicalProfile(rng, identity.gender);
+
     const fighter = new Fighter({
       identity: {
-        name: `${pick(rng, FIRST_NAMES)} ${pick(rng, LAST_NAMES)}`,
+        name: identity.name,
         age: cfg.MIN_AGE + Math.floor(rng() * (cfg.MAX_AGE - cfg.MIN_AGE + 1)),
         style: pick(rng, ACADEMY_STYLES),
-        weightClass: 'Poids Welter',
+        weightClass: physical.weightClassLabel,
+        gender: physical.gender,
+        heightCm: physical.heightCm,
+        weightKg: physical.weightKg,
       },
       attributes: { skills },
       psychology: { personality: generatePersonality(rng) },
