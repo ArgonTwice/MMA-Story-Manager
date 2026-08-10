@@ -200,7 +200,7 @@ test('enabling JUL mode with no Web Audio API available (Node) is a safe no-op â
   engine.setJulModeEnabled(false);
 });
 
-test('enabling JUL mode against a mock AudioContext schedules one bar\'s worth of kick/bass/hihat/snare synthesis', () => {
+test('enabling JUL mode against a mock AudioContext schedules Pattern A\'s kick/bass/hihat/snare synthesis, starting fresh each time', () => {
   const { MockContext, calls } = makeMockAudioContext();
   const originalWindow = globalThis.window;
   globalThis.window = { AudioContext: MockContext };
@@ -209,10 +209,39 @@ test('enabling JUL mode against a mock AudioContext schedules one bar\'s worth o
     const engine = new AudioEngine({ storage: makeMemoryStorage() });
     engine.setJulModeEnabled(true);
     assert.ok(engine._julTimerId !== null, 'a bar should be scheduled to loop');
-    // 8 steps: kick x2 + bass x1 = 3 oscillator tones; hihat x8 + snare x2 = 10 noise bursts.
-    assert.equal(calls.oscillatorsStarted, 3);
+    // Pattern A: kick x2 + bass x2 = 4 oscillator tones; hihat x8 + snare x2 = 10 noise bursts.
+    assert.equal(calls.oscillatorsStarted, 4);
     assert.equal(calls.buffersStarted, 10);
+    assert.equal(engine._julBarIndex, 1);
     engine.setJulModeEnabled(false); // stop the loop before this test ends
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('successive JUL bars alternate between Pattern A and Pattern B, each with its own kick/bass/hihat/snare shape', () => {
+  const { MockContext, calls } = makeMockAudioContext();
+  const originalWindow = globalThis.window;
+  globalThis.window = { AudioContext: MockContext };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.setJulModeEnabled(true); // schedules bar 0 (Pattern A): +4 osc, +10 noise
+    assert.equal(calls.oscillatorsStarted, 4);
+    assert.equal(calls.buffersStarted, 10);
+
+    engine._stopJulLoop(); // bypass the real setTimeout delay between bars
+    engine._scheduleJulBar(); // bar 1 (Pattern B): kick x4 + bass x1 = 5 osc; snare x3 + hihat x9 = 12 noise
+    assert.equal(calls.oscillatorsStarted, 4 + 5);
+    assert.equal(calls.buffersStarted, 10 + 12);
+    assert.equal(engine._julBarIndex, 2);
+
+    engine._stopJulLoop(); // bypass again
+    engine._scheduleJulBar(); // bar 2 cycles back to Pattern A
+    assert.equal(calls.oscillatorsStarted, 4 + 5 + 4);
+    assert.equal(calls.buffersStarted, 10 + 12 + 10);
+
+    engine.setJulModeEnabled(false);
   } finally {
     globalThis.window = originalWindow;
   }
@@ -254,4 +283,144 @@ test('disabling JUL mode stops the loop', () => {
   } finally {
     globalThis.window = originalWindow;
   }
+});
+
+// ---- custom local ambiance track ----------------------------------------------
+
+function makeMockAudioElementClass(calls) {
+  return class MockAudio {
+    constructor(url) {
+      this.src = url;
+      this.loop = false;
+      this.volume = 1;
+      calls.constructed.push(url);
+    }
+    play() {
+      calls.played += 1;
+      return Promise.resolve();
+    }
+    pause() {
+      calls.paused += 1;
+    }
+  };
+}
+
+function makeMockUrlApi() {
+  let counter = 0;
+  return {
+    createObjectURL: (file) => `blob:mock-${counter++}:${file?.name ?? 'file'}`,
+    revokeObjectURL: () => {},
+  };
+}
+
+test('loadCustomTrack with no Web Audio/HTMLAudioElement available (Node) is a safe no-op', () => {
+  const engine = new AudioEngine({ storage: makeMemoryStorage() });
+  assert.equal(engine.loadCustomTrack({ name: 'track.mp3' }), false);
+  assert.equal(engine.isCustomTrackEnabled(), false);
+  assert.equal(engine.getCustomTrackName(), null);
+});
+
+test('loadCustomTrack against a mock HTMLAudioElement loads, names, and auto-plays a looping track', () => {
+  const calls = { constructed: [], played: 0, paused: 0 };
+  const originalWindow = globalThis.window;
+  const originalUrl = globalThis.URL;
+  globalThis.window = { Audio: makeMockAudioElementClass(calls) };
+  globalThis.URL = { ...originalUrl, ...makeMockUrlApi() };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    const file = { name: 'ma-piste.mp3' };
+    const loaded = engine.loadCustomTrack(file);
+
+    assert.equal(loaded, true);
+    assert.equal(engine.isCustomTrackEnabled(), true);
+    assert.equal(engine.getCustomTrackName(), 'ma-piste.mp3');
+    assert.equal(engine._customTrackEl.loop, true);
+    assert.equal(calls.played, 1, 'an unmuted engine should auto-play the freshly loaded track');
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.URL = originalUrl;
+  }
+});
+
+test('loading a custom track while JUL mode is running stops the synthesized loop â€” only one ambiance source at a time', () => {
+  const { MockContext } = makeMockAudioContext();
+  const audioCalls = { constructed: [], played: 0, paused: 0 };
+  const originalWindow = globalThis.window;
+  const originalUrl = globalThis.URL;
+  globalThis.window = { AudioContext: MockContext, Audio: makeMockAudioElementClass(audioCalls) };
+  globalThis.URL = { ...originalUrl, ...makeMockUrlApi() };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.setJulModeEnabled(true);
+    assert.ok(engine._julTimerId !== null);
+
+    engine.loadCustomTrack({ name: 'ambiance.mp3' });
+    assert.equal(engine.isJulModeEnabled(), false, 'loading a custom track should turn JUL mode off');
+    assert.equal(engine._julTimerId, null);
+    assert.equal(engine.isCustomTrackEnabled(), true);
+
+    engine.setJulModeEnabled(true);
+    assert.equal(engine.isCustomTrackEnabled(), false, 're-enabling JUL mode should stop the custom track');
+    assert.equal(audioCalls.paused, 1);
+
+    engine.setJulModeEnabled(false);
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.URL = originalUrl;
+  }
+});
+
+test('muting pauses a playing custom track, unmuting resumes it if still enabled', () => {
+  const calls = { constructed: [], played: 0, paused: 0 };
+  const originalWindow = globalThis.window;
+  const originalUrl = globalThis.URL;
+  globalThis.window = { Audio: makeMockAudioElementClass(calls) };
+  globalThis.URL = { ...originalUrl, ...makeMockUrlApi() };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.loadCustomTrack({ name: 'track.mp3' });
+    assert.equal(calls.played, 1);
+
+    engine.setMuted(true);
+    assert.equal(calls.paused, 1);
+
+    engine.setMuted(false);
+    assert.equal(calls.played, 2, 'unmuting should resume the still-enabled custom track');
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.URL = originalUrl;
+  }
+});
+
+test('clearCustomTrack pauses playback, revokes the Blob URL, and resets all custom-track state', () => {
+  const calls = { constructed: [], played: 0, paused: 0 };
+  const originalWindow = globalThis.window;
+  const originalUrl = globalThis.URL;
+  let revoked = null;
+  globalThis.window = { Audio: makeMockAudioElementClass(calls) };
+  globalThis.URL = { ...originalUrl, createObjectURL: () => 'blob:mock', revokeObjectURL: (url) => { revoked = url; } };
+
+  try {
+    const engine = new AudioEngine({ storage: makeMemoryStorage() });
+    engine.loadCustomTrack({ name: 'track.mp3' });
+    engine.clearCustomTrack();
+
+    assert.equal(engine.isCustomTrackEnabled(), false);
+    assert.equal(engine.getCustomTrackName(), null);
+    assert.equal(engine._customTrackEl, null);
+    assert.equal(calls.paused, 1);
+    assert.equal(revoked, 'blob:mock');
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.URL = originalUrl;
+  }
+});
+
+test('setCustomTrackEnabled is a no-op when no track is loaded', () => {
+  const engine = new AudioEngine({ storage: makeMemoryStorage() });
+  assert.doesNotThrow(() => engine.setCustomTrackEnabled(true));
+  assert.equal(engine.isCustomTrackEnabled(), false);
 });

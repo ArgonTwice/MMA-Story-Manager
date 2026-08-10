@@ -32,6 +32,31 @@ const JUL_MODE_STORAGE_KEY = 'mma_gym_manager.audio_jul_mode';
 const JUL_STEP_SECONDS = 0.16;
 const JUL_STEPS_PER_BAR = 8;
 
+/**
+ * Two alternating generic trap/rap-style bar patterns (never a
+ * transcription of any real song — see _scheduleJulBar's own header note).
+ * Pattern A is a steady four-on-the-floor-ish base groove; Pattern B is a
+ * more syncopated variant (extra kick hits, a ghost snare, a hi-hat roll)
+ * so the loop doesn't feel like a single bar repeating forever.
+ */
+const JUL_BAR_PATTERNS = Object.freeze([
+  Object.freeze({
+    kicks: Object.freeze([0, 4]),
+    bass: Object.freeze([{ step: 0, frequency: 45 }, { step: 6, frequency: 40 }]),
+    snares: Object.freeze([2, 6]),
+    hihats: Object.freeze([0, 1, 2, 3, 4, 5, 6, 7].map((step) => ({ step, offset: 0 }))),
+  }),
+  Object.freeze({
+    kicks: Object.freeze([0, 3, 4, 7]),
+    bass: Object.freeze([{ step: 0, frequency: 45 }]),
+    snares: Object.freeze([2, 5, 6]),
+    hihats: Object.freeze([
+      ...[0, 1, 2, 3, 4, 5, 6, 7].map((step) => ({ step, offset: 0 })),
+      { step: 6, offset: 0.5 },
+    ]),
+  }),
+]);
+
 function createStorageAdapter() {
   try {
     if (typeof localStorage !== 'undefined') {
@@ -55,6 +80,12 @@ function getAudioContextClass() {
   return window.AudioContext ?? window.webkitAudioContext ?? null;
 }
 
+/** The browser's HTMLAudioElement constructor, or null in any environment without one (Node's test runner included). */
+function getAudioElementClass() {
+  if (typeof window === 'undefined') return null;
+  return window.Audio ?? null;
+}
+
 class AudioEngine {
   constructor({ storage = createStorageAdapter() } = {}) {
     this._storage = storage;
@@ -62,6 +93,20 @@ class AudioEngine {
     this._muted = this._storage.getItem(STORAGE_KEY) === '1';
     this._julModeEnabled = this._storage.getItem(JUL_MODE_STORAGE_KEY) === '1';
     this._julTimerId = null;
+    this._julBarIndex = 0;
+
+    /**
+     * A player-supplied local audio file used as ambiance instead of the
+     * synthesized cues above — see loadCustomTrack(). Deliberately
+     * session-only: a File object (and the Blob URL built from it) cannot
+     * survive a page reload, so nothing about it is persisted to storage —
+     * the player re-selects their file each session, same as any other
+     * browser file-input flow.
+     */
+    this._customTrackEl = null;
+    this._customTrackUrl = null;
+    this._customTrackName = null;
+    this._customTrackEnabled = false;
   }
 
   /** @returns {boolean} True if sound is currently muted. */
@@ -75,8 +120,13 @@ class AudioEngine {
   setMuted(muted) {
     this._muted = Boolean(muted);
     this._storage.setItem(STORAGE_KEY, this._muted ? '1' : '0');
-    if (this._muted) this._stopJulLoop();
-    else if (this._julModeEnabled) this._startJulLoop();
+    if (this._muted) {
+      this._stopJulLoop();
+      this._customTrackEl?.pause();
+    } else {
+      if (this._julModeEnabled) this._startJulLoop();
+      if (this._customTrackEnabled) this._customTrackEl?.play().catch(() => {});
+    }
   }
 
   /** @returns {boolean} The new muted state. */
@@ -102,14 +152,97 @@ class AudioEngine {
   setJulModeEnabled(enabled) {
     this._julModeEnabled = Boolean(enabled);
     this._storage.setItem(JUL_MODE_STORAGE_KEY, this._julModeEnabled ? '1' : '0');
-    if (this._julModeEnabled && !this._muted) this._startJulLoop();
-    else this._stopJulLoop();
+    if (this._julModeEnabled) {
+      if (this._customTrackEnabled) this.setCustomTrackEnabled(false); // only one ambiance source plays at once
+      if (!this._muted) this._startJulLoop();
+    } else {
+      this._stopJulLoop();
+    }
   }
 
   /** @returns {boolean} The new JUL-mode state. */
   toggleJulMode() {
     this.setJulModeEnabled(!this._julModeEnabled);
     return this._julModeEnabled;
+  }
+
+  // ---- custom local ambiance track ---------------------------------------------
+
+  /** @returns {boolean} True if a player-supplied local track is currently loaded and enabled. */
+  isCustomTrackEnabled() {
+    return this._customTrackEnabled;
+  }
+
+  /** @returns {string|null} The loaded file's name, or null if none is loaded. */
+  getCustomTrackName() {
+    return this._customTrackName;
+  }
+
+  /**
+   * Loads a local audio file (from a <input type="file"> selection, see
+   * web/app.js's Options Audio card) as a looping ambiance track, playing
+   * in place of the synthesized JUL-mode loop. Purely a local-playback
+   * convenience — the file itself is never uploaded, transcoded, or
+   * inspected, only handed to a plain HTMLAudioElement via a local Blob
+   * URL. Not persisted: the File object (and the Blob URL built from it)
+   * cannot survive a reload, so the player re-selects it each session.
+   * @param {File|Blob} file
+   * @returns {boolean} True if the track was loaded.
+   */
+  loadCustomTrack(file) {
+    const AudioElementClass = getAudioElementClass();
+    if (!AudioElementClass || !file) return false;
+
+    try {
+      this.clearCustomTrack();
+      const url = URL.createObjectURL(file);
+      const audioEl = new AudioElementClass(url);
+      audioEl.loop = true;
+      audioEl.volume = 0.5;
+
+      this._customTrackUrl = url;
+      this._customTrackEl = audioEl;
+      this._customTrackName = file.name || 'Piste personnalisee';
+      this.setCustomTrackEnabled(true);
+      return true;
+    } catch {
+      this.clearCustomTrack();
+      return false;
+    }
+  }
+
+  /** Unloads the current custom track (if any), stopping playback and releasing its Blob URL. */
+  clearCustomTrack() {
+    this._customTrackEl?.pause();
+    if (this._customTrackUrl) {
+      try {
+        URL.revokeObjectURL(this._customTrackUrl);
+      } catch {
+        // best-effort cleanup only
+      }
+    }
+    this._customTrackEl = null;
+    this._customTrackUrl = null;
+    this._customTrackName = null;
+    this._customTrackEnabled = false;
+  }
+
+  /**
+   * Plays/pauses the currently loaded custom track. No-ops if none is
+   * loaded. Enabling it stops the synthesized JUL loop, if running (only
+   * one ambiance source plays at once — see setJulModeEnabled()).
+   * @param {boolean} enabled
+   */
+  setCustomTrackEnabled(enabled) {
+    this._customTrackEnabled = Boolean(enabled) && Boolean(this._customTrackEl);
+    if (!this._customTrackEl) return;
+
+    if (this._customTrackEnabled) {
+      if (this._julModeEnabled) this.setJulModeEnabled(false);
+      if (!this._muted) this._customTrackEl.play().catch(() => {});
+    } else {
+      this._customTrackEl.pause();
+    }
   }
 
   // ---- named cues -------------------------------------------------------------
@@ -169,9 +302,10 @@ class AudioEngine {
     return this._ctx;
   }
 
-  /** Starts (or restarts) the looping JUL-mode ambiance. No-ops silently with no Web Audio API available. */
+  /** Starts (or restarts, always from Pattern A) the looping JUL-mode ambiance. No-ops silently with no Web Audio API available. */
   _startJulLoop() {
     this._stopJulLoop();
+    this._julBarIndex = 0;
     if (!this._getContext()) return;
     this._scheduleJulBar();
   }
@@ -187,8 +321,10 @@ class AudioEngine {
   /**
    * Schedules one 8-step "Marseille rap style" bar (808-ish kick, a low
    * bass stab, trap-adjacent hi-hat ticks, a snare-like noise burst on the
-   * backbeats) then re-arms itself for the next bar — a simple generic
-   * synthesized trap/rap ambiance, never a reproduction of any real song.
+   * backbeats), alternating between the two generic patterns in
+   * JUL_BAR_PATTERNS so the loop doesn't feel identical bar after bar, then
+   * re-arms itself for the next bar — a simple generic synthesized
+   * trap/rap ambiance, never a reproduction of any real song.
    */
   _scheduleJulBar() {
     if (this._muted || !this._julModeEnabled) return;
@@ -198,20 +334,20 @@ class AudioEngine {
     try {
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       const barStart = ctx.currentTime + 0.05;
+      const pattern = JUL_BAR_PATTERNS[this._julBarIndex % JUL_BAR_PATTERNS.length];
+      this._julBarIndex += 1;
 
-      for (let step = 0; step < JUL_STEPS_PER_BAR; step += 1) {
-        const t = barStart + step * JUL_STEP_SECONDS;
-
-        if (step === 0 || step === 4) {
-          this._tone(ctx, { frequency: 60, start: t, duration: 0.22, type: 'sine', peakGain: 0.22 });
-        }
-        if (step === 0) {
-          this._tone(ctx, { frequency: 45, start: t, duration: 0.5, type: 'triangle', peakGain: 0.12 });
-        }
-        if (step === 2 || step === 6) {
-          this._noiseBurst(ctx, { start: t, duration: 0.12, peakGain: 0.14, filterFrequency: 1800 });
-        }
-        this._noiseBurst(ctx, { start: t, duration: 0.04, peakGain: 0.05, filterFrequency: 7000 });
+      for (const step of pattern.kicks) {
+        this._tone(ctx, { frequency: 60, start: barStart + step * JUL_STEP_SECONDS, duration: 0.22, type: 'sine', peakGain: 0.22 });
+      }
+      for (const { step, frequency } of pattern.bass) {
+        this._tone(ctx, { frequency, start: barStart + step * JUL_STEP_SECONDS, duration: 0.5, type: 'triangle', peakGain: 0.12 });
+      }
+      for (const step of pattern.snares) {
+        this._noiseBurst(ctx, { start: barStart + step * JUL_STEP_SECONDS, duration: 0.12, peakGain: 0.14, filterFrequency: 1800 });
+      }
+      for (const { step, offset } of pattern.hihats) {
+        this._noiseBurst(ctx, { start: barStart + (step + offset) * JUL_STEP_SECONDS, duration: 0.04, peakGain: 0.05, filterFrequency: 7000 });
       }
     } catch {
       // Synthesis is best-effort ambiance — a failure here should never surface to the player.

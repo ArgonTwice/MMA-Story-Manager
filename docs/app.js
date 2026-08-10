@@ -3186,10 +3186,46 @@ class WebApp {
             checked: AudioEngine.isJulModeEnabled() ? 'checked' : null,
             onchange: (event) => {
               AudioEngine.setJulModeEnabled(event.target.checked);
+              this._showSettingsModal();
             },
           }),
           ' Musique Style Jul (ambiance synthetique inspiree du style marseillais)',
         ]),
+        el('p', { class: 'fighter-meta', text: 'Ou chargez votre propre morceau local (mp3/ogg/wav) en ambiance de fond — reste sur votre appareil, jamais televerse.' }),
+        el('input', {
+          type: 'file',
+          accept: 'audio/*',
+          onchange: (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            if (AudioEngine.loadCustomTrack(file)) this._showToast(`\u{1F3B6} ${file.name} charge en ambiance.`);
+            this._showSettingsModal();
+          },
+        }),
+        AudioEngine.getCustomTrackName()
+          ? el('div', { class: 'list-row' }, [
+              el('span', { class: 'list-row-label', text: `\u{1F3B6} ${AudioEngine.getCustomTrackName()}` }),
+              el('label', { class: 'checkbox-row' }, [
+                el('input', {
+                  type: 'checkbox',
+                  checked: AudioEngine.isCustomTrackEnabled() ? 'checked' : null,
+                  onchange: (event) => {
+                    AudioEngine.setCustomTrackEnabled(event.target.checked);
+                    this._showSettingsModal();
+                  },
+                }),
+                ' Actif',
+              ]),
+              el('button', {
+                class: 'btn btn-outline btn-sm',
+                text: 'Retirer',
+                onclick: () => {
+                  AudioEngine.clearCustomTrack();
+                  this._showSettingsModal();
+                },
+              }),
+            ])
+          : null,
       ]),
       el('button', { class: 'btn btn-outline btn-block', text: 'Fermer', onclick: () => this._hideModal() }),
     ]);
