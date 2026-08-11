@@ -24,7 +24,7 @@
 
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
-import { generatePersonality, generateGenderedIdentity, generatePhysicalProfile } from './FighterGenerator.js';
+import { generatePersonality, generateGenderedIdentity, generatePhysicalProfile, computeAcademyOverallBase } from './FighterGenerator.js';
 
 /** Local flavor data for prospect names — not a BALANCE-owned gameplay concept, same precedent as tools/SimRunner.js's own FIRST_NAMES/LAST_NAMES. Split by gender (V3.5), see engine/FighterGenerator.js#generateGenderedIdentity. */
 const MALE_FIRST_NAMES = Object.freeze(['Kylian', 'Malo', 'Yanis', 'Rayan', 'Diego', 'Kenji', 'Bruno', 'Noe']);
@@ -75,13 +75,12 @@ export function generateAcademyPool({ playerState, rng = Math.random }) {
   const cfg = BALANCE.ACADEMY_DRAFT;
   const poolSize = cfg.POOL_SIZE_MIN + Math.floor(rng() * (cfg.POOL_SIZE_MAX - cfg.POOL_SIZE_MIN + 1));
 
-  const reputationBonus = playerState.reputation * cfg.REPUTATION_SKILL_MEAN_BONUS_PER_POINT;
-  const facilityBonus = playerState.equipLevel * cfg.FACILITY_LEVEL_SKILL_MEAN_BONUS;
+  const overallBase = computeAcademyOverallBase(playerState.reputation, playerState.equipLevel);
 
   const pool = [];
   for (let i = 0; i < poolSize; i += 1) {
     const potential = rollPotentialTier(rng);
-    const skillMean = cfg.BASE_SKILL_MEAN + reputationBonus + facilityBonus + potential.skillMeanBonus;
+    const skillMean = overallBase + potential.skillMeanBonus;
 
     const skills = Object.fromEntries(
       SKILL_KEYS.map((key) => [key, Math.round(skillMean + (rng() * 2 - 1) * cfg.SKILL_SPREAD)])

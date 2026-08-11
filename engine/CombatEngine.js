@@ -279,6 +279,8 @@ export class CombatEngine {
       },
       gameplans: { A: { ...DEFAULT_GAMEPLAN }, B: { ...DEFAULT_GAMEPLAN } },
       weightCut: { A: null, B: null },
+      /** V3.8 "Corner Coaching": a BALANCE.CORNER_COACHING.DIRECTIVES key chosen during the PRECEDING CORNER_PAUSE, consumed (and cleared) by the very next _processRoundSimulation only — see setCornerDirective()/_getCornerDirectiveMultiplier(). null means no directive (equivalent to no modifier). */
+      cornerDirectives: { A: null, B: null },
       live: {
         A: this._createLiveState(fighterA),
         B: this._createLiveState(fighterB),
@@ -340,6 +342,57 @@ export class CombatEngine {
     }
 
     return { ...plan };
+  }
+
+  /**
+   * V3.8 "Corner Coaching": sets fighter A's tactical directive for the
+   * upcoming round, chosen during CORNER_PAUSE (the same "only the
+   * player's own corner" restriction setGameplan() already enforces there
+   * — the opponent's corner is never player-controlled). Rolls a refusal
+   * chance (BALANCE.CORNER_COACHING.REFUSAL) if the fighter's Loyalty or
+   * Morale is below threshold: a refused directive keeps the fighter's
+   * prior behavior (no modifier applied) instead.
+   *
+   * @param {('A'|'B')} fighterKey
+   * @param {string} directiveId - One of Object.keys(BALANCE.CORNER_COACHING.DIRECTIVES).
+   * @returns {{ accepted: boolean, refused: boolean, directiveId: string }}
+   */
+  setCornerDirective(fighterKey, directiveId) {
+    this._assertActiveMatch();
+    this._assertFighterKey(fighterKey);
+    this._assertMatchNotResolved('setCornerDirective');
+
+    if (this.state !== COMBAT_STATES.CORNER_PAUSE) {
+      throw new Error(`CombatEngine.setCornerDirective: only valid during CORNER_PAUSE (current state "${this.state}").`);
+    }
+    if (fighterKey !== 'A') {
+      throw new Error('CombatEngine.setCornerDirective: only fighter "A" (the player\'s corner) may be given a directive.');
+    }
+
+    const cfg = BALANCE.CORNER_COACHING;
+    if (!(directiveId in cfg.DIRECTIVES)) {
+      throw new TypeError(`CombatEngine.setCornerDirective: invalid directive "${directiveId}".`);
+    }
+
+    const fighter = this.context.fighters[fighterKey];
+    const refusalCfg = cfg.REFUSAL;
+    const belowThreshold =
+      fighter.psychology.loyalty < refusalCfg.LOYALTY_THRESHOLD || fighter.attributes.moral < refusalCfg.MORALE_THRESHOLD;
+    const refused = belowThreshold && this.rng() < refusalCfg.REFUSAL_CHANCE;
+
+    this.context.cornerDirectives[fighterKey] = refused ? null : directiveId;
+    return { accepted: !refused, refused, directiveId };
+  }
+
+  /**
+   * @param {('A'|'B')} fighterKey
+   * @param {string} field - A BALANCE.CORNER_COACHING.DIRECTIVES[*] multiplier key.
+   * @returns {number} That field's multiplier from this fighter's currently pending directive, or 1 (no effect) if none is set.
+   */
+  _getCornerDirectiveMultiplier(fighterKey, field) {
+    const directiveId = this.context.cornerDirectives[fighterKey];
+    if (!directiveId) return 1;
+    return BALANCE.CORNER_COACHING.DIRECTIVES[directiveId]?.[field] ?? 1;
   }
 
   /**
@@ -586,6 +639,12 @@ export class CombatEngine {
 
     const offenseA = this._computeRoundOffense('A', 'B');
     const offenseB = this._computeRoundOffense('B', 'A');
+
+    // V3.8 "Corner Coaching": a directive only ever affects the ONE round
+    // it was chosen for (both corners' offense is already computed above)
+    // — clear it now so it never silently carries over into a later round
+    // the player didn't explicitly re-choose it for.
+    c.cornerDirectives = { A: null, B: null };
 
     this._recordCombatMetrics(offenseA, offenseB);
     this._applyTakedownRiskEffects(offenseA, offenseB);
@@ -1160,6 +1219,8 @@ export class CombatEngine {
         : 1;
     const perkDamageMultiplier = this._getPerkMultiplier(attacker, 'damageMultiplier');
     const varianceMultiplier = this._rollVarianceMultiplier();
+    // V3.8 "Corner Coaching": a directive chosen for THIS round only (see setCornerDirective) — 1 (no effect) once no directive is pending.
+    const cornerDamageMultiplier = this._getCornerDirectiveMultiplier(attackerKey, 'damageMultiplier');
 
     // Coach Frappe/Grappling (StaffEngine) and Cage de Competition
     // (GymInfrastructure) both only apply to the player's own fighters —
@@ -1193,7 +1254,8 @@ export class CombatEngine {
     let takedownSuccess = false;
     if (distance === 'GROUND') {
       takedownAttempted = true;
-      const chance = this._computeTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
+      const cornerTakedownMultiplier = this._getCornerDirectiveMultiplier(attackerKey, 'takedownChanceMultiplier');
+      const chance = clamp(this._computeTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus) * cornerTakedownMultiplier, 0, 1);
       takedownSuccess = this.rng() < chance;
     }
     const takedownFailed = takedownAttempted && !takedownSuccess;
@@ -1209,7 +1271,12 @@ export class CombatEngine {
     if (distance === 'CLINCH') {
       clinchAttempted = true;
       if (!c.rules.noTakedowns) {
-        const clinchChance = this._computeClinchTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus);
+        const cornerTakedownMultiplier = this._getCornerDirectiveMultiplier(attackerKey, 'takedownChanceMultiplier');
+        const clinchChance = clamp(
+          this._computeClinchTakedownChance(attacker, defender, defenderLive.takedownDefenseBonus) * cornerTakedownMultiplier,
+          0,
+          1
+        );
         clinchTakedownLanded = this.rng() < clinchChance;
       }
     }
@@ -1230,12 +1297,15 @@ export class CombatEngine {
       varianceMultiplier *
       staffDistanceMultiplier *
       equipmentClinchMultiplier *
+      cornerDamageMultiplier *
       hitChance;
 
     const targetEffects = BALANCE.COMBAT.GAMEPLAN.TARGET_EFFECTS[plan.target];
     const overallGap = attacker.getOverallRating() - defender.getOverallRating();
     const advantageMultiplier = 1 + overallGap * BALANCE.COMBAT.DAMAGE.ATTRIBUTE_ADVANTAGE_SCALING;
     const defenderDamageTakenMultiplier = this._getPerkMultiplier(defender, 'damageTakenMultiplier');
+    // V3.8 "Corner Coaching": the DEFENDER's own pending directive (e.g. "Defends-toi") adjusts damage THEY take, same shape as defenderDamageTakenMultiplier above.
+    const cornerDamageTakenMultiplier = this._getCornerDirectiveMultiplier(defenderKey, 'damageTakenMultiplier');
     const clinchDamageWeight = distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_DAMAGE_WEIGHT : 1;
 
     const rawDamage = takedownFailed
@@ -1249,16 +1319,20 @@ export class CombatEngine {
             advantageMultiplier *
             tempoMods.damageTakenMultiplier *
             defenderDamageTakenMultiplier *
+            cornerDamageTakenMultiplier *
             counterDamageMultiplier
         );
 
     const staminaCostKey = BALANCE.COMBAT.GAMEPLAN.DISTANCE_STAMINA_COST_KEY[distance];
     const staminaCostBase = BALANCE.COMBAT.STAMINA[staminaCostKey];
     const perkStaminaMultiplier = this._getPerkMultiplier(attacker, 'staminaCostMultiplier');
+    const cornerStaminaMultiplier = this._getCornerDirectiveMultiplier(attackerKey, 'staminaCostMultiplier');
     const failureStaminaPenalty = transitionFailed ? risk.FAILURE_STAMINA_PENALTY : 0;
     const clinchFatiguePenalty = distance === 'CLINCH' ? BALANCE.COMBAT.CLINCH.CLINCH_FATIGUE_PER_ROUND : 0;
     const staminaCost =
-      staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier + failureStaminaPenalty + clinchFatiguePenalty;
+      staminaCostBase * tempoMods.staminaCostMultiplier * perkStaminaMultiplier * cornerStaminaMultiplier +
+      failureStaminaPenalty +
+      clinchFatiguePenalty;
 
     let submissionAttempted = false;
     let submissionSuccess = false;
@@ -1269,6 +1343,7 @@ export class CombatEngine {
       const defenderGrappling = (defender.attributes.skills.sol + defender.attributes.skills.soumission) / 2;
       const styleSubMultiplier = styleBonus.submissionChanceMultiplier ?? 1;
       const perkSubMultiplier = this._getPerkMultiplier(attacker, 'submissionChanceMultiplier');
+      const cornerSubMultiplier = this._getCornerDirectiveMultiplier(attackerKey, 'submissionChanceMultiplier');
       // Submission Only: "les degats de frappe reduisent la resistance au
       // sol" — every point of strike damage the DEFENDER has already
       // absorbed this fight (accumulated in PREVIOUS rounds only; this
@@ -1283,7 +1358,8 @@ export class CombatEngine {
       const chance = clamp(
         (sub.BASE_SUCCESS_CHANCE + sub.SKILL_DELTA_CHANCE_SCALING * (attackerGrappling - defenderGrappling)) *
           styleSubMultiplier *
-          perkSubMultiplier +
+          perkSubMultiplier *
+          cornerSubMultiplier +
           groundResistanceDamageBonus,
         sub.MIN_CHANCE,
         sub.MAX_CHANCE

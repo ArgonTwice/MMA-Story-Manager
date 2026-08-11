@@ -1010,3 +1010,118 @@ test('a fight winner\'s confidence rises more from a finish than from a decision
     assert.equal(winByFinish.b.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE + BALANCE.CONFIDENCE.EVENTS.LOSE_FIGHT);
   }
 });
+
+// ---- V3.8: Corner Coaching (between-round directives) --------------------------
+
+/** Drives a fresh match to right after round 1 resolves — engine.state lands on CORNER_PAUSE (or DECISION_STOPPAGE for a 1-round fight; BALANCE.COMBAT.ROUNDS_PER_FIGHT.UNDERCARD is always >= 2, so CORNER_PAUSE is guaranteed here). */
+function setupToFirstCornerPause(seed = 1) {
+  const a = makeFighter('Corner A', 55);
+  const b = makeFighter('Corner B', 55);
+  const engine = new CombatEngine({ rng: createSeededRng(seed) });
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'BALANCED' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'BALANCED' });
+
+  let stepResult;
+  do {
+    stepResult = engine.executeNextStep();
+  } while (!('log' in stepResult));
+
+  assert.equal(engine.state, COMBAT_STATES.CORNER_PAUSE, 'sanity: a 1-round fight would break this helper\'s assumption');
+  return { engine, a, b };
+}
+
+test('setCornerDirective only works during CORNER_PAUSE, only for fighter A, and only for a real directive id', () => {
+  const a = makeFighter('A', 50);
+  const b = makeFighter('B', 50);
+  const engine = new CombatEngine({ rng: createSeededRng(1) });
+  engine.setupMatch(a, b, 'WFC', false);
+
+  assert.throws(() => engine.setCornerDirective('A', 'GARDER_GAMEPLAN'), /CORNER_PAUSE/);
+
+  const { engine: pausedEngine } = setupToFirstCornerPause();
+  assert.throws(() => pausedEngine.setCornerDirective('B', 'GARDER_GAMEPLAN'), /fighter "A"/);
+  assert.throws(() => pausedEngine.setCornerDirective('A', 'NOT_A_REAL_DIRECTIVE'), TypeError);
+});
+
+test('a fighter with healthy Loyalty/Morale always accepts the chosen directive', () => {
+  const { engine, a } = setupToFirstCornerPause();
+  a.psychology.loyalty = 80;
+  a.attributes.moral = 80;
+
+  const result = engine.setCornerDirective('A', 'ATTAQUER_TOUT_PRIX');
+  assert.equal(result.accepted, true);
+  assert.equal(result.refused, false);
+  assert.equal(engine.context.cornerDirectives.A, 'ATTAQUER_TOUT_PRIX');
+});
+
+test('a fighter below the Loyalty AND Morale threshold can refuse the directive and keeps prior behavior (no modifier)', () => {
+  const { engine, a } = setupToFirstCornerPause();
+  a.psychology.loyalty = 10;
+  a.attributes.moral = 10;
+  // Force the refusal roll to hit: REFUSAL_CHANCE is a probability checked via `rng() < REFUSAL_CHANCE`,
+  // and this engine's own rng stream is deterministic (seed=1) — verify at least one of a few directive
+  // calls on freshly re-seeded engines actually refuses, rather than assuming the very first roll does.
+  let sawRefusal = false;
+  for (let seed = 1; seed <= 20 && !sawRefusal; seed += 1) {
+    const { engine: e, a: fighterA } = setupToFirstCornerPause(seed);
+    fighterA.psychology.loyalty = 10;
+    fighterA.attributes.moral = 10;
+    const result = e.setCornerDirective('A', 'ATTAQUER_TOUT_PRIX');
+    if (result.refused) {
+      sawRefusal = true;
+      assert.equal(result.accepted, false);
+      assert.equal(e.context.cornerDirectives.A, null, 'a refused directive must not be stored as pending');
+    }
+  }
+  assert.ok(sawRefusal, 'expected at least one refusal across 20 seeds for a fighter this far below both thresholds');
+});
+
+test('a fighter at/above both thresholds never refuses, regardless of the rng stream', () => {
+  for (let seed = 1; seed <= 10; seed += 1) {
+    const { engine, a } = setupToFirstCornerPause(seed);
+    a.psychology.loyalty = BALANCE.CORNER_COACHING.REFUSAL.LOYALTY_THRESHOLD;
+    a.attributes.moral = BALANCE.CORNER_COACHING.REFUSAL.MORALE_THRESHOLD;
+    const result = engine.setCornerDirective('A', 'DEFENDS_TOI');
+    assert.equal(result.accepted, true, `seed ${seed}: at-threshold Loyalty/Morale should never trigger refusal`);
+  }
+});
+
+test('ATTAQUER_TOUT_PRIX raises round-2 damage dealt by fighter A relative to an identical fight with no directive chosen', () => {
+  const withoutDirective = setupToFirstCornerPause(7);
+  withoutDirective.engine.executeNextStep(); // CORNER_PAUSE -> ROUND_START
+  let step;
+  do {
+    step = withoutDirective.engine.executeNextStep();
+  } while (!('log' in step));
+  const baselineDamage = step.log.damageDealt.A;
+
+  const withDirective = setupToFirstCornerPause(7);
+  withDirective.engine.setCornerDirective('A', 'ATTAQUER_TOUT_PRIX');
+  withDirective.a.psychology.loyalty = 80;
+  withDirective.a.attributes.moral = 80;
+  withDirective.engine.executeNextStep(); // CORNER_PAUSE -> ROUND_START
+  let step2;
+  do {
+    step2 = withDirective.engine.executeNextStep();
+  } while (!('log' in step2));
+  const boostedDamage = step2.log.damageDealt.A;
+
+  assert.ok(boostedDamage > baselineDamage, `expected ATTAQUER_TOUT_PRIX to raise round-2 damage (baseline=${baselineDamage}, boosted=${boostedDamage})`);
+});
+
+test('a chosen directive is consumed after exactly one round — cornerDirectives is cleared once that round resolves', () => {
+  const { engine, a } = setupToFirstCornerPause();
+  a.psychology.loyalty = 80;
+  a.attributes.moral = 80;
+  engine.setCornerDirective('A', 'TRAVAILLER_GRAPPLING');
+  assert.equal(engine.context.cornerDirectives.A, 'TRAVAILLER_GRAPPLING');
+
+  engine.executeNextStep(); // CORNER_PAUSE -> ROUND_START
+  let step;
+  do {
+    step = engine.executeNextStep();
+  } while (!('log' in step));
+
+  assert.equal(engine.context.cornerDirectives.A, null, 'the directive must not survive past the round it was chosen for');
+});

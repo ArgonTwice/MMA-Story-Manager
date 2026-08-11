@@ -555,8 +555,8 @@ const BALANCE = {
   ECONOMY: {
     STARTING_GYM_FUNDS: 25000,
 
-    /** Weekly recurring gym overhead, before facility upgrades add to it. */
-    BASE_WEEKLY_UPKEEP: 1700,
+    /** Weekly recurring gym overhead, before facility upgrades add to it — V3.8: fixed at exactly 500$/week, the "Local Modeste" starting tier's own rent (equipLevel 0, see engine/EconomyEngine.js#processWeeklyExpenses: rent = BASE_WEEKLY_UPKEEP + equipLevel * UPKEEP_PER_FACILITY_LEVEL). */
+    BASE_WEEKLY_UPKEEP: 500,
     /** Extra weekly upkeep added per facility (equipLevel) point. */
     UPKEEP_PER_FACILITY_LEVEL: 300,
 
@@ -1094,15 +1094,15 @@ const BALANCE = {
     MIN_AGE: 18,
     MAX_AGE: 22,
 
-    /** Baseline skill mean before Reputation/facility bonuses — mirrors PROGRESSION.DEFAULT_STARTING_SKILL_VALUE. */
-    BASE_SKILL_MEAN: 30,
-    /** Random +/- spread applied per skill around the computed mean. */
+    /**
+     * V3.8: the pre-spread skill mean now comes from
+     * engine/FighterGenerator.js#computeAcademyOverallBase(reputation,
+     * equipLevel) instead of a flat base + separate bonuses — a fresh gym's
+     * very first prospects land genuinely raw (~25 Overall) rather than
+     * already half-trained. Random +/- spread applied per skill around
+     * that computed mean.
+     */
     SKILL_SPREAD: 12,
-
-    /** Skill-mean bonus per point of GYM.reputation (0-100) — a prestigious gym attracts sharper prospects. */
-    REPUTATION_SKILL_MEAN_BONUS_PER_POINT: 0.2,
-    /** Skill-mean bonus per PlayerState.equipLevel — better facilities train sharper prospects too. */
-    FACILITY_LEVEL_SKILL_MEAN_BONUS: 3,
 
     /**
      * Potential tiers rolled per prospect (highest tier whose minRoll the
@@ -2660,6 +2660,94 @@ const BALANCE = {
       INDEPENDENT_SKILL_SPREAD: 15,
       INDEPENDENT_MIN_AGE: 20,
       INDEPENDENT_MAX_AGE: 33,
+    },
+
+    /**
+     * V3.8 "Contrats d'Exclusivite de Ligue": once the gym's own
+     * BALANCE.LEAGUE_PYRAMID standing reaches National or Elite Mondiale,
+     * the very next fighter to register for a Gala signs an exclusivity
+     * contract binding them to that Gala's own GALA_CIRCUIT organization
+     * for FIGHTS_REQUIRED fights — see engine/LeagueEngine.js#registerForGala/
+     * models/Fighter.js#signExclusivityContract. While under contract, that
+     * fighter cannot register for a Gala under a DIFFERENT organization
+     * (see registerForGala's own EXCLUSIVITY_CONTRACT_VIOLATION rejection)
+     * unless the release clause is paid to break it early.
+     */
+    EXCLUSIVITY: {
+      /** BALANCE.LEAGUE_PYRAMID.TIERS keys that trigger a mandatory exclusivity contract. */
+      REQUIRED_LEAGUE_TIERS: ['NATIONAL', 'ELITE_MONDIALE'],
+      FIGHTS_REQUIRED: 4,
+      SIGNING_BONUS: 5000,
+      RELEASE_CLAUSE_COST: 15000,
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // CORNER_COACHING — V3.8: engine/CombatEngine.js's between-round
+  // directive system (see setCornerDirective/_getCornerDirectiveMultiplier).
+  // Between R1->R2 and R2->R3 (any CORNER_PAUSE that isn't the final one),
+  // the player picks one of 4 tactical directives for their own fighter
+  // (corner A only — the opponent AI's corner is never player-controlled,
+  // same convention as gameplan) that modifies exactly the NEXT round's
+  // damage dealt/taken, fatigue cost, takedown chance, and submission
+  // chance. A fighter whose Loyalty or Morale has fallen below threshold
+  // may refuse the directive outright and keep their prior behavior
+  // instead (see REFUSAL below) — every multiplier field mirrors an
+  // existing PERKS.DEFINITIONS[*] field name 1:1 (damageMultiplier,
+  // damageTakenMultiplier, staminaCostMultiplier, takedownChanceMultiplier,
+  // submissionChanceMultiplier) so CombatEngine can read both through the
+  // exact same call shape.
+  // ---------------------------------------------------------------------
+  CORNER_COACHING: {
+    DIRECTIVES: {
+      ATTAQUER_TOUT_PRIX: {
+        label: 'Attaquer a tout prix',
+        description: '+20% Degats, +30% Consommation Fatigue, -10% Defense',
+        damageMultiplier: 1.2,
+        staminaCostMultiplier: 1.3,
+        damageTakenMultiplier: 1.1,
+        takedownChanceMultiplier: 1,
+        submissionChanceMultiplier: 1,
+      },
+      TRAVAILLER_GRAPPLING: {
+        label: 'Travaille le grappling',
+        description: '+40% Takedown, +20% Soumission, +10% Fatigue',
+        damageMultiplier: 1,
+        staminaCostMultiplier: 1.1,
+        damageTakenMultiplier: 1,
+        takedownChanceMultiplier: 1.4,
+        submissionChanceMultiplier: 1.2,
+      },
+      DEFENDS_TOI: {
+        label: 'Defends-toi / Gerer',
+        description: '+30% Defense, -10% Consommation Fatigue, -20% Degats',
+        damageMultiplier: 0.8,
+        staminaCostMultiplier: 0.9,
+        damageTakenMultiplier: 0.7,
+        takedownChanceMultiplier: 1,
+        submissionChanceMultiplier: 1,
+      },
+      GARDER_GAMEPLAN: {
+        label: 'Garder le Gameplan',
+        description: 'Aucun modificateur',
+        damageMultiplier: 1,
+        staminaCostMultiplier: 1,
+        damageTakenMultiplier: 1,
+        takedownChanceMultiplier: 1,
+        submissionChanceMultiplier: 1,
+      },
+    },
+
+    /**
+     * A fighter below EITHER threshold may refuse the chosen directive
+     * (rolled at REFUSAL_CHANCE) and keep their prior behavior instead —
+     * "Si Loyalty < 35% ou Moral < 40%, appliquer une probabilite que le
+     * combattant refuse la directive."
+     */
+    REFUSAL: {
+      LOYALTY_THRESHOLD: 35,
+      MORALE_THRESHOLD: 40,
+      REFUSAL_CHANCE: 0.35,
     },
   },
 };

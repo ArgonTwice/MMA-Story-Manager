@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
-import { generatePersonality, generateFighterIdentity, generateGenderedIdentity, generatePhysicalProfile } from './FighterGenerator.js';
+import { generatePersonality, generateFighterIdentity, generateGenderedIdentity, generatePhysicalProfile, computeAcademyOverallBase } from './FighterGenerator.js';
 
 test('generatePersonality always returns a valid archetype and MIN_TRAITS..MAX_TRAITS unique, valid traits', () => {
   const archetypeKeys = new Set(Object.keys(BALANCE.PERSONALITY.ARCHETYPES));
@@ -143,4 +143,28 @@ test('a Fighter built from generatePhysicalProfile\'s output round-trips its ide
   assert.equal(fighter.identity.heightCm, physical.heightCm);
   assert.equal(fighter.identity.weightKg, physical.weightKg);
   assert.equal(fighter.identity.weightClass, physical.weightClassLabel);
+});
+
+// ---- V3.8: computeAcademyOverallBase -------------------------------------------
+
+test('computeAcademyOverallBase lands at exactly 25 for a fresh gym (0 Reputation, equipLevel 0) — a genuinely raw starting prospect', () => {
+  assert.equal(computeAcademyOverallBase(0, 0), 25);
+});
+
+test('computeAcademyOverallBase follows OverallBase = min(100, 25 + Reputation*0.3 + EquipmentScore*0.2)', () => {
+  const maxEquipLevel = BALANCE.GYM.TIERS.length - 1;
+  const equipmentScore = (2 / maxEquipLevel) * 100;
+  const expected = 25 + 50 * 0.3 + equipmentScore * 0.2;
+  assert.equal(computeAcademyOverallBase(50, 2), expected);
+});
+
+test('computeAcademyOverallBase increases with Reputation and with equipLevel, and never exceeds 100', () => {
+  const base = computeAcademyOverallBase(0, 0);
+  const higherReputation = computeAcademyOverallBase(50, 0);
+  const higherEquip = computeAcademyOverallBase(0, BALANCE.GYM.TIERS.length - 1);
+  const maxed = computeAcademyOverallBase(100, BALANCE.GYM.TIERS.length - 1);
+
+  assert.ok(higherReputation > base);
+  assert.ok(higherEquip > base);
+  assert.ok(maxed <= 100);
 });

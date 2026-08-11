@@ -55,6 +55,36 @@ test('psychology.loyalty round-trips through toJSON/fromJSON', () => {
   assert.equal(rebuilt.psychology.loyalty, BALANCE.PSYCHOLOGY.STARTING_VALUES.loyalty - 15);
 });
 
+test('a new fighter has no exclusivity contract; signExclusivityContract/consumeExclusivityFight/releaseExclusivityContract manage it correctly', () => {
+  const fighter = makeFighter();
+  assert.equal(fighter.isUnderExclusivityContract(), false);
+  assert.equal(fighter.contracts.exclusivity, null);
+
+  fighter.signExclusivityContract('LOCAL_FIGHTING', 4);
+  assert.equal(fighter.isUnderExclusivityContract(), true);
+  assert.deepEqual(fighter.contracts.exclusivity, { orgId: 'LOCAL_FIGHTING', fightsRemaining: 4 });
+
+  fighter.consumeExclusivityFight();
+  fighter.consumeExclusivityFight();
+  fighter.consumeExclusivityFight();
+  assert.equal(fighter.isUnderExclusivityContract(), true);
+  assert.equal(fighter.contracts.exclusivity.fightsRemaining, 1);
+
+  fighter.consumeExclusivityFight();
+  assert.equal(fighter.isUnderExclusivityContract(), false, 'contract auto-expires once fightsRemaining reaches 0');
+
+  fighter.signExclusivityContract('ECL', 4);
+  fighter.releaseExclusivityContract();
+  assert.equal(fighter.isUnderExclusivityContract(), false);
+});
+
+test('contracts.exclusivity round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  fighter.signExclusivityContract('APEX', 3);
+  const rebuilt = Fighter.fromJSON(fighter.toJSON());
+  assert.deepEqual(rebuilt.contracts.exclusivity, { orgId: 'APEX', fightsRemaining: 3 });
+});
+
 test('getReadiness matches the documented v2 formula: 100 - (0.6*PhysicalFatigue + 0.4*MentalFatigue) + MoralModifier + TacticalBonus - InjuryRisk, clamped', () => {
   const r = BALANCE.READINESS;
   const fighter = makeFighter({ attributes: { forme: 80, moral: 65, physicalFatigue: 40, mentalFatigue: 20 } });

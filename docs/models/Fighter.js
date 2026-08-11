@@ -253,6 +253,16 @@ export class Fighter {
       currentContract: config.contracts?.currentContract ?? null,
       blacklist: config.contracts?.blacklist ? [...config.contracts.blacklist] : [],
       scoutOffers: config.contracts?.scoutOffers ? [...config.contracts.scoutOffers] : [],
+      /**
+       * V3.8 "Contrats d'Exclusivite de Ligue": { orgId, fightsRemaining },
+       * or null if unsigned. Set once the player's gym reaches National/
+       * Elite Mondiale standing and this fighter next registers for a Gala
+       * (see engine/LeagueEngine.js#registerForGala) — binds them to that
+       * Gala's organization until fightsRemaining reaches 0 (consumed one
+       * at a time by consumeExclusivityFight(), called once per resolved
+       * fight) or the release clause is paid (releaseExclusivityContract()).
+       */
+      exclusivity: config.contracts?.exclusivity ? { ...config.contracts.exclusivity } : null,
     };
 
     /**
@@ -746,6 +756,40 @@ export class Fighter {
   }
 
   /**
+   * V3.8 "Contrats d'Exclusivite de Ligue": binds this fighter to a
+   * BALANCE.GALA_CIRCUIT organization for a fixed number of fights — see
+   * engine/LeagueEngine.js#registerForGala, the only caller. Overwrites
+   * any existing exclusivity contract outright (never stacks).
+   * @param {string} orgId
+   * @param {number} fightsRequired
+   */
+  signExclusivityContract(orgId, fightsRequired) {
+    this.contracts.exclusivity = { orgId, fightsRemaining: fightsRequired };
+  }
+
+  /** @returns {boolean} True if this fighter is currently bound by an exclusivity contract. */
+  isUnderExclusivityContract() {
+    return this.contracts.exclusivity !== null;
+  }
+
+  /**
+   * Consumes one fight toward the contract's remaining count — called once
+   * per resolved fight (win, loss, or draw all count equally) while this
+   * fighter is under exclusivity. Clears the contract outright once
+   * fightsRemaining reaches 0. No-ops if no contract is active.
+   */
+  consumeExclusivityFight() {
+    if (!this.contracts.exclusivity) return;
+    this.contracts.exclusivity.fightsRemaining -= 1;
+    if (this.contracts.exclusivity.fightsRemaining <= 0) this.contracts.exclusivity = null;
+  }
+
+  /** Breaks the exclusivity contract early (the caller is responsible for charging the release-clause cost) — a no-op if none is active. */
+  releaseExclusivityContract() {
+    this.contracts.exclusivity = null;
+  }
+
+  /**
    * @param {number} delta
    */
   adjustPhysicalFatigue(delta) {
@@ -865,6 +909,7 @@ export class Fighter {
         currentContract: this.contracts.currentContract,
         blacklist: [...this.contracts.blacklist],
         scoutOffers: [...this.contracts.scoutOffers],
+        exclusivity: this.contracts.exclusivity ? { ...this.contracts.exclusivity } : null,
       },
       weeklySalary: this.weeklySalary,
       weeksAtGym: this.weeksAtGym,

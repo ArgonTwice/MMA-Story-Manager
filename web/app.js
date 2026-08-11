@@ -56,6 +56,7 @@ import {
   getAllWeightClassRankings,
   getUpcomingGalas,
   registerForGala,
+  releaseGalaExclusivity,
 } from '../engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from '../engine/PressConferenceEngine.js';
@@ -85,7 +86,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v3.7';
+const APP_VERSION = 'v3.8';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -704,6 +705,20 @@ class WebApp {
         ]),
       ])
     );
+
+    if (isAcademyDraftAvailable(this.gameState.playerState, this.gameState.worldState.year)) {
+      panel.appendChild(
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card-title', text: '\u{1F393} Draft de l\'Academie disponible' }),
+          el('p', { text: 'Votre academie a prepare de jeunes espoirs — promouvez-en un gratuitement dans votre effectif.' }),
+          el('button', {
+            class: 'btn btn-gold btn-block',
+            text: '\u{1F393} Voir les prospects',
+            onclick: () => this._maybeOpenAcademyDraft(),
+          }),
+        ])
+      );
+    }
 
     if (snapshot.gym.coaches.length > 0) {
       panel.appendChild(
@@ -1934,6 +1949,24 @@ class WebApp {
           onclick: () => this._showRankingsModal(),
         })
       );
+
+      if (selectedFighter.contracts.exclusivity) {
+        const boundOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((org) => org.id === selectedFighter.contracts.exclusivity.orgId);
+        panel.appendChild(
+          el('div', { class: 'card' }, [
+            el('div', { class: 'card-title', text: '\u{1F4DD} Contrat d\'Exclusivite' }),
+            el('p', {
+              text: `${selectedFighter.identity.name} est lie a ${boundOrg?.label ?? selectedFighter.contracts.exclusivity.orgId} — ${selectedFighter.contracts.exclusivity.fightsRemaining} combat(s) restant(s) avant liberation.`,
+            }),
+            el('button', {
+              class: 'btn btn-outline btn-block',
+              text: `\u{1F4B8} Racheter la clause liberatoire (${BALANCE.GALA_CIRCUIT.EXCLUSIVITY.RELEASE_CLAUSE_COST.toLocaleString('fr-FR')}$)`,
+              disabled: playerState.money >= BALANCE.GALA_CIRCUIT.EXCLUSIVITY.RELEASE_CLAUSE_COST ? null : 'disabled',
+              onclick: () => this._releaseGalaExclusivity(selectedFighter.identity.id),
+            }),
+          ])
+        );
+      }
     }
 
     panel.appendChild(
@@ -1960,6 +1993,8 @@ class WebApp {
     for (const gala of galas) {
       const daysOut = gala.day - worldState.currentDay;
       const slot = selectedFighter ? gala.weightClassSlots.find((s) => s.weightClass === selectedFighter.identity.weightClass) : null;
+      const exclusivityBlocked =
+        selectedFighter?.contracts.exclusivity && selectedFighter.contracts.exclusivity.orgId !== gala.orgId;
 
       panel.appendChild(
         el('div', { class: 'card' }, [
@@ -1967,13 +2002,15 @@ class WebApp {
           el('p', { class: 'fighter-meta', text: `Dans ${daysOut} jour(s) — Fight Card de ${gala.cardSize} combats.` }),
           !selectedFighter
             ? el('p', { text: 'Choisissez d\'abord votre combattant.' })
-            : slot
-              ? el('button', {
-                  class: 'btn btn-gold btn-block',
-                  text: `S'inscrire (${selectedFighter.identity.weightClass})`,
-                  onclick: () => this._registerForGala(gala.id),
-                })
-              : el('p', { text: `Aucun slot ouvert pour ${selectedFighter.identity.weightClass} sur ce gala.` }),
+            : exclusivityBlocked
+              ? el('p', { text: 'Lie par contrat d\'exclusivite a une autre ligue.' })
+              : slot
+                ? el('button', {
+                    class: 'btn btn-gold btn-block',
+                    text: `S'inscrire (${selectedFighter.identity.weightClass})`,
+                    onclick: () => this._registerForGala(gala.id),
+                  })
+                : el('p', { text: `Aucun slot ouvert pour ${selectedFighter.identity.weightClass} sur ce gala.` }),
         ])
       );
     }
@@ -1989,6 +2026,7 @@ class WebApp {
       NO_OPEN_SLOT: 'aucun slot disponible pour cette categorie de poids.',
       NO_OPPONENT_AVAILABLE: 'aucun adversaire disponible pour le moment.',
       MATCHMAKING_VIOLATION: 'regles de matchmaking non respectees.',
+      EXCLUSIVITY_CONTRACT_VIOLATION: 'ce combattant est lie par contrat d\'exclusivite a une autre ligue.',
     };
     return messages[reason] ?? 'raison inconnue.';
   }
@@ -2021,6 +2059,31 @@ class WebApp {
     } catch (error) {
       console.error('[web/app.js] _registerForGala failed:', error);
       this._showToast(`\u{26A0}\u{FE0F} Inscription impossible : ${error.message}`);
+    }
+  }
+
+  _releaseGalaExclusivity(fighterId) {
+    const { playerState } = this.gameState;
+    const releaseMessages = {
+      FIGHTER_NOT_FOUND: 'combattant introuvable.',
+      NO_ACTIVE_CONTRACT: 'aucun contrat d\'exclusivite actif.',
+      INSUFFICIENT_FUNDS: 'fonds insuffisants pour racheter la clause.',
+    };
+
+    try {
+      const result = releaseGalaExclusivity(playerState, fighterId);
+      if (!result.success) {
+        this._showToast(`\u{26A0}\u{FE0F} Rachat impossible : ${releaseMessages[result.reason] ?? 'raison inconnue.'}`);
+        return;
+      }
+      AudioEngine.playClick();
+      this._showToast(`\u{1F4B8} Clause liberatoire rachetee pour ${result.cost.toLocaleString('fr-FR')}$.`);
+      this._renderFight();
+      this._renderTopbar();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _releaseGalaExclusivity failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Rachat impossible : ${error.message}`);
     }
   }
 
@@ -2744,8 +2807,26 @@ class WebApp {
 
   // ---- LIVE TEXT FEED (play-by-play combat playback) ------------------------------
 
-  /** Fetches the next round (or the final result) and, for a round, arms the beat-by-beat reveal timer — the single engine-advancing step every playback control (auto-advance, Sauter le Round) ultimately calls. */
-  _advanceCombatRound() {
+  /**
+   * Fetches the next round (or the final result) and, for a round, arms the
+   * beat-by-beat reveal timer — the single engine-advancing step every
+   * playback control (auto-advance, Sauter le Round) ultimately calls.
+   *
+   * V3.8 "Corner Coaching": between rounds the engine already pauses in
+   * COMBAT_STATES.CORNER_PAUSE (see engine/CombatEngine.js's own FSM note)
+   * before this method would otherwise drive it into the next round — this
+   * is the single choke point every call site funnels through, so it's
+   * also the single place that detects that pause and shows the Corner
+   * Coaching modal instead of silently skipping past it. Once the player
+   * picks a directive (see _showCornerCoachingModal), that handler calls
+   * back in here with `bypassCornerPause = true` to actually continue.
+   */
+  _advanceCombatRound(bypassCornerPause = false) {
+    if (!bypassCornerPause && this.combatEngine.state === COMBAT_STATES.CORNER_PAUSE) {
+      this._showCornerCoachingModal();
+      return;
+    }
+
     const step = this.fightView.advanceOneRound();
     if (step.finished) {
       this._finishCombatPlayback();
@@ -2755,6 +2836,71 @@ class WebApp {
     this._combatPlayback = { beats: step.round.beats, revealedCount: 0, playing: true, timerId: null };
     this._renderFight();
     this._scheduleNextBeat();
+  }
+
+  /**
+   * V3.8 "Corner Coaching": shown once per between-round pause, before the
+   * next round's beats are fetched. Displays the player's own fighter's
+   * current physical/moral state and a Head Coach readout, then offers 4
+   * tactical directives (see BALANCE.CORNER_COACHING.DIRECTIVES) applying
+   * temporary modifiers to the round about to start.
+   */
+  _showCornerCoachingModal() {
+    const snapshot = this.combatEngine.getSnapshot();
+    const fighterA = this.combatEngine.context?.fighters?.A;
+    if (!fighterA) {
+      this._advanceCombatRound(true);
+      return;
+    }
+    const live = snapshot.live.A;
+    const opponentLive = snapshot.live.B;
+    const coachAdvice =
+      live.health >= opponentLive.health
+        ? 'Vous menez sur les degats encaisses — gardez la main.'
+        : 'Vous encaissez plus que l\'adversaire — pensez a vous proteger.';
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `\u{1F94A} Coin — Round ${snapshot.currentRound} termine` }),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: fighterA.identity.name }),
+        gaugeRow('Sante', live.health),
+        gaugeRow('Stamina', Math.round((live.stamina / live.staminaMax) * 100)),
+        el('p', { class: 'fighter-meta', text: `Moral ${Math.round(fighterA.attributes.moral)} — Loyaute ${Math.round(fighterA.psychology.loyalty)}` }),
+      ]),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-title', text: '\u{1F4CB} Head Coach' }),
+        el('p', { text: coachAdvice }),
+      ]),
+      el(
+        'div',
+        { class: 'choice-list' },
+        Object.entries(BALANCE.CORNER_COACHING.DIRECTIVES).map(([id, directive]) =>
+          el('div', { class: 'card' }, [
+            el('p', { class: 'fighter-meta', text: directive.description }),
+            el('button', {
+              class: 'btn btn-outline choice-btn btn-block',
+              text: directive.label,
+              onclick: () => this._confirmCornerDirective(id),
+            }),
+          ])
+        )
+      ),
+    ]);
+    this._showModal(content, { blocking: true });
+  }
+
+  _confirmCornerDirective(directiveId) {
+    const fighterA = this.combatEngine.context?.fighters?.A;
+    const result = this.combatEngine.setCornerDirective('A', directiveId);
+    this._hideModal();
+
+    if (result.refused) {
+      this._showToast(`\u{1F6AB} ${fighterA?.identity?.name ?? 'Le combattant'} refuse la consigne et garde son comportement.`);
+    } else {
+      AudioEngine.playClick();
+    }
+
+    this._advanceCombatRound(true);
   }
 
   _beginCombatPlayback() {
@@ -2833,6 +2979,17 @@ class WebApp {
     // (winner === null) is skipped rather than counted as a loss.
     if (result.winner !== null) {
       recordLeagueFightResult(this.gameState.playerState, result.winner === 'A');
+    }
+
+    // V3.8 "Contrats d'Exclusivite de Ligue": win, loss, or draw all count
+    // equally toward the 4 fights owed — consumed here, the single place a
+    // sanctioned Combat-tab fight actually finishes.
+    const fighterA = this.combatEngine.context?.fighters?.A;
+    if (fighterA?.isUnderExclusivityContract()) {
+      fighterA.consumeExclusivityFight();
+      if (!fighterA.isUnderExclusivityContract()) {
+        this._showToast(`\u{1F4DD} Le contrat d'exclusivite de ${fighterA.identity.name} arrive a echeance.`);
+      }
     }
 
     this._autosave();

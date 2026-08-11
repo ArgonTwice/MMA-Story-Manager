@@ -100,6 +100,29 @@ export function generatePhysicalProfile(rng = Math.random, gender = null) {
 }
 
 /**
+ * V3.8: the "State drives generation" formula for the Academy Draft's
+ * annual prospect quality — engine/AcademyEngine.js#generateAcademyPool
+ * uses this as the pre-spread skill mean for every prospect it rolls,
+ * so a fresh gym's very first prospects land genuinely raw (Reputation 0,
+ * equipLevel 0 -> OverallBase 25) rather than already half-trained, while
+ * a prestigious, well-equipped gym's academy produces sharper talent.
+ * EquipmentScore is BALANCE.GYM.TIERS' own facility ladder normalized to
+ * 0-100 (equipLevel / (tier count - 1) * 100), the same 0-100 scale
+ * Reputation already uses, so both terms weigh proportionally.
+ *
+ * OverallBase = min(100, 25 + Reputation * 0.3 + EquipmentScore * 0.2)
+ *
+ * @param {number} reputation - PlayerState.reputation (0-100).
+ * @param {number} equipLevel - PlayerState.equipLevel.
+ * @returns {number}
+ */
+export function computeAcademyOverallBase(reputation, equipLevel) {
+  const maxEquipLevel = BALANCE.GYM.TIERS.length - 1;
+  const equipmentScore = maxEquipLevel > 0 ? (equipLevel / maxEquipLevel) * 100 : 0;
+  return Math.min(100, 25 + reputation * 0.3 + equipmentScore * 0.2);
+}
+
+/**
  * @param {() => number} [rng] - Random source in [0, 1). Defaults to Math.random.
  * @returns {{ archetype: string, traits: string[] }} A valid personality,
  *   ready to pass as `new Fighter({ psychology: { personality } })`.

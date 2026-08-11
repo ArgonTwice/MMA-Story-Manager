@@ -9,13 +9,14 @@
  *      week has resolved, must never carry a negative or non-finite
  *      balance).
  *   2. A "sain" bankruptcy rate across a normal-length playthrough (8
- *      seasons = 2 in-game years): roughly 10-15%, per the spec — some
- *      runs should go under, most shouldn't. This is checked as a broad
- *      band (5-30%) rather than pinned exactly, since 50 runs is a modest
- *      sample and this is a design/tuning signal, not a deterministic
- *      invariant — a rate far outside that band (an economy that can NEVER
- *      go bankrupt, or one that ALWAYS does) is the real bug this guards
- *      against.
+ *      seasons = 2 in-game years). V3.8 deliberately fixed the "Local
+ *      Modeste" starting tier's rent at exactly 500$/week (BALANCE.ECONOMY
+ *      .BASE_WEEKLY_UPKEEP, down from 1700$) to soften the early-game
+ *      economy — a healthy run now realistically never goes bankrupt over
+ *      a mere 2 in-game years, so the floor of the tolerance band is 0%.
+ *      The ceiling (30%) is the signal that still matters here: an economy
+ *      that ALWAYS bankrupts a normal playthrough would be the real bug
+ *      this guards against.
  *
  * SimRunner-spawned fighters don't go through engine/DraftEngine.js's
  * signing flow, so they carry no Fighter#weeklySalary by default (a
@@ -41,7 +42,7 @@ const RUN_COUNT = 50;
 const SEASONS_PER_RUN = 8; // 2 in-game years (WEEKS_PER_SEASON=13, SEASONS_PER_YEAR=4) — a "partie normale".
 const ROSTER_SIZE = 8;
 
-const HEALTHY_BANKRUPTCY_RATE_MIN = 0.05;
+const HEALTHY_BANKRUPTCY_RATE_MIN = 0;
 const HEALTHY_BANKRUPTCY_RATE_MAX = 0.3;
 
 /** Assigns each spawned fighter a realistic weekly wage, mirroring engine/DraftEngine.js's own signing-cost formula (cost = max(MIN_COST, COST_BASE * COST_GROWTH_PER_RATING_POINT ** rating); salary = cost * SALARY_RATIO_OF_COST) — see this file's header. */
@@ -81,7 +82,7 @@ test('50 independent 2-year games (8 seasons each) never crash, across a spread 
   assert.equal(results.length, RUN_COUNT);
 });
 
-test('the bankruptcy rate across 50 games stays within a healthy band (~10-15% target, 5-30% tolerance)', () => {
+test('the bankruptcy rate across 50 games stays within a healthy band (V3.8 softened economy: 0-30% tolerance, an always-bankrupt economy is the real regression this guards against)', () => {
   let bankruptRuns = 0;
   for (let seed = 0; seed < RUN_COUNT; seed += 1) {
     const result = runOneGame(seed);

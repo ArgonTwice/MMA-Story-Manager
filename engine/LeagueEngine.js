@@ -450,6 +450,14 @@ export function registerForGala(playerState, worldState, { galaId, fighterId, al
   const gala = getGalaById(worldState, galaId);
   if (!gala) return { success: false, reason: 'GALA_NOT_FOUND' };
 
+  // V3.8 "Contrats d'Exclusivite de Ligue": a fighter already bound to a
+  // DIFFERENT organization cannot register for this gala at all — see
+  // models/Fighter.js#signExclusivityContract, signed below on a
+  // successful registration once the gym reaches National/Elite standing.
+  if (fighter.contracts.exclusivity && fighter.contracts.exclusivity.orgId !== gala.orgId) {
+    return { success: false, reason: 'EXCLUSIVITY_CONTRACT_VIOLATION', boundOrgId: fighter.contracts.exclusivity.orgId };
+  }
+
   const slot = gala.weightClassSlots.find((s) => s.weightClass === fighter.identity.weightClass);
   if (!slot) return { success: false, reason: 'NO_OPEN_SLOT' };
 
@@ -472,7 +480,42 @@ export function registerForGala(playerState, worldState, { galaId, fighterId, al
     fightDay: gala.day,
   });
 
-  return { success: true, record, gala, opponent: draw.fighter };
+  // V3.8: the gym's National/Elite standing now mandates exclusivity —
+  // sign this fighter to it the first time they register while it applies
+  // (a fighter who already signed one earlier, e.g. for this same org,
+  // keeps their existing contract untouched — signExclusivityContract is
+  // only ever called once per fighter, here).
+  const exclusivityCfg = BALANCE.GALA_CIRCUIT.EXCLUSIVITY;
+  let exclusivitySigned = false;
+  if (!fighter.contracts.exclusivity && exclusivityCfg.REQUIRED_LEAGUE_TIERS.includes(playerState.leagueTier)) {
+    fighter.signExclusivityContract(gala.orgId, exclusivityCfg.FIGHTS_REQUIRED);
+    playerState.changeMoney(exclusivityCfg.SIGNING_BONUS, 'EXCLUSIVITY_SIGNING_BONUS');
+    exclusivitySigned = true;
+  }
+
+  return { success: true, record, gala, opponent: draw.fighter, exclusivitySigned };
+}
+
+/**
+ * Pays BALANCE.GALA_CIRCUIT.EXCLUSIVITY.RELEASE_CLAUSE_COST to break a
+ * fighter's active exclusivity contract early, freeing them to register
+ * for a Gala under any organization again.
+ *
+ * @param {Object} playerState
+ * @param {string} fighterId
+ * @returns {{ success: boolean, reason?: string, cost?: number }}
+ */
+export function releaseGalaExclusivity(playerState, fighterId) {
+  const fighter = playerState.getFighter(fighterId);
+  if (!fighter) return { success: false, reason: 'FIGHTER_NOT_FOUND' };
+  if (!fighter.contracts.exclusivity) return { success: false, reason: 'NO_ACTIVE_CONTRACT' };
+
+  const cost = BALANCE.GALA_CIRCUIT.EXCLUSIVITY.RELEASE_CLAUSE_COST;
+  if (playerState.money < cost) return { success: false, reason: 'INSUFFICIENT_FUNDS', cost };
+
+  playerState.changeMoney(-cost, 'EXCLUSIVITY_RELEASE_CLAUSE');
+  fighter.releaseExclusivityContract();
+  return { success: true, cost };
 }
 
 export default {
@@ -490,4 +533,5 @@ export default {
   getGalaById,
   drawGalaOpponent,
   registerForGala,
+  releaseGalaExclusivity,
 };
