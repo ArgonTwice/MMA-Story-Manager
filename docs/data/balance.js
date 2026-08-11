@@ -563,8 +563,8 @@ const BALANCE = {
     /** Passive weekly income from gym memberships/local sponsors, scaling with standing. */
     PASSIVE_INCOME: {
       BASE_WEEKLY: 100,
-      PER_REPUTATION_POINT: 3,
-      PER_HYPE_POINT: 2,
+      PER_REPUTATION_POINT: 1.5,
+      PER_HYPE_POINT: 1,
     },
 
     /** Financial crisis handling when the gym's treasury collapses. */
