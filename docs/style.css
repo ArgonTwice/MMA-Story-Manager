@@ -194,10 +194,10 @@ input[type='text'] {
   margin-bottom: 24px;
 }
 
-/* V3.7: discreet build/version tag — start screen (below the tagline) and topbar header, lets a tester eyeball whether the PWA cache actually served the latest deploy. */
+/* V3.7: discreet build/version tag — start screen (below the tagline), topbar header, and the GymHub footer, lets a player/tester eyeball whether the PWA cache actually served the latest deploy. */
 .version-tag {
-  font-size: 0.75rem;
-  color: #888;
+  font-size: 0.8rem;
+  color: #888888;
   text-align: center;
   margin: -18px 0 24px;
 }
@@ -205,6 +205,10 @@ input[type='text'] {
 .tb-version {
   margin: 0;
   font-family: var(--font-mono);
+}
+
+.hub-footer-version {
+  margin: 12px 0 4px;
 }
 
 .start-block {

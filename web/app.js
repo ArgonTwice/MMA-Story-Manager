@@ -830,6 +830,8 @@ class WebApp {
         onclick: () => this._showPanel('planning'),
       })
     );
+
+    panel.appendChild(el('p', { class: 'version-tag hub-footer-version', text: APP_VERSION }));
   }
 
   // ---- GYM FACILITY / EQUIPMENT / RIVALS modal ---------------------------------
