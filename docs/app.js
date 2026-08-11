@@ -56,6 +56,8 @@ import {
   getAllWeightClassRankings,
   getUpcomingGalas,
   registerForGala,
+  getLeagueEligibility,
+  signLeagueContract,
   releaseGalaExclusivity,
 } from './engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from './engine/EmergencyFinanceEngine.js';
@@ -1513,6 +1515,7 @@ class WebApp {
         '   Moral ',
         el('span', { class: `trend-arrow ${moralTrend.cls}`, text: moralTrend.symbol }),
       ]),
+      this._buildLeagueStatusBadge(fighter),
       gaugeRow('Loyaute envers le gym', fighter.psychology.loyalty),
       el('div', { class: 'trait-list' }, traitBadges),
 
@@ -1534,6 +1537,19 @@ class WebApp {
     ]);
 
     this._showModal(content);
+  }
+
+  /** V3.9: the fighter-profile league-status badge — "Roster Officiel" while signed to a requiresContract organization (ECL/APEX), or the default "Circuit Local / Independant" standing otherwise (see engine/LeagueEngine.js#getLeagueEligibility/signLeagueContract). */
+  _buildLeagueStatusBadge(fighter) {
+    const exclusivity = fighter.contracts.exclusivity;
+    if (!exclusivity) {
+      return el('p', { class: 'fighter-meta', text: '\u{1F94A} Circuit Local / Independant — libre de tout contrat.' });
+    }
+    const org = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === exclusivity.orgId);
+    return el('p', {
+      class: 'fighter-meta',
+      text: `\u{270D}\u{FE0F} Roster Officiel : ${org?.label ?? exclusivity.orgId} (${exclusivity.fightsRemaining} combat${exclusivity.fightsRemaining > 1 ? 's' : ''} restant${exclusivity.fightsRemaining > 1 ? 's' : ''})`,
+    });
   }
 
   /** Tap-to-explain trait badge: native `title` hover tooltips don't work on mobile touch, so a tap opens the description here instead, with a button back to the profile it came from. */
@@ -1952,20 +1968,56 @@ class WebApp {
 
       if (selectedFighter.contracts.exclusivity) {
         const boundOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((org) => org.id === selectedFighter.contracts.exclusivity.orgId);
+        const releaseCost = boundOrg?.contract?.releaseClauseCost ?? 0;
         panel.appendChild(
           el('div', { class: 'card' }, [
-            el('div', { class: 'card-title', text: '\u{1F4DD} Contrat d\'Exclusivite' }),
+            el('div', { class: 'card-title', text: '\u{270D}\u{FE0F} Roster Officiel' }),
             el('p', {
               text: `${selectedFighter.identity.name} est lie a ${boundOrg?.label ?? selectedFighter.contracts.exclusivity.orgId} — ${selectedFighter.contracts.exclusivity.fightsRemaining} combat(s) restant(s) avant liberation.`,
             }),
             el('button', {
               class: 'btn btn-outline btn-block',
-              text: `\u{1F4B8} Racheter la clause liberatoire (${BALANCE.GALA_CIRCUIT.EXCLUSIVITY.RELEASE_CLAUSE_COST.toLocaleString('fr-FR')}$)`,
-              disabled: playerState.money >= BALANCE.GALA_CIRCUIT.EXCLUSIVITY.RELEASE_CLAUSE_COST ? null : 'disabled',
+              text: `\u{1F4B8} Racheter la clause liberatoire (${releaseCost.toLocaleString('fr-FR')}$)`,
+              disabled: playerState.money >= releaseCost ? null : 'disabled',
               onclick: () => this._releaseGalaExclusivity(selectedFighter.identity.id),
             }),
           ])
         );
+      }
+
+      panel.appendChild(el('div', { class: 'card-title', text: '\u{1F3DB}\u{FE0F} Organisations' }));
+      for (const org of Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS)) {
+        if (!org.requiresContract) continue; // LOCAL_FIGHTING/UNDERGROUND_CIRCUIT stay open to everyone — nothing to sign.
+
+        const eligibility = getLeagueEligibility(playerState, selectedFighter, org.id);
+        const rows = [
+          el('div', { class: 'card-title', text: org.label }),
+          el('p', {
+            class: 'fighter-meta',
+            text: `${org.contract.fightsRequired} combats reserves — Bourse ~${org.contract.pursePerFight.toLocaleString('fr-FR')}$/combat — Prime signature ${org.contract.signingBonus.toLocaleString('fr-FR')}$ — Clause liberatoire ${org.contract.releaseClauseCost.toLocaleString('fr-FR')}$`,
+          }),
+        ];
+        if (eligibility.alreadySigned) {
+          rows.push(el('p', { text: `\u{2705} ${selectedFighter.identity.name} fait deja partie du roster ${org.label}.` }));
+        } else if (eligibility.eligible) {
+          rows.push(
+            el('button', {
+              class: 'btn btn-gold btn-block',
+              text: `\u{270D}\u{FE0F} Proposer au Roster ${org.label}`,
+              onclick: () => this._showLeagueContractModal(org.id),
+            })
+          );
+        } else if (eligibility.reason === 'UNDER_CONTRACT_ELSEWHERE') {
+          const boundOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === eligibility.boundOrgId);
+          rows.push(el('p', { text: `Impossible : le combattant est sous contrat exclusif avec ${boundOrg?.label ?? eligibility.boundOrgId}.` }));
+        } else {
+          rows.push(
+            el('p', {
+              text: `Conditions non remplies — Reputation gym ${playerState.reputation}/${org.eligibility.minReputation}, Overall ${selectedFighter.getOverallRating()}/${org.eligibility.minOverall}.`,
+            })
+          );
+        }
+        panel.appendChild(el('div', { class: 'card' }, rows));
       }
     }
 
@@ -1993,8 +2045,18 @@ class WebApp {
     for (const gala of galas) {
       const daysOut = gala.day - worldState.currentDay;
       const slot = selectedFighter ? gala.weightClassSlots.find((s) => s.weightClass === selectedFighter.identity.weightClass) : null;
-      const exclusivityBlocked =
-        selectedFighter?.contracts.exclusivity && selectedFighter.contracts.exclusivity.orgId !== gala.orgId;
+      const galaOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === gala.orgId);
+      const signedHere = selectedFighter?.contracts.exclusivity?.orgId === gala.orgId;
+      const boundElsewhere = selectedFighter?.contracts.exclusivity && !signedHere;
+      const contractRequired = !boundElsewhere && galaOrg?.requiresContract && !signedHere;
+
+      let blockedMessage = null;
+      if (boundElsewhere) {
+        const boundOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === selectedFighter.contracts.exclusivity.orgId);
+        blockedMessage = `Impossible : le combattant est sous contrat exclusif avec ${boundOrg?.label ?? selectedFighter.contracts.exclusivity.orgId}.`;
+      } else if (contractRequired) {
+        blockedMessage = `Impossible : contrat de roster requis pour rejoindre ${galaOrg.label} (voir Organisations ci-dessus).`;
+      }
 
       panel.appendChild(
         el('div', { class: 'card' }, [
@@ -2002,8 +2064,8 @@ class WebApp {
           el('p', { class: 'fighter-meta', text: `Dans ${daysOut} jour(s) — Fight Card de ${gala.cardSize} combats.` }),
           !selectedFighter
             ? el('p', { text: 'Choisissez d\'abord votre combattant.' })
-            : exclusivityBlocked
-              ? el('p', { text: 'Lie par contrat d\'exclusivite a une autre ligue.' })
+            : blockedMessage
+              ? el('p', { text: blockedMessage })
               : slot
                 ? el('button', {
                     class: 'btn btn-gold btn-block',
@@ -2027,6 +2089,7 @@ class WebApp {
       NO_OPPONENT_AVAILABLE: 'aucun adversaire disponible pour le moment.',
       MATCHMAKING_VIOLATION: 'regles de matchmaking non respectees.',
       EXCLUSIVITY_CONTRACT_VIOLATION: 'ce combattant est lie par contrat d\'exclusivite a une autre ligue.',
+      LEAGUE_CONTRACT_REQUIRED: 'ce combattant n\'est pas signe au roster de cette ligue.',
     };
     return messages[reason] ?? 'raison inconnue.';
   }
@@ -2084,6 +2147,76 @@ class WebApp {
     } catch (error) {
       console.error('[web/app.js] _releaseGalaExclusivity failed:', error);
       this._showToast(`\u{26A0}\u{FE0F} Rachat impossible : ${error.message}`);
+    }
+  }
+
+  /** V3.9: the League Contract signing modal — presents a requiresContract organization's terms (fights reserved, fixed purse per fight, signing bonus, release clause) before the manager commits, per engine/LeagueEngine.js#getLeagueEligibility/signLeagueContract. */
+  _showLeagueContractModal(orgId) {
+    const setup = this._galaSetup;
+    const { playerState } = this.gameState;
+    const fighter = setup?.fighterId ? playerState.getFighter(setup.fighterId) : null;
+    if (!fighter) return;
+
+    const org = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === orgId);
+    if (!org?.requiresContract) return;
+
+    const content = el('div', {}, [
+      el('h2', { class: 'section-title', text: `Contrat de Roster — ${org.label}` }),
+      el('p', { text: `${fighter.identity.name} rejoindrait officiellement le roster de ${org.label}.` }),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Combats reserves' }),
+          el('span', { class: 'list-row-value', text: `${org.contract.fightsRequired}` }),
+        ]),
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Bourse fixe par combat' }),
+          el('span', { class: 'list-row-value', text: `${org.contract.pursePerFight.toLocaleString('fr-FR')}$` }),
+        ]),
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Prime de signature' }),
+          el('span', { class: 'list-row-value', text: `${org.contract.signingBonus.toLocaleString('fr-FR')}$` }),
+        ]),
+        el('div', { class: 'list-row' }, [
+          el('span', { class: 'list-row-label', text: 'Clause de rupture' }),
+          el('span', { class: 'list-row-value', text: `${org.contract.releaseClauseCost.toLocaleString('fr-FR')}$` }),
+        ]),
+      ]),
+      el('button', {
+        class: 'btn btn-gold btn-block',
+        text: `Signer le contrat et rejoindre le Roster de ${org.label}`,
+        onclick: () => this._signLeagueContract(fighter.identity.id, org.id),
+      }),
+      el('button', { class: 'btn btn-outline btn-block', text: 'Annuler', onclick: () => this._hideModal() }),
+    ]);
+    this._showModal(content);
+  }
+
+  _signLeagueContract(fighterId, orgId) {
+    const { playerState } = this.gameState;
+    const signMessages = {
+      FIGHTER_NOT_FOUND: 'combattant introuvable.',
+      ORG_NOT_FOUND: 'organisation introuvable.',
+      NO_CONTRACT_REQUIRED: 'cette organisation ne necessite pas de contrat.',
+      ALREADY_SIGNED: 'ce combattant fait deja partie de ce roster.',
+      UNDER_CONTRACT_ELSEWHERE: 'ce combattant est deja sous contrat avec une autre ligue.',
+      REQUIREMENTS_NOT_MET: 'les conditions de Reputation/Overall ne sont pas remplies.',
+    };
+
+    try {
+      const result = signLeagueContract(playerState, fighterId, orgId);
+      if (!result.success) {
+        this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${signMessages[result.reason] ?? 'raison inconnue.'}`);
+        return;
+      }
+      AudioEngine.playClick();
+      this._hideModal();
+      this._showToast(`\u{270D}\u{FE0F} ${result.org.label} : contrat signe (+${result.signingBonus.toLocaleString('fr-FR')}$, ${result.fightsRequired} combats).`);
+      this._renderFight();
+      this._renderTopbar();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _signLeagueContract failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${error.message}`);
     }
   }
 

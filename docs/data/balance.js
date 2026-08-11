@@ -2635,12 +2635,79 @@ const BALANCE = {
   // (no formalities, KO/Soumission only, resolved immediately) untouched.
   // ---------------------------------------------------------------------
   GALA_CIRCUIT: {
+    /**
+     * V3.9 "Adhesion aux Ligues et Contrats d'Exclusivite (type UFC)":
+     * each organization is now either always-open (requiresContract:
+     * false — a fighter can register for its galas freely, no strings
+     * attached, exactly the "Circuit Local / Independant" starting state)
+     * or a genuine ROSTER a fighter must be explicitly SIGNED to first
+     * (requiresContract: true) — see engine/LeagueEngine.js
+     * #getLeagueEligibility/#signLeagueContract. Eligibility to apply is
+     * gated on the GYM's own reputation (playerState.reputation) AND the
+     * FIGHTER's own getOverallRating() both clearing `eligibility`'s
+     * thresholds; once eligible, the manager explicitly signs (never
+     * automatic) via signLeagueContract, which reads `contract` for the
+     * exact terms (fights reserved, purse-per-fight shown at signing time,
+     * signing bonus paid immediately, release-clause cost to break early).
+     * While signed, engine/LeagueEngine.js#registerForGala only accepts
+     * that fighter onto ITS OWN organization's galas (any other
+     * requiresContract org rejects with LEAGUE_CONTRACT_REQUIRED, any
+     * DIFFERENT org the fighter is already bound to rejects with
+     * EXCLUSIVITY_CONTRACT_VIOLATION) until FIGHTS_REQUIRED fights are
+     * resolved (models/Fighter.js#consumeExclusivityFight auto-clears the
+     * contract at 0 remaining) or the release clause is paid
+     * (releaseGalaExclusivity/models/Fighter.js#releaseExclusivityContract).
+     * `contract.pursePerFight` is a DISPLAY-ONLY figure shown in the
+     * signing modal/fighter badge, describing what fighters at that
+     * league's level are paid — CombatEngine's own purse math
+     * (_computePurses, driven by BALANCE.LEAGUE_PYRAMID's purse
+     * multiplier) is deliberately left untouched, preserving this file's
+     * long-standing "GALA_CIRCUIT is purely organizational, the 4 orgId
+     * concepts never read each other" convention (see this block's own
+     * V3.7 header note below).
+     */
     ORGANIZATIONS: {
-      LOCAL: { id: 'LOCAL_FIGHTING', label: 'Local Fighting' },
-      ECL: { id: 'ECL', label: 'Elite Combat League' },
-      APEX: { id: 'APEX', label: 'Apex Championship' },
-      UNDERGROUND: { id: 'UNDERGROUND_CIRCUIT', label: 'Underground Circuit' },
+      /** "Circuit Local / Independant" — every fighter's starting standing: always open, no contract required. */
+      LOCAL: { id: 'LOCAL_FIGHTING', label: 'Local Fighting', requiresContract: false },
+      /** Same "always open" standing as LOCAL — flavor-only naming distinction, see the V3.7 header note below on Underground Circuit. */
+      UNDERGROUND: { id: 'UNDERGROUND_CIRCUIT', label: 'Underground Circuit', requiresContract: false },
+      ECL: {
+        id: 'ECL',
+        label: 'Elite Combat League',
+        requiresContract: true,
+        eligibility: { minReputation: 40, minOverall: 55 },
+        contract: { fightsRequired: 4, pursePerFight: 8000, signingBonus: 5000, releaseClauseCost: 15000 },
+      },
+      APEX: {
+        id: 'APEX',
+        label: 'Apex Championship',
+        requiresContract: true,
+        eligibility: { minReputation: 70, minOverall: 75 },
+        contract: { fightsRequired: 4, pursePerFight: 20000, signingBonus: 15000, releaseClauseCost: 40000 },
+      },
     },
+
+    // V3.7 ("Refonte du Matchmaking par Calendrier de Galas"):
+    // engine/LeagueEngine.js's Gala Calendar. Replaces the old "pick a rival
+    // gym, hand-pick their fighter" flow — the player now registers a
+    // fighter onto an OPEN WEIGHT-CLASS SLOT of an upcoming Gala, and the
+    // opponent is drawn automatically from a global pool (a rival gym's
+    // roster, or a freshly-generated independent fighter), exactly like a
+    // real promotion books its card. A FOURTH, independent orgId concept —
+    // same "never read the other three" rule as data/leagues.js's LEAGUES,
+    // this file's own LEAGUE_PYRAMID, and REGIONAL_ORGS (see that block's
+    // own header note): GALA_CIRCUIT only labels which promotion a booked
+    // Combat-tab fight (engine/FightWeekEngine.js's Fight Launch Contract)
+    // is fought under — purely organizational, never consulted by
+    // resolveRegionalOrg()/getWeightClassRanking()'s own "Classements
+    // Officiels" board, which stays tied to REGIONAL_ORGS/country as before.
+    //
+    // "Underground Circuit" is listed as one of the four organizations here
+    // ONLY as a Gala-naming flavor choice for a normal, sanctioned-feeling
+    // Fight Launch Contract — it is intentionally NOT wired to the separate,
+    // pre-existing instant-challenge Underground Circuit tab/engine
+    // (engine/UndergroundEngine.js), which keeps its own distinct identity
+    // (no formalities, KO/Soumission only, resolved immediately) untouched.
 
     /** How many upcoming galas the Calendar shows per organization at once. */
     UPCOMING_COUNT_PER_ORG: 3,
@@ -2660,25 +2727,6 @@ const BALANCE = {
       INDEPENDENT_SKILL_SPREAD: 15,
       INDEPENDENT_MIN_AGE: 20,
       INDEPENDENT_MAX_AGE: 33,
-    },
-
-    /**
-     * V3.8 "Contrats d'Exclusivite de Ligue": once the gym's own
-     * BALANCE.LEAGUE_PYRAMID standing reaches National or Elite Mondiale,
-     * the very next fighter to register for a Gala signs an exclusivity
-     * contract binding them to that Gala's own GALA_CIRCUIT organization
-     * for FIGHTS_REQUIRED fights — see engine/LeagueEngine.js#registerForGala/
-     * models/Fighter.js#signExclusivityContract. While under contract, that
-     * fighter cannot register for a Gala under a DIFFERENT organization
-     * (see registerForGala's own EXCLUSIVITY_CONTRACT_VIOLATION rejection)
-     * unless the release clause is paid to break it early.
-     */
-    EXCLUSIVITY: {
-      /** BALANCE.LEAGUE_PYRAMID.TIERS keys that trigger a mandatory exclusivity contract. */
-      REQUIRED_LEAGUE_TIERS: ['NATIONAL', 'ELITE_MONDIALE'],
-      FIGHTS_REQUIRED: 4,
-      SIGNING_BONUS: 5000,
-      RELEASE_CLAUSE_COST: 15000,
     },
   },
 

@@ -25,8 +25,20 @@ import {
   getGalaById,
   drawGalaOpponent,
   registerForGala,
+  getLeagueEligibility,
+  signLeagueContract,
   releaseGalaExclusivity,
 } from './LeagueEngine.js';
+
+/** A fighter whose getOverallRating() clears every GALA_CIRCUIT org's eligibility.minOverall bar (highest is APEX's 75) — used by every V3.9 league-contract test below. */
+function makeEliteFighter(overrides = {}) {
+  const skills = { boxe: 85, jambes: 85, sol: 85, soumission: 85, cardio: 85, intelligence: 85 };
+  return new Fighter({
+    identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' },
+    attributes: { skills },
+    ...overrides,
+  });
+}
 
 test('a fresh gym starts in the bottom tier (LOCAL_UNDERGROUND) with a 1x purse/passive-income multiplier', () => {
   const playerState = new PlayerState({ money: 25000 });
@@ -340,84 +352,143 @@ test('a successful registerForGala books a Fight Launch Contract with opponentSn
   assert.equal(playerState.scheduledFight.opponentSnapshot.identity.weightClass, 'Poids Welter');
 });
 
-// ---- V3.8: League exclusivity contracts -------------------------------------------
+// ---- V3.9: League roster contracts (getLeagueEligibility/signLeagueContract) ------
 
-test('registerForGala signs an exclusivity contract when the gym is NATIONAL/ELITE_MONDIALE and the fighter has none yet', () => {
-  const worldState = new WorldState();
-  const playerState = new PlayerState({ money: 25000, leagueTier: 'NATIONAL' });
-  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+test('getLeagueEligibility: a non-requiresContract org (Local Fighting) is always eligible with no requirements', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = makeEliteFighter();
   playerState.addFighter(fighter);
-  const cfg = BALANCE.GALA_CIRCUIT.EXCLUSIVITY;
 
-  const [gala] = getUpcomingGalas(worldState, { count: 1 });
+  const eligibility = getLeagueEligibility(playerState, fighter, 'LOCAL_FIGHTING');
+  assert.equal(eligibility.eligible, true);
+  assert.equal(eligibility.requiresContract, false);
+});
+
+test('getLeagueEligibility: REQUIREMENTS_NOT_MET when the gym Reputation or fighter Overall falls short of the org bar', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const weakFighter = new Fighter({ identity: { id: 'f1', name: 'Weak', gender: 'M', weightClass: 'Poids Welter' } });
+  playerState.addFighter(weakFighter);
+
+  const eligibility = getLeagueEligibility(playerState, weakFighter, 'ECL');
+  assert.equal(eligibility.eligible, false);
+  assert.equal(eligibility.reason, 'REQUIREMENTS_NOT_MET');
+  assert.deepEqual(eligibility.requirements, BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL.eligibility);
+});
+
+test('getLeagueEligibility: eligible once both Reputation and Overall clear the bar, ALREADY_SIGNED once signed, UNDER_CONTRACT_ELSEWHERE while bound to a different org', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 80 });
+  const fighter = makeEliteFighter();
+  playerState.addFighter(fighter);
+
+  const eligible = getLeagueEligibility(playerState, fighter, 'ECL');
+  assert.equal(eligible.eligible, true);
+  assert.equal(eligible.requiresContract, true);
+  assert.equal(eligible.alreadySigned, undefined);
+
+  const signResult = signLeagueContract(playerState, 'f1', 'ECL');
+  assert.equal(signResult.success, true);
+
+  const alreadySigned = getLeagueEligibility(playerState, fighter, 'ECL');
+  assert.equal(alreadySigned.eligible, true);
+  assert.equal(alreadySigned.alreadySigned, true);
+
+  const boundElsewhere = getLeagueEligibility(playerState, fighter, 'APEX');
+  assert.equal(boundElsewhere.eligible, false);
+  assert.equal(boundElsewhere.reason, 'UNDER_CONTRACT_ELSEWHERE');
+  assert.equal(boundElsewhere.boundOrgId, 'ECL');
+});
+
+test('signLeagueContract pays the signing bonus and sets fightsRemaining from the org contract, and fails cleanly for every rejection path', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 80 });
+  const fighter = makeEliteFighter();
+  playerState.addFighter(fighter);
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL.contract;
+
+  assert.equal(signLeagueContract(playerState, 'missing', 'ECL').reason, 'FIGHTER_NOT_FOUND');
+  assert.equal(signLeagueContract(playerState, 'f1', 'LOCAL_FIGHTING').reason, 'NO_CONTRACT_REQUIRED');
+
   const moneyBefore = playerState.money;
-  const result = registerForGala(playerState, worldState, { galaId: gala.id, fighterId: 'f1', rng: () => 0.99 });
-
+  const result = signLeagueContract(playerState, 'f1', 'ECL');
   assert.equal(result.success, true);
-  assert.equal(result.exclusivitySigned, true);
-  assert.ok(fighter.isUnderExclusivityContract());
-  assert.equal(fighter.contracts.exclusivity.orgId, gala.orgId);
-  assert.equal(fighter.contracts.exclusivity.fightsRemaining, cfg.FIGHTS_REQUIRED);
-  assert.equal(playerState.money, moneyBefore + cfg.SIGNING_BONUS);
+  assert.equal(result.fightsRequired, eclCfg.fightsRequired);
+  assert.equal(result.signingBonus, eclCfg.signingBonus);
+  assert.equal(playerState.money, moneyBefore + eclCfg.signingBonus);
+  assert.equal(fighter.contracts.exclusivity.orgId, 'ECL');
+  assert.equal(fighter.contracts.exclusivity.fightsRemaining, eclCfg.fightsRequired);
+
+  assert.equal(signLeagueContract(playerState, 'f1', 'ECL').reason, 'ALREADY_SIGNED');
+  assert.equal(signLeagueContract(playerState, 'f1', 'APEX').reason, 'UNDER_CONTRACT_ELSEWHERE');
 });
 
-test('registerForGala does NOT sign an exclusivity contract at LOCAL_UNDERGROUND tier', () => {
+test('registerForGala rejects a requiresContract org gala (LEAGUE_CONTRACT_REQUIRED) until the fighter signs, then succeeds', () => {
   const worldState = new WorldState();
-  const playerState = new PlayerState({ money: 25000 });
-  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  const playerState = new PlayerState({ money: 25000, reputation: 80 });
+  const fighter = makeEliteFighter();
   playerState.addFighter(fighter);
 
-  const [gala] = getUpcomingGalas(worldState, { count: 1 });
-  const result = registerForGala(playerState, worldState, { galaId: gala.id, fighterId: 'f1', rng: () => 0.99 });
+  const galas = getUpcomingGalas(worldState);
+  const eclGala = galas.find((g) => g.orgId === 'ECL');
 
-  assert.equal(result.success, true);
-  assert.equal(result.exclusivitySigned, false);
-  assert.equal(fighter.isUnderExclusivityContract(), false);
+  const beforeSigning = registerForGala(playerState, worldState, { galaId: eclGala.id, fighterId: 'f1', rng: () => 0.99 });
+  assert.equal(beforeSigning.success, false);
+  assert.equal(beforeSigning.reason, 'LEAGUE_CONTRACT_REQUIRED');
+  assert.equal(beforeSigning.orgId, 'ECL');
+
+  const signResult = signLeagueContract(playerState, 'f1', 'ECL');
+  assert.equal(signResult.success, true);
+
+  const afterSigning = registerForGala(playerState, worldState, { galaId: eclGala.id, fighterId: 'f1', rng: () => 0.99 });
+  assert.equal(afterSigning.success, true);
 });
 
-test('registerForGala rejects registration to a gala from another organization while under an exclusivity contract', () => {
+test('registerForGala never requires a contract for LOCAL_FIGHTING/UNDERGROUND_CIRCUIT galas', () => {
   const worldState = new WorldState();
-  const playerState = new PlayerState({ money: 25000, leagueTier: 'NATIONAL' });
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
   const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
 
   const galas = getUpcomingGalas(worldState);
-  const [firstGala] = galas;
-  const rivalOrgGala = galas.find((g) => g.orgId !== firstGala.orgId);
-
-  const first = registerForGala(playerState, worldState, { galaId: firstGala.id, fighterId: 'f1', rng: () => 0.99 });
-  assert.equal(first.success, true);
-  assert.ok(fighter.isUnderExclusivityContract());
-
-  playerState.scheduledFight = null; // simulate the booked fight having already resolved
-  const second = registerForGala(playerState, worldState, { galaId: rivalOrgGala.id, fighterId: 'f1', rng: () => 0.99 });
-  assert.equal(second.success, false);
-  assert.equal(second.reason, 'EXCLUSIVITY_CONTRACT_VIOLATION');
-  assert.equal(second.boundOrgId, firstGala.orgId);
+  const localGala = galas.find((g) => g.orgId === 'LOCAL_FIGHTING');
+  const result = registerForGala(playerState, worldState, { galaId: localGala.id, fighterId: 'f1', rng: () => 0.99 });
+  assert.equal(result.success, true);
 });
 
-test('releaseGalaExclusivity fails cleanly for a missing fighter, no active contract, or insufficient funds, then succeeds and charges the release clause', () => {
+test('registerForGala rejects registration to a gala from another organization while under a signed roster contract', () => {
   const worldState = new WorldState();
-  const playerState = new PlayerState({ money: 25000, leagueTier: 'NATIONAL' });
-  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  const playerState = new PlayerState({ money: 25000, reputation: 80 });
+  const fighter = makeEliteFighter();
   playerState.addFighter(fighter);
-  const cfg = BALANCE.GALA_CIRCUIT.EXCLUSIVITY;
+  signLeagueContract(playerState, 'f1', 'ECL');
+
+  const galas = getUpcomingGalas(worldState);
+  const apexGala = galas.find((g) => g.orgId === 'APEX');
+
+  const result = registerForGala(playerState, worldState, { galaId: apexGala.id, fighterId: 'f1', rng: () => 0.99 });
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'EXCLUSIVITY_CONTRACT_VIOLATION');
+  assert.equal(result.boundOrgId, 'ECL');
+});
+
+test('releaseGalaExclusivity fails cleanly for a missing fighter, no active contract, or insufficient funds, then succeeds and charges the signed org\'s own release clause', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 80 });
+  const fighter = makeEliteFighter();
+  playerState.addFighter(fighter);
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL.contract;
 
   assert.equal(releaseGalaExclusivity(playerState, 'missing').reason, 'FIGHTER_NOT_FOUND');
   assert.equal(releaseGalaExclusivity(playerState, 'f1').reason, 'NO_ACTIVE_CONTRACT');
 
-  const [gala] = getUpcomingGalas(worldState, { count: 1 });
-  registerForGala(playerState, worldState, { galaId: gala.id, fighterId: 'f1', rng: () => 0.99 });
+  signLeagueContract(playerState, 'f1', 'ECL');
   assert.ok(fighter.isUnderExclusivityContract());
 
-  playerState.money = cfg.RELEASE_CLAUSE_COST - 1;
+  playerState.money = eclCfg.releaseClauseCost - 1;
   assert.equal(releaseGalaExclusivity(playerState, 'f1').reason, 'INSUFFICIENT_FUNDS');
 
-  playerState.money = cfg.RELEASE_CLAUSE_COST + 1000;
+  playerState.money = eclCfg.releaseClauseCost + 1000;
   const moneyBefore = playerState.money;
   const result = releaseGalaExclusivity(playerState, 'f1');
   assert.equal(result.success, true);
-  assert.equal(result.cost, cfg.RELEASE_CLAUSE_COST);
-  assert.equal(playerState.money, moneyBefore - cfg.RELEASE_CLAUSE_COST);
+  assert.equal(result.cost, eclCfg.releaseClauseCost);
+  assert.equal(playerState.money, moneyBefore - eclCfg.releaseClauseCost);
   assert.equal(fighter.isUnderExclusivityContract(), false);
 });
