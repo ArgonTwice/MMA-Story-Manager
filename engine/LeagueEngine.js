@@ -28,11 +28,24 @@
  * picked once from the country typed at game creation — purely
  * organizational, no promotion/relegation of its own, and never read by
  * either of the two systems above.
+ *
+ * V3.7 adds a FOURTH, independent orgId concept (getUpcomingGalas/
+ * registerForGala, see BALANCE.GALA_CIRCUIT's own header note): the Gala
+ * Calendar. Replaces the old "hand-pick a rival gym, hand-pick their
+ * fighter" flow — the player instead registers their fighter onto an open
+ * weight-class slot of an upcoming Gala, and the opponent is drawn
+ * automatically from a global pool (a rival gym's roster, or a freshly
+ * generated independent fighter). Never read by any of the three systems
+ * above; resolveRegionalOrg/getWeightClassRanking's own "Classements
+ * Officiels" board stays tied to REGIONAL_ORGS/country, untouched by this.
  * ---------------------------------------------------------------------------
  */
 
 import BALANCE from '../data/balance.js';
 import Fighter from '../models/Fighter.js';
+import { assertNoIntraGymMatch, assertGenderMatch } from './Matchmaking.js';
+import { generatePersonality } from './FighterGenerator.js';
+import { scheduleFight } from './FightWeekEngine.js';
 
 /** @returns {Object} BALANCE.LEAGUE_PYRAMID.TIERS[playerState.leagueTier], falling back to the bottom tier for an unrecognized/legacy value. */
 export function getCurrentTier(playerState) {
@@ -242,6 +255,226 @@ export function getAllWeightClassRankings(playerState, worldState, { limit = 15 
   return { org, byGender };
 }
 
+// ---- V3.7: Gala Calendar (a 4th, independent orgId concept) -----------------
+
+/** Local flavor name pool for freshly-generated "independent" Gala opponents — same precedent as every other generator module in this codebase (each keeps its own small pool rather than cross-importing). */
+const INDEPENDENT_MALE_FIRST_NAMES = Object.freeze(['Kaito', 'Rafael', 'Marek', 'Idris', 'Otis', 'Baptiste', 'Nikolai', 'Theon']);
+const INDEPENDENT_FEMALE_FIRST_NAMES = Object.freeze(['Talia', 'Coralie', 'Wren', 'Bianca', 'Selma', 'Hana']);
+const INDEPENDENT_LAST_NAMES = Object.freeze([
+  'Voss', 'Adeyemi', 'Castellano', 'Brennan', 'Okafor', 'Lindgren', 'Marchetti', 'Dubois', 'Kowalczyk', 'Silveira',
+]);
+const INDEPENDENT_STYLES = Object.freeze(['Boxe', 'Muay Thai', 'Lutte', 'Jiu-Jitsu Bresilien', 'Freestyle', 'Kickboxing']);
+const SKILL_KEYS = Object.freeze(['boxe', 'jambes', 'sol', 'soumission', 'cardio', 'intelligence']);
+
+function pick(rng, list) {
+  return list[Math.floor(rng() * list.length)];
+}
+
+/** @returns {number} The day-of-cycle offset that keeps each organization's galas from all landing on the same days. */
+function computeAnchorOffset(orgIndex, orgCount) {
+  return orgIndex * Math.round(BALANCE.GALA_CIRCUIT.GALA_INTERVAL_DAYS / orgCount);
+}
+
+/** Builds one gala record — a pure, deterministic function of (org, sequenceIndex, day), so the same id always reconstructs the exact same gala (see getGalaById). */
+function buildGala(org, sequenceIndex, day) {
+  const cfg = BALANCE.GALA_CIRCUIT;
+  const cardSpread = cfg.CARD_SIZE_MAX - cfg.CARD_SIZE_MIN + 1;
+  const weightClassSlots = [];
+  for (const gender of Object.keys(BALANCE.PHYSICAL.WEIGHT_CLASSES)) {
+    for (const division of BALANCE.PHYSICAL.WEIGHT_CLASSES[gender]) {
+      weightClassSlots.push({ gender, weightClass: division.label });
+    }
+  }
+
+  return {
+    id: `${org.id}#${sequenceIndex}`,
+    orgId: org.id,
+    orgLabel: org.label,
+    day,
+    label: `${org.label} — Gala #${sequenceIndex + 1}`,
+    cardSize: cfg.CARD_SIZE_MIN + (sequenceIndex % cardSpread),
+    weightClassSlots,
+  };
+}
+
+/**
+ * The rolling Gala Calendar: BALANCE.GALA_CIRCUIT.UPCOMING_COUNT_PER_ORG
+ * upcoming galas per organization, each with an open slot for every
+ * weight-class division (both genders) — purely computed from
+ * worldState.currentDay, never persisted, so the exact same calendar
+ * renders every time it's viewed without needing any WorldState schema.
+ *
+ * @param {Object} worldState
+ * @param {Object} [options]
+ * @param {number} [options.count] - Overrides UPCOMING_COUNT_PER_ORG.
+ * @returns {Object[]} Every upcoming gala across all 4 organizations, soonest first.
+ */
+export function getUpcomingGalas(worldState, { count } = {}) {
+  const cfg = BALANCE.GALA_CIRCUIT;
+  const orgs = Object.values(cfg.ORGANIZATIONS);
+  const perOrgCount = count ?? cfg.UPCOMING_COUNT_PER_ORG;
+  const earliestDay = worldState.currentDay + cfg.FIRST_GALA_MIN_DAYS_OUT;
+
+  const galas = [];
+  orgs.forEach((org, orgIndex) => {
+    const anchorOffset = computeAnchorOffset(orgIndex, orgs.length);
+    const startIndex = Math.max(0, Math.ceil((earliestDay - anchorOffset) / cfg.GALA_INTERVAL_DAYS));
+
+    for (let i = 0; i < perOrgCount; i += 1) {
+      const sequenceIndex = startIndex + i;
+      const day = anchorOffset + sequenceIndex * cfg.GALA_INTERVAL_DAYS;
+      galas.push(buildGala(org, sequenceIndex, day));
+    }
+  });
+
+  return galas.sort((a, b) => a.day - b.day);
+}
+
+/**
+ * Reconstructs a single gala from its id (deterministic — see buildGala).
+ * @param {Object} worldState - Unused for reconstruction itself (ids are self-describing), kept for signature symmetry with getUpcomingGalas.
+ * @param {string} galaId
+ * @returns {Object|null}
+ */
+export function getGalaById(worldState, galaId) {
+  const [orgId, sequenceIndexRaw] = String(galaId).split('#');
+  const sequenceIndex = Number(sequenceIndexRaw);
+  const orgs = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS);
+  const orgIndex = orgs.findIndex((org) => org.id === orgId);
+  if (orgIndex === -1 || !Number.isInteger(sequenceIndex)) return null;
+
+  const anchorOffset = computeAnchorOffset(orgIndex, orgs.length);
+  const day = anchorOffset + sequenceIndex * BALANCE.GALA_CIRCUIT.GALA_INTERVAL_DAYS;
+  return buildGala(orgs[orgIndex], sequenceIndex, day);
+}
+
+/** Same weight/height generation shape as engine/FighterGenerator.js#generatePhysicalProfile, but pinned to a SPECIFIC division rather than rolling one — needed here so an independent opponent always lands exactly in the Gala slot's own weight class. */
+function generatePhysicalProfileForDivision(rng, gender, division) {
+  const cfg = BALANCE.PHYSICAL;
+  const divisions = cfg.WEIGHT_CLASSES[gender];
+  const classIndex = divisions.findIndex((d) => d.label === division.label);
+  const previousMaxKg = classIndex > 0 ? divisions[classIndex - 1].maxKg : division.maxKg - cfg.WEIGHT_UNDER_CAP_KG * 2;
+  const weightFloorKg = Math.max(previousMaxKg, division.maxKg - cfg.WEIGHT_UNDER_CAP_KG);
+  const weightKg = Math.round((weightFloorKg + rng() * (division.maxKg - weightFloorKg)) * 10) / 10;
+
+  const heightRange = cfg.HEIGHT_CM[gender];
+  const heightCm = Math.round(heightRange.MIN + rng() * (heightRange.MAX - heightRange.MIN));
+
+  return { weightClassId: division.id, weightClassLabel: division.label, heightCm, weightKg };
+}
+
+/** Generates a fresh, gym-less "independent" opponent, exactly matching the requested weight class/gender. */
+function generateIndependentFighter(rng, weightClassLabel, gender) {
+  const cfg = BALANCE.GALA_CIRCUIT.OPPONENT_POOL;
+  const division = BALANCE.PHYSICAL.WEIGHT_CLASSES[gender].find((d) => d.label === weightClassLabel);
+  const physical = generatePhysicalProfileForDivision(rng, gender, division);
+  const firstName = gender === 'M' ? pick(rng, INDEPENDENT_MALE_FIRST_NAMES) : pick(rng, INDEPENDENT_FEMALE_FIRST_NAMES);
+  const name = `${firstName} ${pick(rng, INDEPENDENT_LAST_NAMES)}`;
+
+  const skills = Object.fromEntries(
+    SKILL_KEYS.map((key) => [key, Math.max(1, Math.round(cfg.INDEPENDENT_SKILL_MEAN + (rng() * 2 - 1) * cfg.INDEPENDENT_SKILL_SPREAD))])
+  );
+
+  return new Fighter({
+    identity: {
+      name,
+      age: cfg.INDEPENDENT_MIN_AGE + Math.floor(rng() * (cfg.INDEPENDENT_MAX_AGE - cfg.INDEPENDENT_MIN_AGE + 1)),
+      style: pick(rng, INDEPENDENT_STYLES),
+      weightClass: physical.weightClassLabel,
+      gender,
+      heightCm: physical.heightCm,
+      weightKg: physical.weightKg,
+      origin: 'INDEPENDENT_GALA',
+    },
+    attributes: { skills },
+    psychology: { personality: generatePersonality(rng) },
+  });
+}
+
+/**
+ * Draws one opponent for a Gala weight-class slot from the "pool global de
+ * la ligue" — every rival gym's roster matching the slot's weight
+ * class/gender, plus a chance (BALANCE.GALA_CIRCUIT.OPPONENT_POOL.INDEPENDENT_CHANCE)
+ * of a freshly-generated independent (gym-less) fighter instead — always
+ * independent if the rival-roster pool is empty.
+ *
+ * @param {Object} worldState
+ * @param {Object} options
+ * @param {string} options.weightClass
+ * @param {string} options.gender
+ * @param {boolean} [options.allowMixedGender]
+ * @param {() => number} [options.rng]
+ * @returns {{ fighter: Fighter, gymId: string|null, gymName: string|null }}
+ */
+export function drawGalaOpponent(worldState, { weightClass, gender, allowMixedGender = false, rng = Math.random }) {
+  const cfg = BALANCE.GALA_CIRCUIT.OPPONENT_POOL;
+  const pool = [];
+
+  for (const gym of worldState.rivalGyms) {
+    for (const entry of gym.roster ?? []) {
+      if (entry.identity.weightClass !== weightClass) continue;
+      if (!allowMixedGender && entry.identity.gender !== gender) continue;
+      pool.push({ fighter: Fighter.fromJSON(entry), gymId: gym.id, gymName: gym.name ?? gym.id });
+    }
+  }
+
+  if (pool.length === 0 || rng() < cfg.INDEPENDENT_CHANCE) {
+    return { fighter: generateIndependentFighter(rng, weightClass, gender), gymId: null, gymName: null };
+  }
+
+  return pick(rng, pool);
+}
+
+/**
+ * Registers the player's fighter onto an open weight-class slot of a Gala,
+ * drawing an opponent from the global pool and locking the whole booking
+ * in as a Fight Launch Contract (see engine/FightWeekEngine.js#scheduleFight).
+ * The single source of truth web/app.js's Gala Calendar UI calls.
+ *
+ * @param {Object} playerState
+ * @param {Object} worldState
+ * @param {Object} options
+ * @param {string} options.galaId
+ * @param {string} options.fighterId
+ * @param {boolean} [options.allowMixedGender]
+ * @param {() => number} [options.rng]
+ * @returns {{ success: boolean, reason?: string, message?: string, record?: Object, gala?: Object, opponent?: Fighter }}
+ */
+export function registerForGala(playerState, worldState, { galaId, fighterId, allowMixedGender = false, rng = Math.random }) {
+  if (playerState.scheduledFight) return { success: false, reason: 'ALREADY_BOOKED' };
+
+  const fighter = playerState.getFighter(fighterId);
+  if (!fighter) return { success: false, reason: 'FIGHTER_NOT_FOUND' };
+  if (fighter.isInjured?.(worldState.currentDay)) return { success: false, reason: 'FIGHTER_INJURED' };
+
+  const gala = getGalaById(worldState, galaId);
+  if (!gala) return { success: false, reason: 'GALA_NOT_FOUND' };
+
+  const slot = gala.weightClassSlots.find((s) => s.weightClass === fighter.identity.weightClass);
+  if (!slot) return { success: false, reason: 'NO_OPEN_SLOT' };
+
+  const draw = drawGalaOpponent(worldState, { weightClass: slot.weightClass, gender: fighter.identity.gender, allowMixedGender, rng });
+  if (!draw?.fighter) return { success: false, reason: 'NO_OPPONENT_AVAILABLE' };
+
+  try {
+    assertNoIntraGymMatch(fighter, draw.fighter, playerState);
+    assertGenderMatch(fighter, draw.fighter, { allowMixedGender });
+  } catch (error) {
+    return { success: false, reason: 'MATCHMAKING_VIOLATION', message: error.message };
+  }
+
+  const record = scheduleFight(playerState, worldState, {
+    fighterId: fighter.identity.id,
+    opponentSnapshot: draw.fighter.toJSON(),
+    gymId: draw.gymId,
+    galaId: gala.id,
+    orgId: gala.orgId,
+    fightDay: gala.day,
+  });
+
+  return { success: true, record, gala, opponent: draw.fighter };
+}
+
 export default {
   getCurrentTier,
   getWinrate,
@@ -253,4 +486,8 @@ export default {
   resolveRegionalOrg,
   getWeightClassRanking,
   getAllWeightClassRankings,
+  getUpcomingGalas,
+  getGalaById,
+  drawGalaOpponent,
+  registerForGala,
 };

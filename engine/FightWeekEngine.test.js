@@ -23,15 +23,11 @@ import {
   cancelScheduledFight,
 } from './FightWeekEngine.js';
 
-function seededRng(seed) {
-  let state = seed;
-  return () => {
-    state = (state * 1103515245 + 12345) & 0x7fffffff;
-    return state / 0x7fffffff;
-  };
+function makeOpponentSnapshot(id = 'rival-fighter') {
+  return new Fighter({ identity: { id, name: 'Rival Fighter', age: 26 } }).toJSON();
 }
 
-function makeBookedGame({ money = 100000 } = {}) {
+function makeBookedGame({ money = 100000, fightDay } = {}) {
   const world = new WorldState();
   const player = new PlayerState({ money });
   const fighter = new Fighter({ identity: { id: 'booked-fighter', name: 'Booked Fighter', age: 27 } });
@@ -39,10 +35,11 @@ function makeBookedGame({ money = 100000 } = {}) {
 
   const record = scheduleFight(player, world, {
     fighterId: fighter.identity.id,
+    opponentSnapshot: makeOpponentSnapshot(),
     gymId: 'rival-gym',
-    opponentId: 'rival-fighter',
-    orgId: 'WFC',
-    rng: seededRng(7),
+    galaId: 'gala-1',
+    orgId: 'LOCAL_FIGHTING',
+    fightDay: fightDay ?? world.currentDay + 21,
   });
 
   return { world, player, fighter, record };
@@ -50,18 +47,38 @@ function makeBookedGame({ money = 100000 } = {}) {
 
 // ---- scheduleFight -------------------------------------------------------------
 
-test('scheduleFight books a date MIN_WEEKS_OUT-MAX_WEEKS_OUT weeks out and stores it on PlayerState', () => {
-  const { world, player, record } = makeBookedGame();
+test('scheduleFight stores a Fight Launch Contract with the given fightDay/opponentSnapshot on PlayerState', () => {
+  const { world, player, record } = makeBookedGame({ fightDay: 100 });
   const cfg = BALANCE.FIGHT_WEEK;
 
   assert.equal(player.scheduledFight, record);
-  const weeksOut = (record.fightDay - record.scheduledDay) / BALANCE.CALENDAR.DAYS_PER_WEEK;
-  assert.ok(weeksOut >= cfg.MIN_WEEKS_OUT && weeksOut <= cfg.MAX_WEEKS_OUT);
+  assert.equal(record.fightDay, 100);
   assert.equal(record.scheduledDay, world.currentDay);
+  assert.equal(record.opponentId, 'rival-fighter');
+  assert.equal(record.opponentSnapshot.identity.id, 'rival-fighter');
+  assert.equal(record.gymId, 'rival-gym');
+  assert.equal(record.galaId, 'gala-1');
   assert.equal(record.campOrientation, cfg.DEFAULT_CAMP_ORIENTATION);
   assert.deepEqual(record.campLog, []);
   assert.equal(record.weightCutChoice, null);
   assert.equal(record.logisticsChoice, null);
+});
+
+test('scheduleFight defaults gymId/galaId to null for an independent (gym-less) opponent', () => {
+  const world = new WorldState();
+  const player = new PlayerState();
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', age: 25 } });
+  player.addFighter(fighter);
+
+  const record = scheduleFight(player, world, {
+    fighterId: 'f1',
+    opponentSnapshot: makeOpponentSnapshot('independent-1'),
+    orgId: 'APEX',
+    fightDay: 50,
+  });
+
+  assert.equal(record.gymId, null);
+  assert.equal(record.galaId, null);
 });
 
 test('scheduling a new fight replaces any previous booking', () => {
@@ -70,10 +87,10 @@ test('scheduling a new fight replaces any previous booking', () => {
 
   const second = scheduleFight(player, world, {
     fighterId: 'booked-fighter',
+    opponentSnapshot: makeOpponentSnapshot('other-fighter'),
     gymId: 'other-gym',
-    opponentId: 'other-fighter',
-    orgId: 'WFC',
-    rng: () => 0,
+    orgId: 'ECL',
+    fightDay: world.currentDay + 14,
   });
 
   assert.notEqual(player.scheduledFight, first);

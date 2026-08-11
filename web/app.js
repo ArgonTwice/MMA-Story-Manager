@@ -34,7 +34,7 @@ import { SocialEngine } from '../engine/SocialEngine.js';
 
 import { generateAcademyPool, isAcademyDraftAvailable } from '../engine/AcademyEngine.js';
 import { generateRecruitmentPool, generateRivalGymStarterRoster } from '../engine/DraftEngine.js';
-import { assertNoIntraGymMatch, isGenderMatch, assertGenderMatch } from '../engine/Matchmaking.js';
+import { isGenderMatch, assertGenderMatch } from '../engine/Matchmaking.js';
 import { analyzeSeason, hasAnyTrophy, TROPHY_CATEGORIES } from '../engine/StoryAnalyzer.js';
 
 import { GymHub } from '../ui/GymHub.js';
@@ -48,7 +48,15 @@ import { buildStoryCard, renderStoryCardToCanvas, toShareText } from './StoryExp
 
 import { runUndergroundFight, runGauntlet, UNDERGROUND_MODES, UNDERGROUND_RULESETS } from '../engine/UndergroundEngine.js';
 import { resolveGymStipulation, processActiveDeals, GYM_STIPULATIONS } from '../engine/GymStipulations.js';
-import { recordLeagueFightResult, getPromotionProgress, resolveRegionalOrg, getWeightClassRanking, getAllWeightClassRankings } from '../engine/LeagueEngine.js';
+import {
+  recordLeagueFightResult,
+  getPromotionProgress,
+  resolveRegionalOrg,
+  getWeightClassRanking,
+  getAllWeightClassRankings,
+  getUpcomingGalas,
+  registerForGala,
+} from '../engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from '../engine/PressConferenceEngine.js';
 import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from '../engine/HallOfFameEngine.js';
@@ -57,7 +65,6 @@ import { computeWeeklyMerchandisingIncome } from '../engine/SocialFeedEngine.js'
 import { generateHiringPool, hireStaff } from '../engine/StaffEngine.js';
 import { getScoutableGyms, sendScout, computeBuyoutFee, buyoutRivalFighter } from '../engine/MercatoEngine.js';
 import {
-  scheduleFight,
   getDaysUntilFight,
   isFightWeek,
   isFightDue,
@@ -345,8 +352,8 @@ class WebApp {
     this._undergroundSetup = null;
     /** The permanent Recrutement market's currently-open pool ({ fighter, cost }[]) — regenerated each time the modal opens, see _showRecruitmentMarketModal(). */
     this._recruitmentPool = [];
-    /** In-progress official-fight opponent setup ({ fighterId, gymId, opponentId }), or null — mirrors _undergroundSetup's shape: a competitive bout's opponent always comes from a rival gym's roster, never the player's own (see engine/Matchmaking.js). */
-    this._fightOpponentSetup = null;
+    /** V3.7: in-progress Gala Calendar registration ({ fighterId, allowMixedGender }), or null — see _renderGalaCalendar()/_registerForGala(). The opponent is no longer hand-picked here; engine/LeagueEngine.js#registerForGala draws it from the global pool. */
+    this._galaSetup = null;
     /** Live Text Feed playback state ({ beats, revealedCount, playing, timerId }) for the fight currently in progress, or null — see _beginCombatPlayback()/_scheduleNextBeat(). Runtime-only, torn down on every fight reset. */
     this._combatPlayback = null;
     this.dom = {};
@@ -595,7 +602,7 @@ class WebApp {
     this.fightResultsThisYear = [];
     this.lastWeekEconomy = null;
     this.journalTab = 'world';
-    this._fightOpponentSetup = null;
+    this._galaSetup = null;
     this.fightView = null;
     this.fightSetupDone = false;
     this.academyPool = [];
@@ -1836,7 +1843,7 @@ class WebApp {
       return;
     }
 
-    this._renderFightPicker(panel);
+    this._renderGalaCalendar(panel);
   }
 
   /**
@@ -1846,16 +1853,24 @@ class WebApp {
    * spar, as a weekly Planning activity. Mirrors
    * _renderUndergroundSetupModal's own (fighter, gym, their fighter) picker.
    */
-  _renderFightPicker(panel) {
-    if (!this._fightOpponentSetup) {
-      this._fightOpponentSetup = { fighterId: null, gymId: null, opponentId: null, allowMixedGender: false };
+  /**
+   * V3.7 "Calendrier des Galas": no more hand-picking a rival gym's
+   * fighter directly — the player picks their OWN fighter, then registers
+   * onto an open weight-class slot of an upcoming Gala (see
+   * engine/LeagueEngine.js#getUpcomingGalas/registerForGala). The
+   * opponent is drawn automatically from the global pool once
+   * registration is confirmed.
+   */
+  _renderGalaCalendar(panel) {
+    if (!this._galaSetup) {
+      this._galaSetup = { fighterId: null, allowMixedGender: false };
     }
-    const setup = this._fightOpponentSetup;
+    const setup = this._galaSetup;
     const { playerState, worldState } = this.gameState;
     const selectedFighter = setup.fighterId ? playerState.getFighter(setup.fighterId) : null;
 
-    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F94A} Choisir un combat' }));
-    panel.appendChild(el('p', { text: 'Un combat officiel oppose toujours l\'un de vos combattants a celui d\'un gym rival — deux membres du roster ne se rencontrent qu\'en Sparring (Planning).' }));
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F4C6} Calendrier des Galas' }));
+    panel.appendChild(el('p', { text: 'Inscrivez votre combattant sur la Fight Card ouverte d\'un Gala a venir — l\'adversaire est tire automatiquement du pool global de la ligue (rivaux ou independants).' }));
 
     const available = playerState.roster.filter((f) => !f.isInjured(worldState.currentDay));
     panel.appendChild(el('div', { class: 'card-title', text: 'Votre combattant' }));
@@ -1879,7 +1894,7 @@ class WebApp {
             el('div', { class: 'fighter-head' }, [
               el('div', {}, [
                 el('div', { class: 'fighter-name', text: fighter.identity.name + (fighter.identity.nickname ? ` "${fighter.identity.nickname}"` : '') }),
-                el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.getRecordString()}` }),
+                el('div', { class: 'fighter-meta', text: `${fighter.identity.style} — ${fighter.identity.weightClass} — ${fighter.getRecordString()}` }),
               ]),
             ]),
             gaugeRow('Readiness', fighter.getReadiness()),
@@ -1913,158 +1928,163 @@ class WebApp {
       );
     }
 
-    panel.appendChild(el('div', { class: 'card-title', text: 'Gym adverse' }));
-    if (worldState.rivalGyms.length === 0) {
-      panel.appendChild(el('p', { text: 'Aucun gym rival recense.' }));
+    panel.appendChild(
+      el('label', { class: 'checkbox-row' }, [
+        el('input', {
+          type: 'checkbox',
+          checked: setup.allowMixedGender ? 'checked' : null,
+          onchange: (event) => {
+            setup.allowMixedGender = event.target.checked;
+            this._renderFight();
+          },
+        }),
+        ' Mode Mixte (autoriser un adversaire tire du pool oppose)',
+      ])
+    );
+
+    panel.appendChild(el('div', { class: 'card-title', text: '\u{1F4C5} Galas a venir' }));
+    const galas = getUpcomingGalas(worldState);
+    if (galas.length === 0) {
+      panel.appendChild(el('p', { text: 'Aucun gala programme pour le moment.' }));
       return;
     }
-    for (const gym of worldState.rivalGyms) {
-      const selected = setup.gymId === gym.id;
-      panel.appendChild(
-        el(
-          'div',
-          {
-            class: `fighter-card selectable${selected ? ' selected' : ''}`,
-            onclick: () => {
-              setup.gymId = gym.id;
-              setup.opponentId = null;
-              this._renderFight();
-            },
-          },
-          [
-            el('div', { class: 'fighter-name', text: gym.name ?? gym.id }),
-            el('div', { class: 'fighter-meta', text: `Reputation ${Math.round(gym.reputation ?? 0)} — ${(gym.roster?.length ?? 0)} combattant(s) recense(s)` }),
-          ]
-        )
-      );
-    }
 
-    const selectedGym = worldState.rivalGyms.find((gym) => gym.id === setup.gymId) ?? null;
-    if (selectedGym) {
+    for (const gala of galas) {
+      const daysOut = gala.day - worldState.currentDay;
+      const slot = selectedFighter ? gala.weightClassSlots.find((s) => s.weightClass === selectedFighter.identity.weightClass) : null;
+
       panel.appendChild(
-        el('label', { class: 'checkbox-row' }, [
-          el('input', {
-            type: 'checkbox',
-            checked: setup.allowMixedGender ? 'checked' : null,
-            onchange: (event) => {
-              setup.allowMixedGender = event.target.checked;
-              this._renderFight();
-            },
-          }),
-          ' Mode Mixte (autoriser les combats mixtes)',
+        el('div', { class: 'card' }, [
+          el('div', { class: 'card-title', text: gala.label }),
+          el('p', { class: 'fighter-meta', text: `Dans ${daysOut} jour(s) — Fight Card de ${gala.cardSize} combats.` }),
+          !selectedFighter
+            ? el('p', { text: 'Choisissez d\'abord votre combattant.' })
+            : slot
+              ? el('button', {
+                  class: 'btn btn-gold btn-block',
+                  text: `S'inscrire (${selectedFighter.identity.weightClass})`,
+                  onclick: () => this._registerForGala(gala.id),
+                })
+              : el('p', { text: `Aucun slot ouvert pour ${selectedFighter.identity.weightClass} sur ce gala.` }),
         ])
       );
-
-      panel.appendChild(el('div', { class: 'card-title', text: 'Leur combattant' }));
-      const roster = selectedGym.roster ?? [];
-      if (roster.length === 0) {
-        panel.appendChild(el('p', { text: 'Ce gym n\'a pas encore de combattant recrute.' }));
-      }
-      for (const entry of roster) {
-        const selected = setup.opponentId === entry.identity.id;
-        const genderMismatch = Boolean(selectedFighter) && !isGenderMatch(selectedFighter, entry, { allowMixedGender: setup.allowMixedGender });
-        panel.appendChild(
-          el(
-            'div',
-            {
-              class: `fighter-card${genderMismatch ? ' gender-mismatch' : ' selectable'}${selected ? ' selected' : ''}`,
-              onclick: genderMismatch
-                ? undefined
-                : () => {
-                    setup.opponentId = entry.identity.id;
-                    this._renderFight();
-                  },
-            },
-            [
-              el('div', { class: 'fighter-name', text: entry.identity.name }),
-              el('div', { class: 'fighter-meta', text: `${entry.identity.style} — ${entry.career.wins}-${entry.career.losses}-${entry.career.draws}` }),
-            ]
-          )
-        );
-      }
     }
+  }
 
-    panel.appendChild(
-      el('button', {
-        class: 'btn btn-gold btn-block',
-        text: 'Signer le combat',
-        disabled: setup.fighterId && setup.gymId && setup.opponentId ? null : 'disabled',
-        onclick: () => this._startFight(),
-      })
-    );
+  /** French-language reasons for every engine/LeagueEngine.js#registerForGala failure, so a failed registration always surfaces the exact cause instead of a silent no-op. */
+  _describeGalaRegistrationFailure(reason) {
+    const messages = {
+      ALREADY_BOOKED: 'un combat est deja programme.',
+      FIGHTER_NOT_FOUND: 'combattant introuvable.',
+      FIGHTER_INJURED: 'ce combattant est blesse.',
+      GALA_NOT_FOUND: 'ce gala n\'existe plus.',
+      NO_OPEN_SLOT: 'aucun slot disponible pour cette categorie de poids.',
+      NO_OPPONENT_AVAILABLE: 'aucun adversaire disponible pour le moment.',
+      MATCHMAKING_VIOLATION: 'regles de matchmaking non respectees.',
+    };
+    return messages[reason] ?? 'raison inconnue.';
+  }
+
+  _registerForGala(galaId) {
+    const setup = this._galaSetup;
+    if (!setup?.fighterId) return;
+    const { playerState, worldState } = this.gameState;
+
+    try {
+      const result = registerForGala(playerState, worldState, {
+        galaId,
+        fighterId: setup.fighterId,
+        allowMixedGender: setup.allowMixedGender,
+        rng: this.rng,
+      });
+
+      if (!result.success) {
+        this._showToast(`\u{26A0}\u{FE0F} Inscription impossible : ${this._describeGalaRegistrationFailure(result.reason)}`);
+        return;
+      }
+
+      const daysOut = result.record.fightDay - result.record.scheduledDay;
+      this._galaSetup = null;
+      AudioEngine.playClick();
+      this._showToast(`\u{1F4C5} Inscrit contre ${result.opponent.identity.name} — ${result.gala.label} dans ${daysOut} jour(s).`);
+      this._renderFight();
+      this._renderTopbar();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _registerForGala failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Inscription impossible : ${error.message}`);
+    }
   }
 
   /**
-   * V3.6 "Fight Week": picking an opponent no longer fights instantly — it
-   * BOOKS the fight 3-4 weeks out (engine/FightWeekEngine.js#scheduleFight)
-   * and hands the Combat tab over to the Fight Week countdown/camp/
-   * logistics view (see _renderFightWeek) until that date actually
-   * arrives — see _confirmFightWeekArrival().
+   * "Fight Launch Contract" — the last checkpoint before opening the live
+   * combat view, checked right before _launchFight actually calls
+   * presentMatchup()/CombatEngine#setupMatch. Every condition here mirrors
+   * one setupMatch itself would otherwise throw on (or a state that would
+   * leave a fighter unable to safely compete) — checking it here means a
+   * broken contract surfaces an exact reason via toast, instead of an
+   * uncaught exception leaving the Combat tab silently frozen mid-click.
+   * @returns {{ ok: true }|{ ok: false, reason: string }}
    */
-  _startFight() {
-    const setup = this._fightOpponentSetup;
-    const { playerState, worldState } = this.gameState;
-    const gym = worldState.rivalGyms.find((g) => g.id === setup.gymId);
-    const opponentEntry = (gym?.roster ?? []).find((entry) => entry.identity.id === setup.opponentId);
-
-    const fighterA = playerState.getFighter(setup.fighterId);
-    const fighterB = Fighter.fromJSON(opponentEntry);
-    assertNoIntraGymMatch(fighterA, fighterB, playerState);
-    assertGenderMatch(fighterA, fighterB, { allowMixedGender: setup.allowMixedGender });
-
-    const orgId = resolveRegionalOrg(playerState.country).id;
-    const record = scheduleFight(playerState, worldState, {
-      fighterId: fighterA.identity.id,
-      gymId: gym.id,
-      opponentId: fighterB.identity.id,
-      orgId,
-      rng: this.rng,
-    });
-    const weeksOut = Math.round((record.fightDay - record.scheduledDay) / BALANCE.CALENDAR.DAYS_PER_WEEK);
-
-    this._fightOpponentSetup = null;
-    AudioEngine.playClick();
-    this._showToast(`\u{1F4C5} Combat signe contre ${fighterB.identity.name} — dans ${weeksOut} semaines.`);
-    this._renderFight();
-    this._renderTopbar();
-    this._autosave();
+  _validateFightLaunchContract({ fighterA, fighterB, orgId }) {
+    if (!fighterA) return { ok: false, reason: 'Combattant introuvable (retraite ou transfere).' };
+    if (!fighterB) return { ok: false, reason: 'Adversaire introuvable.' };
+    if (fighterA.identity.id === fighterB.identity.id) return { ok: false, reason: 'Un combattant ne peut pas s\'affronter lui-meme.' };
+    if (fighterA.isInjured(this.gameState.worldState.currentDay)) return { ok: false, reason: `${fighterA.identity.name} est blesse.` };
+    if (!orgId) return { ok: false, reason: 'Organisation/ruleset manquant pour ce combat.' };
+    if (
+      this.combatEngine.state &&
+      this.combatEngine.state !== COMBAT_STATES.IDLE &&
+      this.combatEngine.state !== COMBAT_STATES.FINISHED
+    ) {
+      return { ok: false, reason: 'Un combat est deja en cours.' };
+    }
+    return { ok: true };
   }
 
   /**
    * Runs once the booked fight's date has actually arrived (see
    * _renderFightWeek's "Se rendre au combat" button, only enabled once
-   * engine/FightWeekEngine.js#isFightDue agrees). Re-validates both
-   * corners are still available (a booked opponent can have been bought
-   * out/poached/retired mid-camp) before handing off to the same press
-   * conference / launch flow the old instant-fight flow used.
+   * engine/FightWeekEngine.js#isFightDue agrees). The opponent is read
+   * straight from the Fight Launch Contract's own locked-in
+   * opponentSnapshot (see engine/FightWeekEngine.js's header note) — never
+   * re-derived from a live rival-gym roster, so a rival's autonomous
+   * roster churn or a Mercato buyout/poach mid-camp can no longer strand
+   * this booking. Only a genuinely broken contract (the booked fighter
+   * retired/left the roster, or got injured) cancels it.
    */
   _confirmFightWeekArrival() {
     const { playerState, worldState } = this.gameState;
     const scheduledFight = playerState.scheduledFight;
     if (!scheduledFight || !isFightDue(scheduledFight, worldState.currentDay)) return;
 
-    const gym = worldState.rivalGyms.find((g) => g.id === scheduledFight.gymId);
-    const opponentEntry = (gym?.roster ?? []).find((entry) => entry.identity.id === scheduledFight.opponentId);
     const fighterA = playerState.getFighter(scheduledFight.fighterId);
+    let fighterB = null;
+    try {
+      fighterB = scheduledFight.opponentSnapshot ? Fighter.fromJSON(scheduledFight.opponentSnapshot) : null;
+    } catch (error) {
+      console.error('[web/app.js] Failed to rehydrate the booked opponent:', error);
+    }
 
-    if (!gym || !opponentEntry || !fighterA || fighterA.isInjured(worldState.currentDay)) {
+    const contract = this._validateFightLaunchContract({ fighterA, fighterB, orgId: scheduledFight.orgId });
+    if (!contract.ok) {
       cancelScheduledFight(playerState);
-      this._showToast('\u{1F6AB} Combat annule — un des deux combattants n\'est plus disponible.');
+      this._showToast(`\u{1F6AB} Combat annule — ${contract.reason}`);
       this._renderFight();
       return;
     }
 
-    const fighterB = Fighter.fromJSON(opponentEntry);
+    const gym = scheduledFight.gymId ? worldState.rivalGyms.find((g) => g.id === scheduledFight.gymId) : null;
 
-    if (isMainEventEligible({ fighterA, fighterB, opponentGymReputation: gym.reputation ?? 0 })) {
-      this._showPressConferenceModal(fighterA, fighterB, gym);
+    if (isMainEventEligible({ fighterA, fighterB, opponentGymReputation: gym?.reputation ?? 0 })) {
+      this._showPressConferenceModal(fighterA, fighterB, gym, scheduledFight.orgId);
       return;
     }
 
-    this._beginScheduledFightCombat(fighterA, fighterB, gym, null);
+    this._beginScheduledFightCombat(fighterA, fighterB, gym, null, scheduledFight.orgId);
   }
 
-  _showPressConferenceModal(fighterA, fighterB, gym) {
+  _showPressConferenceModal(fighterA, fighterB, gym, orgId) {
     const content = el('div', {}, [
       el('h2', { class: 'section-title', text: "\u{1F3A4} Conference de presse" }),
       el('p', { text: `Avant d'affronter ${fighterB.identity.name}, quelle posture adopte ${fighterA.identity.name} ?` }),
@@ -2080,7 +2100,7 @@ class WebApp {
               onclick: () => {
                 applyPressConferenceChoice(stance.id, { fighterA, fighterB, worldState: this.gameState.worldState });
                 this._hideModal();
-                this._beginScheduledFightCombat(fighterA, fighterB, gym, { purseMultiplier: stance.purseMultiplier });
+                this._beginScheduledFightCombat(fighterA, fighterB, gym, { purseMultiplier: stance.purseMultiplier }, orgId);
               },
             }),
           ])
@@ -2091,30 +2111,53 @@ class WebApp {
   }
 
   /** Finalizes the Fight Week booking (capturing its resolved weight-cut choice) and hands off to _launchFight — the single place a scheduled fight actually becomes a live CombatEngine match. */
-  _beginScheduledFightCombat(fighterA, fighterB, gym, rules) {
+  _beginScheduledFightCombat(fighterA, fighterB, gym, rules, orgId) {
     const { playerState } = this.gameState;
     this._pendingWeightCutProfileKey = resolveWeightCutProfileKey(playerState.scheduledFight);
     cancelScheduledFight(playerState);
-    this._launchFight(fighterA, fighterB, gym, rules);
+    this._launchFight(fighterA, fighterB, gym, rules, orgId);
   }
 
-  _launchFight(fighterA, fighterB, gym, rules) {
-    this._fightOpponentGymId = gym.id;
-    this._fightFighterB = fighterB;
-    this._teardownCombatPlayback();
-    this.fightView = new FightNightView({ combatEngine: this.combatEngine });
-    const orgId = resolveRegionalOrg(this.gameState.playerState.country).id;
-    this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, orgId, false, rules);
-    this.fightSetupDone = false;
-    // Only the player's own corner (A) is ever player-configured — the
-    // opponent (B) always fights their own AI gameplan/natural weight cut
-    // (see _confirmFightSetup).
-    this.gameplanChoices = { A: {} };
-    // Resolved from the Fight Week Logistique weight-cut choice (see
-    // _beginScheduledFightCombat) — falls back to NATUREL if somehow unset.
-    this.weightCutChoices = { A: this._pendingWeightCutProfileKey ?? 'NATUREL' };
-    this._pendingWeightCutProfileKey = null;
-    this._renderFight();
+  /**
+   * The single place a Fight Launch Contract actually becomes a live
+   * CombatEngine match. Re-validates the contract one last time (belt and
+   * braces — _confirmFightWeekArrival already checked it, but this is
+   * also reachable from other call sites like Underground's own flow via
+   * _launchFight's shared plumbing) and wraps the actual launch in
+   * try/catch: any unexpected failure surfaces an exact toast and leaves
+   * the Combat tab back on the Fight Week/Gala view, never frozen.
+   */
+  _launchFight(fighterA, fighterB, gym, rules, orgId) {
+    const resolvedOrgId = orgId ?? resolveRegionalOrg(this.gameState.playerState.country).id;
+    const contract = this._validateFightLaunchContract({ fighterA, fighterB, orgId: resolvedOrgId });
+    if (!contract.ok) {
+      this._showToast(`\u{26A0}\u{FE0F} Impossible de lancer le combat : ${contract.reason}`);
+      this._renderFight();
+      return;
+    }
+
+    try {
+      this._fightOpponentGymId = gym?.id ?? null;
+      this._fightFighterB = fighterB;
+      this._teardownCombatPlayback();
+      this.fightView = new FightNightView({ combatEngine: this.combatEngine });
+      this.fightCard = this.fightView.presentMatchup(fighterA, fighterB, resolvedOrgId, false, rules);
+      this.fightSetupDone = false;
+      // Only the player's own corner (A) is ever player-configured — the
+      // opponent (B) always fights their own AI gameplan/natural weight cut
+      // (see _confirmFightSetup).
+      this.gameplanChoices = { A: {} };
+      // Resolved from the Fight Week Logistique weight-cut choice (see
+      // _beginScheduledFightCombat) — falls back to NATUREL if somehow unset.
+      this.weightCutChoices = { A: this._pendingWeightCutProfileKey ?? 'NATUREL' };
+      this._pendingWeightCutProfileKey = null;
+      this._renderFight();
+    } catch (error) {
+      console.error('[web/app.js] _launchFight failed:', error);
+      this.fightView = null;
+      this._showToast(`\u{26A0}\u{FE0F} Le combat n'a pas pu demarrer : ${error.message}`);
+      this._renderFight();
+    }
   }
 
   // ---- FIGHT WEEK (V3.6: scheduling, camp orientation, logistics) -------------------
@@ -2123,13 +2166,17 @@ class WebApp {
   _renderFightWeek(panel) {
     const { playerState, worldState } = this.gameState;
     const scheduledFight = playerState.scheduledFight;
-    const gym = worldState.rivalGyms.find((g) => g.id === scheduledFight.gymId);
-    const opponentEntry = (gym?.roster ?? []).find((entry) => entry.identity.id === scheduledFight.opponentId);
     const fighterA = playerState.getFighter(scheduledFight.fighterId);
+    let opponent = null;
+    try {
+      opponent = scheduledFight.opponentSnapshot ? Fighter.fromJSON(scheduledFight.opponentSnapshot) : null;
+    } catch (error) {
+      console.error('[web/app.js] Failed to rehydrate the booked opponent for display:', error);
+    }
 
     panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F4C5} Fight Week' }));
 
-    if (!gym || !opponentEntry || !fighterA) {
+    if (!fighterA || !opponent) {
       panel.appendChild(el('p', { text: 'Ce combat n\'est plus possible — un des deux combattants n\'est plus disponible.' }));
       panel.appendChild(
         el('button', {
@@ -2145,15 +2192,17 @@ class WebApp {
       return;
     }
 
-    const opponent = Fighter.fromJSON(opponentEntry);
     const daysLeft = getDaysUntilFight(scheduledFight, worldState.currentDay);
     const fightWeek = isFightWeek(scheduledFight, worldState.currentDay);
     const due = isFightDue(scheduledFight, worldState.currentDay);
+    const originLabel = scheduledFight.gymId
+      ? worldState.rivalGyms.find((g) => g.id === scheduledFight.gymId)?.name ?? 'Gym rival'
+      : 'Combattant independant';
 
     panel.appendChild(
       el('div', { class: 'card' }, [
         el('div', { class: 'card-title', text: `${fighterA.identity.name} vs ${opponent.identity.name}` }),
-        el('p', { class: 'fighter-meta', text: `${gym.name ?? gym.id} — ${opponent.identity.style} — ${opponent.career.wins}-${opponent.career.losses}-${opponent.career.draws}` }),
+        el('p', { class: 'fighter-meta', text: `${originLabel} — ${opponent.identity.style} — ${opponent.career.wins}-${opponent.career.losses}-${opponent.career.draws}` }),
         el('p', { text: due ? 'Le combat peut avoir lieu.' : `Combat dans ${daysLeft} jour(s).` }),
       ])
     );
@@ -2875,7 +2924,7 @@ class WebApp {
         text: 'Nouveau combat',
         onclick: () => {
           this._teardownCombatPlayback();
-          this._fightOpponentSetup = null;
+          this._galaSetup = null;
           this._fightOpponentGymId = null;
           this._fightFighterB = null;
           this.fightView = null;

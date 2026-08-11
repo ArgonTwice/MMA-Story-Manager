@@ -21,6 +21,10 @@ import {
   resolveRegionalOrg,
   getWeightClassRanking,
   getAllWeightClassRankings,
+  getUpcomingGalas,
+  getGalaById,
+  drawGalaOpponent,
+  registerForGala,
 } from './LeagueEngine.js';
 
 test('a fresh gym starts in the bottom tier (LOCAL_UNDERGROUND) with a 1x purse/passive-income multiplier', () => {
@@ -214,4 +218,123 @@ test('getAllWeightClassRankings respects a custom limit', () => {
   const board = getAllWeightClassRankings(playerState, worldState, { limit: 2 });
   const welter = board.byGender.M.find((division) => division.label === 'Poids Welter');
   assert.equal(welter.ranking.length, 2);
+});
+
+// ---- V3.7: Gala Calendar ----------------------------------------------------------
+
+test('getUpcomingGalas returns UPCOMING_COUNT_PER_ORG galas per organization, every day at/after FIRST_GALA_MIN_DAYS_OUT, sorted soonest-first', () => {
+  const worldState = new WorldState();
+  const galas = getUpcomingGalas(worldState);
+  const cfg = BALANCE.GALA_CIRCUIT;
+
+  assert.equal(galas.length, Object.keys(cfg.ORGANIZATIONS).length * cfg.UPCOMING_COUNT_PER_ORG);
+  for (const gala of galas) {
+    assert.ok(gala.day >= worldState.currentDay + cfg.FIRST_GALA_MIN_DAYS_OUT);
+    assert.ok(Object.values(cfg.ORGANIZATIONS).some((org) => org.id === gala.orgId));
+    assert.ok(gala.weightClassSlots.length > 0);
+  }
+  for (let i = 1; i < galas.length; i += 1) {
+    assert.ok(galas[i].day >= galas[i - 1].day);
+  }
+});
+
+test('getUpcomingGalas is deterministic — the same calendar renders every time for the same currentDay', () => {
+  const worldState = new WorldState();
+  assert.deepEqual(getUpcomingGalas(worldState), getUpcomingGalas(worldState));
+});
+
+test('getUpcomingGalas respects a custom count override', () => {
+  const worldState = new WorldState();
+  const galas = getUpcomingGalas(worldState, { count: 1 });
+  assert.equal(galas.length, Object.keys(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).length);
+});
+
+test('getGalaById reconstructs the exact same gala a matching getUpcomingGalas entry describes', () => {
+  const worldState = new WorldState();
+  const [first] = getUpcomingGalas(worldState, { count: 1 });
+  const reconstructed = getGalaById(worldState, first.id);
+  assert.deepEqual(reconstructed, first);
+});
+
+test('getGalaById returns null for a malformed or unknown gala id', () => {
+  const worldState = new WorldState();
+  assert.equal(getGalaById(worldState, 'NOT_A_REAL_ORG#0'), null);
+  assert.equal(getGalaById(worldState, 'garbage'), null);
+});
+
+test('drawGalaOpponent draws from a matching rival gym roster when one is available', () => {
+  const worldState = new WorldState();
+  const rivalFighter = new Fighter({ identity: { name: 'Rival', gender: 'M', weightClass: 'Poids Welter' } });
+  worldState.addRivalGym({ name: 'Rival Gym', reputation: 40, roster: [rivalFighter.toJSON()] });
+
+  const draw = drawGalaOpponent(worldState, { weightClass: 'Poids Welter', gender: 'M', rng: () => 0 }); // 0 < INDEPENDENT_CHANCE is false only if INDEPENDENT_CHANCE > 0, so force rng past it
+  // rng() always 0 would trigger the independent branch since 0 < INDEPENDENT_CHANCE; use a value guaranteed above it instead.
+  const draw2 = drawGalaOpponent(worldState, { weightClass: 'Poids Welter', gender: 'M', rng: () => 0.99 });
+  assert.equal(draw2.fighter.identity.name, 'Rival');
+  assert.equal(draw2.gymId, worldState.rivalGyms[0].id);
+  assert.ok(draw.fighter); // independent branch still produced a valid fighter
+});
+
+test('drawGalaOpponent falls back to an independent fighter matching the exact weight class/gender when the pool is empty', () => {
+  const worldState = new WorldState();
+  const draw = drawGalaOpponent(worldState, { weightClass: 'Poids Paille', gender: 'F', rng: () => 0.99 });
+
+  assert.equal(draw.gymId, null);
+  assert.equal(draw.gymName, null);
+  assert.equal(draw.fighter.identity.gender, 'F');
+  assert.equal(draw.fighter.identity.weightClass, 'Poids Paille');
+  assert.equal(draw.fighter.identity.origin, 'INDEPENDENT_GALA');
+});
+
+test('drawGalaOpponent excludes opposite-gender rival fighters unless allowMixedGender is set', () => {
+  const worldState = new WorldState();
+  const rivalFighter = new Fighter({ identity: { name: 'Rival Woman', gender: 'F', weightClass: 'Poids Welter' } });
+  worldState.addRivalGym({ name: 'Rival Gym', reputation: 40, roster: [rivalFighter.toJSON()] });
+
+  const strict = drawGalaOpponent(worldState, { weightClass: 'Poids Welter', gender: 'M', rng: () => 0.99 });
+  assert.equal(strict.gymId, null, 'no matching-gender rival fighter exists, so it must fall back to independent');
+
+  const mixed = drawGalaOpponent(worldState, { weightClass: 'Poids Welter', gender: 'M', allowMixedGender: true, rng: () => 0.99 });
+  assert.equal(mixed.fighter.identity.name, 'Rival Woman');
+});
+
+test('registerForGala fails cleanly when already booked, fighter missing/injured, or the gala id is unknown', () => {
+  const worldState = new WorldState();
+  const playerState = new PlayerState({ money: 25000 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  playerState.addFighter(fighter);
+
+  assert.equal(registerForGala(playerState, worldState, { galaId: 'nope#0', fighterId: 'missing' }).reason, 'FIGHTER_NOT_FOUND');
+
+  fighter.applyInjury({ severity: 'MINOR', bodyPart: 'jambe', occurredOnDay: worldState.currentDay, injuredUntilDay: worldState.currentDay + 9999 });
+  assert.equal(registerForGala(playerState, worldState, { galaId: 'nope#0', fighterId: 'f1' }).reason, 'FIGHTER_INJURED');
+  fighter.medical.injuredUntil = null;
+
+  assert.equal(registerForGala(playerState, worldState, { galaId: 'NOT_A_REAL_ORG#0', fighterId: 'f1' }).reason, 'GALA_NOT_FOUND');
+
+  const [gala] = getUpcomingGalas(worldState, { count: 1 });
+  const first = registerForGala(playerState, worldState, { galaId: gala.id, fighterId: 'f1', rng: () => 0.99 });
+  assert.equal(first.success, true);
+
+  const second = registerForGala(playerState, worldState, { galaId: gala.id, fighterId: 'f1', rng: () => 0.99 });
+  assert.equal(second.reason, 'ALREADY_BOOKED');
+});
+
+test('a successful registerForGala books a Fight Launch Contract with opponentSnapshot/galaId/orgId/fightDay matching the chosen gala', () => {
+  const worldState = new WorldState();
+  const playerState = new PlayerState({ money: 25000 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  playerState.addFighter(fighter);
+
+  const [gala] = getUpcomingGalas(worldState, { count: 1 });
+  const result = registerForGala(playerState, worldState, { galaId: gala.id, fighterId: 'f1', rng: () => 0.99 });
+
+  assert.equal(result.success, true);
+  assert.equal(playerState.scheduledFight.fighterId, 'f1');
+  assert.equal(playerState.scheduledFight.galaId, gala.id);
+  assert.equal(playerState.scheduledFight.orgId, gala.orgId);
+  assert.equal(playerState.scheduledFight.fightDay, gala.day);
+  assert.ok(playerState.scheduledFight.opponentSnapshot);
+  assert.equal(playerState.scheduledFight.opponentSnapshot.identity.gender, 'M');
+  assert.equal(playerState.scheduledFight.opponentSnapshot.identity.weightClass, 'Poids Welter');
 });

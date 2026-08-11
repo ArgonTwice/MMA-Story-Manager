@@ -134,11 +134,16 @@ export class PlayerState {
 
     /**
      * engine/FightWeekEngine.js: the gym's one currently-booked Combat-tab
-     * fight, or null if none is booked. Shape: { fighterId, gymId,
-     * opponentId, orgId, isTitle, rules, scheduledDay, fightDay,
-     * campOrientation, campLog, weightCutChoice, logisticsChoice }. Only
-     * one booking at a time — see setScheduledFight(). Underground Circuit
-     * challenges never go through this (they stay instant).
+     * "Fight Launch Contract", or null if none is booked. Shape:
+     * { fighterId, opponentSnapshot, opponentId, gymId, galaId, orgId,
+     * isTitle, rules, scheduledDay, fightDay, campOrientation, campLog,
+     * weightCutChoice, logisticsChoice }. opponentSnapshot (a plain
+     * Fighter#toJSON()) is captured once at signup by
+     * engine/LeagueEngine.js#registerForGala and never re-derived from a
+     * live roster afterward — gymId/galaId are display-only context, not
+     * a live lookup key. Only one booking at a time — see
+     * setScheduledFight(). Underground Circuit challenges never go
+     * through this (they stay instant).
      */
     this.scheduledFight = config.scheduledFight ? { ...config.scheduledFight } : null;
   }

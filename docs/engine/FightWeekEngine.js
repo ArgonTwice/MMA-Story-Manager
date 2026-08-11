@@ -1,9 +1,20 @@
 /**
- * engine/FightWeekEngine.js — V3.6 ("Fight Week, Logistique et Preparation Predictive")
+ * engine/FightWeekEngine.js — V3.6/V3.7 ("Fight Week" + "Fight Launch Contract")
  * ---------------------------------------------------------------------------
- * Books a Combat-tab fight 3-4 weeks out (BALANCE.FIGHT_WEEK.MIN/MAX_WEEKS_OUT)
- * instead of simulating it the instant an opponent is picked, then manages
- * the week-by-week run-up:
+ * Owns the "Fight Launch Contract": a booked Combat-tab fight is never
+ * simulated the instant an opponent is picked. Since V3.7, the booking's
+ * date and opponent both come from engine/LeagueEngine.js#registerForGala
+ * (the player registers onto an open weight-class slot of an upcoming
+ * Gala — see BALANCE.GALA_CIRCUIT — and the opponent is drawn from a
+ * global pool) — scheduleFight() here is the low-level contract builder
+ * that call site hands off to, locking the opponent in as a plain JSON
+ * snapshot (opponentSnapshot) taken at signup time. Deliberately NEVER
+ * re-derived from a live rival-gym roster afterward: over a multi-week
+ * gap that roster can legitimately change (autonomous TransferMarket
+ * churn, a Mercato buyout/poach), and a signed contract shouldn't quietly
+ * evaporate or point at the wrong fighter because of it.
+ *
+ * Between signing and fight day, this module manages the week-by-week run-up:
  *   - A weekly Training Camp orientation (Sparring Intensif / Analyse Video /
  *     Cardio Focus) for the booked fighter, applied instead of their normal
  *     Planning-tab slots for as long as the fight is booked and it isn't
@@ -27,36 +38,41 @@ import BALANCE from '../data/balance.js';
 const DAYS_PER_WEEK = BALANCE.CALENDAR.DAYS_PER_WEEK;
 
 /**
- * Books a new fight, replacing any previous booking. Pure date/record
- * construction — never simulates anything itself (see web/app.js's
- * _launchFight, called once the booked date is actually reached).
+ * Books a new Fight Launch Contract, replacing any previous booking. Pure
+ * record construction — never simulates anything itself (see web/app.js's
+ * _launchFight, called once the booked date is actually reached). The
+ * caller (engine/LeagueEngine.js#registerForGala) is the source of truth
+ * for WHEN (fightDay, from the chosen Gala) and WHO (opponentSnapshot,
+ * drawn from the global pool) — this function only locks that decision in.
  *
  * @param {Object} playerState
  * @param {Object} worldState
  * @param {Object} options
  * @param {string} options.fighterId - The player's own booked fighter.
- * @param {string} options.gymId - The opposing rival gym.
- * @param {string} options.opponentId - The opposing fighter's id.
- * @param {string} options.orgId - Sanctioning org (see engine/LeagueEngine.js#resolveRegionalOrg).
+ * @param {Object} options.opponentSnapshot - Fighter#toJSON() of the drawn opponent, locked in for good — never re-derived from a live roster.
+ * @param {string|null} [options.gymId] - The opponent's originating rival gym, for display only — null for an independent (gym-less) opponent.
+ * @param {string|null} [options.galaId] - Which Gala this booking is part of, or null.
+ * @param {string} options.orgId - Sanctioning org (see BALANCE.GALA_CIRCUIT.ORGANIZATIONS).
+ * @param {number} options.fightDay - worldState.currentDay this booking resolves on.
  * @param {boolean} [options.isTitle]
  * @param {Object|null} [options.rules] - Press-conference-derived rules (e.g. { purseMultiplier }), or null.
- * @param {() => number} [options.rng]
- * @returns {Object} The stored booking record.
+ * @returns {Object} The stored Fight Launch Contract.
  */
 export function scheduleFight(playerState, worldState, options) {
-  const { fighterId, gymId, opponentId, orgId, isTitle = false, rules = null, rng = Math.random } = options;
+  const { fighterId, opponentSnapshot, gymId = null, galaId = null, orgId, fightDay, isTitle = false, rules = null } = options;
   const cfg = BALANCE.FIGHT_WEEK;
-  const weeksOut = cfg.MIN_WEEKS_OUT + Math.floor(rng() * (cfg.MAX_WEEKS_OUT - cfg.MIN_WEEKS_OUT + 1));
 
   return playerState.setScheduledFight({
     fighterId,
+    opponentSnapshot: { ...opponentSnapshot },
+    opponentId: opponentSnapshot.identity.id,
     gymId,
-    opponentId,
+    galaId,
     orgId,
     isTitle,
     rules,
     scheduledDay: worldState.currentDay,
-    fightDay: worldState.currentDay + weeksOut * DAYS_PER_WEEK,
+    fightDay,
     campOrientation: cfg.DEFAULT_CAMP_ORIENTATION,
     campLog: [],
     weightCutChoice: null,

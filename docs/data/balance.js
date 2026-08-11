@@ -2528,10 +2528,13 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
-  // FIGHT_WEEK — V3.6: engine/FightWeekEngine.js's fight-scheduling and
-  // pre-fight-camp/logistics layer. Signing a Combat-tab fight no longer
-  // simulates it instantly — it books a date 3-4 weeks out
-  // (MIN/MAX_WEEKS_OUT), and the gym plans for it week by week:
+  // FIGHT_WEEK — V3.6/V3.7: engine/FightWeekEngine.js's pre-fight-camp/
+  // logistics layer, built around the "Fight Launch Contract" — a signed
+  // Combat-tab fight is a booking, never simulated instantly. Its date
+  // (fightDay) is no longer a random offset picked by this module — since
+  // V3.7 it comes straight from whichever Gala the player registered for
+  // (see BALANCE.GALA_CIRCUIT / engine/LeagueEngine.js#registerForGala).
+  // Between signing and fight day, the gym plans for it week by week:
   //   - CAMP_ORIENTATIONS: a weekly training-camp direction choice for the
   //     booked fighter, applied by FightWeekEngine#applyWeeklyCampOrientation
   //     (called from engine/ProgressionEngine.js#advanceWeek) instead of
@@ -2548,9 +2551,6 @@ const BALANCE = {
   //     going into the bout.
   // ---------------------------------------------------------------------
   FIGHT_WEEK: {
-    MIN_WEEKS_OUT: 3,
-    MAX_WEEKS_OUT: 4,
-
     CAMP_ORIENTATIONS: {
       SPARRING_INTENSIF: {
         label: 'Sparring Intensif',
@@ -2608,6 +2608,58 @@ const BALANCE = {
         physicalFatigueDelta: -8,
         moraleDelta: 10,
       },
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // GALA_CIRCUIT — V3.7 ("Refonte du Matchmaking par Calendrier de Galas"):
+  // engine/LeagueEngine.js's Gala Calendar. Replaces the old "pick a rival
+  // gym, hand-pick their fighter" flow — the player now registers a
+  // fighter onto an OPEN WEIGHT-CLASS SLOT of an upcoming Gala, and the
+  // opponent is drawn automatically from a global pool (a rival gym's
+  // roster, or a freshly-generated independent fighter), exactly like a
+  // real promotion books its card. A FOURTH, independent orgId concept —
+  // same "never read the other three" rule as data/leagues.js's LEAGUES,
+  // this file's own LEAGUE_PYRAMID, and REGIONAL_ORGS (see that block's
+  // own header note): GALA_CIRCUIT only labels which promotion a booked
+  // Combat-tab fight (engine/FightWeekEngine.js's Fight Launch Contract)
+  // is fought under — purely organizational, never consulted by
+  // resolveRegionalOrg()/getWeightClassRanking()'s own "Classements
+  // Officiels" board, which stays tied to REGIONAL_ORGS/country as before.
+  //
+  // "Underground Circuit" is listed as one of the four organizations here
+  // ONLY as a Gala-naming flavor choice for a normal, sanctioned-feeling
+  // Fight Launch Contract — it is intentionally NOT wired to the separate,
+  // pre-existing instant-challenge Underground Circuit tab/engine
+  // (engine/UndergroundEngine.js), which keeps its own distinct identity
+  // (no formalities, KO/Soumission only, resolved immediately) untouched.
+  // ---------------------------------------------------------------------
+  GALA_CIRCUIT: {
+    ORGANIZATIONS: {
+      LOCAL: { id: 'LOCAL_FIGHTING', label: 'Local Fighting' },
+      ECL: { id: 'ECL', label: 'Elite Combat League' },
+      APEX: { id: 'APEX', label: 'Apex Championship' },
+      UNDERGROUND: { id: 'UNDERGROUND_CIRCUIT', label: 'Underground Circuit' },
+    },
+
+    /** How many upcoming galas the Calendar shows per organization at once. */
+    UPCOMING_COUNT_PER_ORG: 3,
+    /** Days between one organization's successive galas on the generated calendar. */
+    GALA_INTERVAL_DAYS: 14,
+    /** The soonest a freshly-listed gala can be, from "today" — gives a genuine "book ahead" feel, independent of BALANCE.FIGHT_WEEK's own camp-length knobs. */
+    FIRST_GALA_MIN_DAYS_OUT: 14,
+
+    /** Flavor-only fight-card size range shown per gala — the player only ever books the ONE slot their fighter registers for; the rest is descriptive "+N autres combats" text, never simulated. */
+    CARD_SIZE_MIN: 4,
+    CARD_SIZE_MAX: 8,
+
+    OPPONENT_POOL: {
+      /** Chance the drawn opponent is a freshly-generated "independent" fighter (no gym) rather than pulled from a rival gym's roster — see engine/LeagueEngine.js#drawGalaOpponent. */
+      INDEPENDENT_CHANCE: 0.35,
+      INDEPENDENT_SKILL_MEAN: 35,
+      INDEPENDENT_SKILL_SPREAD: 15,
+      INDEPENDENT_MIN_AGE: 20,
+      INDEPENDENT_MAX_AGE: 33,
     },
   },
 };
