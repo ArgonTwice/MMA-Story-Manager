@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test",
     "test:balance": "node --test tools/BalanceSimulation.test.js",
+    "test:benchmark": "node tools/BalanceBenchmark.js",
     "test:e2e": "node tests/e2e/fight_launch.spec.js",
     "build:web": "node tools/build-web.mjs"
   }

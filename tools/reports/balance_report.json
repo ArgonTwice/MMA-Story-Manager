@@ -1,0 +1,124 @@
+{
+  "pass1": {
+    "meta": {
+      "careers": 5,
+      "weeksPerCareer": 104,
+      "rosterSize": 8,
+      "seedRange": [
+        0,
+        4
+      ],
+      "durationMs": 516
+    },
+    "economy": {
+      "bankruptcyRate": {
+        "year2": 0,
+        "year5": 0
+      },
+      "cashPercentiles": {
+        "year1": {
+          "p10": 54597.939999999995,
+          "p50": 102784.35000000002,
+          "p90": 119411.72
+        },
+        "year3": {
+          "p10": 135984.74,
+          "p50": 200415.26999999996,
+          "p90": 221566.65999999997
+        },
+        "year5": {
+          "p10": 135984.74,
+          "p50": 200415.26999999996,
+          "p90": 221566.65999999997
+        },
+        "year10": {
+          "p10": 135984.74,
+          "p50": 200415.26999999996,
+          "p90": 221566.65999999997
+        }
+      },
+      "millionaireRateAtYear10": 0
+    },
+    "combat": {
+      "overallGapMatrix": {
+        "0-5": {
+          "fights": 163,
+          "favoriteWinRate": 0.6380368098159509,
+          "underdogWinRate": 0.31901840490797545,
+          "drawRate": 0.04294478527607362,
+          "methodShare": {
+            "KO": 0.049079754601226995,
+            "SUBMISSION": 0.1901840490797546,
+            "DECISION": 0.7177914110429447,
+            "OTHER": 0.04294478527607362
+          }
+        },
+        "6-10": {
+          "fights": 100,
+          "favoriteWinRate": 0.88,
+          "underdogWinRate": 0.1,
+          "drawRate": 0.02,
+          "methodShare": {
+            "KO": 0.11,
+            "SUBMISSION": 0.26,
+            "DECISION": 0.61,
+            "OTHER": 0.02
+          }
+        },
+        "11-20": {
+          "fights": 56,
+          "favoriteWinRate": 1,
+          "underdogWinRate": 0,
+          "drawRate": 0,
+          "methodShare": {
+            "KO": 0.14285714285714285,
+            "SUBMISSION": 0.3392857142857143,
+            "DECISION": 0.48214285714285715,
+            "OTHER": 0.03571428571428571
+          }
+        },
+        "21+": {
+          "fights": 9,
+          "favoriteWinRate": 1,
+          "underdogWinRate": 0,
+          "drawRate": 0,
+          "methodShare": {
+            "KO": 0.5555555555555556,
+            "SUBMISSION": 0,
+            "DECISION": 0,
+            "OTHER": 0.4444444444444444
+          }
+        }
+      },
+      "overallMethodShare": {
+        "KO": 0.0975609756097561,
+        "SUBMISSION": 0.23170731707317074,
+        "DECISION": 0.625,
+        "OTHER": 0.04573170731707317
+      },
+      "totalFights": 328,
+      "favoriteWinRateUnderGap20": 0.7774294670846394
+    },
+    "mercato": {
+      "avgBuyoutToSalaryRatio": 1.7102214254251655,
+      "buyoutSampleSize": 40,
+      "poachingRatePerGymYear": 0,
+      "prospectRetentionAt3Years": null,
+      "prospectsEligibleTotal": 0
+    },
+    "targets": {
+      "maxMillionaireRateAtYear10": {
+        "limit": 0.35,
+        "observed": 0,
+        "pass": true
+      },
+      "maxFavoriteWinrateUnderGap20": {
+        "limit": 0.92,
+        "observed": 0.7774294670846394,
+        "pass": true
+      }
+    }
+  },
+  "adjustments": [],
+  "pass2": null
+}

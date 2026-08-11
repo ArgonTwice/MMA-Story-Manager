@@ -243,8 +243,16 @@ function generateFighter(rng, nextFighterId) {
   });
 }
 
-/** Generates a fighter, adds it to the roster, and records it in the run's population/diversity stats (initial fill and every retirement replacement funnel through here). */
-function spawnFighter(playerState, stats, rng, nextFighterId, currentDay) {
+/**
+ * Generates a fighter, adds it to the roster, and records it in the run's
+ * population/diversity stats (initial fill and every retirement/poaching
+ * replacement funnel through here). `isReplacement` is false only for the
+ * run's very first roster fill — every later call (a departed fighter's
+ * slot being backfilled) passes true, letting a consumer's
+ * `onFighterGenerated` hook (e.g. tools/BalanceBenchmark.js) distinguish
+ * "prospects signed during the career" from "the starting roster".
+ */
+function spawnFighter(playerState, stats, rng, nextFighterId, currentDay, { isReplacement = false, hooks } = {}) {
   const fighter = generateFighter(rng, nextFighterId);
   playerState.addFighter(fighter);
   stats.fighters.totalGenerated += 1;
@@ -253,6 +261,7 @@ function spawnFighter(playerState, stats, rng, nextFighterId, currentDay) {
   // so processRetirements (on departure) or the run's final sweep (still
   // active) can measure how many in-world seasons they were actually kept.
   stats.rosterAttachment.fighterSpawnDay[fighter.identity.id] = currentDay;
+  hooks?.onFighterGenerated?.(fighter, { day: currentDay, isReplacement });
   return fighter;
 }
 
@@ -679,7 +688,7 @@ function recordStyleIdentity(stats, fighterA, fighterB, result) {
 }
 
 /** Books this week's fights over the non-injured roster (shuffle + adjacent pairing), and folds every result into `stats`. */
-function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, fightChancePerPair, orgId }) {
+function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, fightChancePerPair, orgId, hooks }) {
   const available = shuffleInPlace(
     playerState.roster.filter((fighter) => !fighter.isInjured(worldState.currentDay)),
     rng
@@ -696,6 +705,7 @@ function bookWeeklyFights({ playerState, worldState, combatEngine, rng, stats, f
     combatEngine.setGameplan('B', gameplanForStyle(fighterB.identity.style, rng));
     const result = combatEngine.simulateFullMatch();
     fightsBooked += 1;
+    hooks?.onFightResolved?.(fighterA, fighterB, result);
 
     stats.fights.total += 1;
     stats.fights.byMethod[result.method] = (stats.fights.byMethod[result.method] ?? 0) + 1;
@@ -826,7 +836,7 @@ function recordRosterAttachmentSample(stats, fighterId, measuredOnDay) {
  * stays SimRunner-specific, since the real game has no auto-recruitment
  * mechanic for advanceWeek to call on its own.
  */
-function processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId }) {
+function processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId, hooks }) {
   for (const retirement of summary.retirements) {
     const bucket = stats.archetypes[retirement.archetype];
     bucket.retirements.push({
@@ -840,7 +850,7 @@ function processRetirements({ summary, playerState, worldState, rng, stats, next
     recordRosterAttachmentSample(stats, retirement.fighterId, worldState.currentDay);
     recordLegacyTelemetry(stats, retirement.reconversion);
 
-    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
+    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay, { isReplacement: true, hooks });
   }
 }
 
@@ -853,10 +863,10 @@ function processRetirements({ summary, playerState, worldState, rng, stats, next
  * "headless roster size stays constant" reason documented on
  * processRetirements above.
  */
-function processPoaching({ poachingReport, playerState, worldState, rng, stats, nextFighterId }) {
+function processPoaching({ poachingReport, playerState, worldState, rng, stats, nextFighterId, hooks }) {
   for (const poached of poachingReport) {
     recordRosterAttachmentSample(stats, poached.fighterId, worldState.currentDay);
-    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
+    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay, { isReplacement: true, hooks });
   }
 }
 
@@ -960,9 +970,18 @@ export function runSimulation(options = {}) {
 
   const stats = createStatsAccumulator();
   const nextFighterId = createFighterIdSequencer();
+  // Optional per-fighter/per-fight/per-week telemetry hooks (e.g.
+  // tools/BalanceBenchmark.js tracking Overall-gap winrates, buyout/salary
+  // ratios, or poaching rates) — every hook is a no-op unless explicitly
+  // provided, so this is purely additive for every other existing caller.
+  const hooks = {
+    onFighterGenerated: options.onFighterGenerated,
+    onFightResolved: options.onFightResolved,
+    onWeekComplete: options.onWeekComplete,
+  };
   const actualRosterSize = ensureRosterCapacity(playerState, rosterSize);
   for (let i = 0; i < actualRosterSize; i += 1) {
-    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay);
+    spawnFighter(playerState, stats, rng, nextFighterId, worldState.currentDay, { isReplacement: false, hooks });
   }
   seedRivalGyms(worldState, rng);
 
@@ -1019,12 +1038,22 @@ export function runSimulation(options = {}) {
         stats,
         fightChancePerPair,
         orgId,
+        hooks,
       });
 
-      processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId });
-      processPoaching({ poachingReport: summary.poachingReport, playerState, worldState, rng, stats, nextFighterId });
+      processRetirements({ summary, playerState, worldState, rng, stats, nextFighterId, hooks });
+      processPoaching({ poachingReport: summary.poachingReport, playerState, worldState, rng, stats, nextFighterId, hooks });
 
       recordWeeklyEconomy(stats, playerState, summary.economyReport);
+
+      hooks.onWeekComplete?.({
+        weekIndex,
+        day: worldState.currentDay,
+        playerState,
+        worldState,
+        poachingReport: summary.poachingReport,
+        economyReport: summary.economyReport,
+      });
 
       const dull = isDullWeek({
         fightsThisWeek,
