@@ -84,6 +84,8 @@ import {
 
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
+/** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
+const APP_VERSION = 'v3.7';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -365,6 +367,8 @@ class WebApp {
     this._wireNav();
     this._wireModalDismiss();
     this._wireMuteToggle();
+    if (this.dom.startVersion) this.dom.startVersion.textContent = APP_VERSION;
+    if (this.dom.tbVersion) this.dom.tbVersion.textContent = APP_VERSION;
 
     const hasAutosave = SaveManager.listSlots().includes(AUTOSAVE_SLOT);
     this.dom.continueBlock.classList.toggle('hidden', !hasAutosave);
@@ -400,6 +404,8 @@ class WebApp {
       newGymName: document.getElementById('newGymName'),
       newGymCountry: document.getElementById('newGymCountry'),
       managerBackgroundChoice: document.getElementById('managerBackgroundChoice'),
+      startVersion: document.getElementById('startVersion'),
+      tbVersion: document.getElementById('tbVersion'),
       tbGymName: document.getElementById('tbGymName'),
       tbDay: document.getElementById('tbDay'),
       tbMoney: document.getElementById('tbMoney'),
