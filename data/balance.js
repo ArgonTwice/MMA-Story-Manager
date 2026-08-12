@@ -2636,38 +2636,39 @@ const BALANCE = {
   // ---------------------------------------------------------------------
   GALA_CIRCUIT: {
     /**
-     * V3.9 "Adhesion aux Ligues et Contrats d'Exclusivite (type UFC)":
-     * each organization is now either always-open (requiresContract:
-     * false — a fighter can register for its galas freely, no strings
-     * attached, exactly the "Circuit Local / Independant" starting state)
-     * or a genuine ROSTER a fighter must be explicitly SIGNED to first
-     * (requiresContract: true) — see engine/LeagueEngine.js
-     * #getLeagueEligibility/#signLeagueContract. Eligibility to apply is
-     * gated on the GYM's own reputation (playerState.reputation) AND the
-     * FIGHTER's own getOverallRating() both clearing `eligibility`'s
-     * thresholds; once eligible, the manager explicitly signs (never
-     * automatic) via signLeagueContract, which reads `contract` for the
-     * exact terms (fights reserved, purse-per-fight shown at signing time,
-     * signing bonus paid immediately, release-clause cost to break early).
-     * While signed, engine/LeagueEngine.js#registerForGala only accepts
-     * that fighter onto ITS OWN organization's galas (any other
+     * V4.0 "Suppression des Conditions de Ligues et Offres par
+     * Recrutement": no organization gates entry on Reputation/Overall
+     * anymore (V3.9's `eligibility` thresholds and manual "apply" flow are
+     * both retired). LOCAL_FIGHTING and UNDERGROUND_CIRCUIT stay
+     * unconditionally open (requiresContract: false — the "Circuit Local /
+     * Independant" every fighter starts in). ECL/APEX (requiresContract:
+     * true) instead reach out to the fighter FIRST: whenever
+     * engine/LeagueEngine.js#evaluateLeagueOffers sees this fighter's
+     * career.currentWinStreak or the gym's own Hype clear `offerTriggers`'
+     * thresholds (either one alone is enough — see that function), the org
+     * sends an unsolicited contract offer (models/Fighter.js
+     * #receiveLeagueOffer) the manager can accept (acceptLeagueOffer, reads
+     * `contract` for the exact terms — fights reserved, purse-per-fight,
+     * signing bonus paid immediately, release-clause cost to break early)
+     * or decline (declineLeagueOffer) — never something the manager applies
+     * for. Once signed, engine/LeagueEngine.js#registerForGala still only
+     * accepts that fighter onto ITS OWN organization's galas (any other
      * requiresContract org rejects with LEAGUE_CONTRACT_REQUIRED, any
      * DIFFERENT org the fighter is already bound to rejects with
      * EXCLUSIVITY_CONTRACT_VIOLATION) until FIGHTS_REQUIRED fights are
      * resolved (models/Fighter.js#consumeExclusivityFight auto-clears the
      * contract at 0 remaining) or the release clause is paid
      * (releaseGalaExclusivity/models/Fighter.js#releaseExclusivityContract).
-     * `contract.pursePerFight` is a DISPLAY-ONLY figure shown in the
-     * signing modal/fighter badge, describing what fighters at that
-     * league's level are paid — CombatEngine's own purse math
-     * (_computePurses, driven by BALANCE.LEAGUE_PYRAMID's purse
-     * multiplier) is deliberately left untouched, preserving this file's
-     * long-standing "GALA_CIRCUIT is purely organizational, the 4 orgId
-     * concepts never read each other" convention (see this block's own
-     * V3.7 header note below).
+     * `contract.pursePerFight` is a DISPLAY-ONLY figure shown in the offer
+     * modal/fighter badge, describing what fighters at that league's level
+     * are paid — CombatEngine's own purse math (_computePurses, driven by
+     * BALANCE.LEAGUE_PYRAMID's purse multiplier) is deliberately left
+     * untouched, preserving this file's long-standing "GALA_CIRCUIT is
+     * purely organizational, the 4 orgId concepts never read each other"
+     * convention (see this block's own V3.7 header note below).
      */
     ORGANIZATIONS: {
-      /** "Circuit Local / Independant" — every fighter's starting standing: always open, no contract required. */
+      /** "Circuit Local / Independant" — every fighter's starting standing: always open, no contract, no requirement. */
       LOCAL: { id: 'LOCAL_FIGHTING', label: 'Local Fighting', requiresContract: false },
       /** Same "always open" standing as LOCAL — flavor-only naming distinction, see the V3.7 header note below on Underground Circuit. */
       UNDERGROUND: { id: 'UNDERGROUND_CIRCUIT', label: 'Underground Circuit', requiresContract: false },
@@ -2675,14 +2676,15 @@ const BALANCE = {
         id: 'ECL',
         label: 'Elite Combat League',
         requiresContract: true,
-        eligibility: { minReputation: 40, minOverall: 55 },
+        /** Sends a contract offer once EITHER threshold is cleared — see engine/LeagueEngine.js#evaluateLeagueOffers. */
+        offerTriggers: { winStreak: 2, hype: 30 },
         contract: { fightsRequired: 4, pursePerFight: 8000, signingBonus: 5000, releaseClauseCost: 15000 },
       },
       APEX: {
         id: 'APEX',
         label: 'Apex Championship',
         requiresContract: true,
-        eligibility: { minReputation: 70, minOverall: 75 },
+        offerTriggers: { winStreak: 3, hype: 60 },
         contract: { fightsRequired: 4, pursePerFight: 20000, signingBonus: 15000, releaseClauseCost: 40000 },
       },
     },

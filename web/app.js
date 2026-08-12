@@ -56,8 +56,9 @@ import {
   getAllWeightClassRankings,
   getUpcomingGalas,
   registerForGala,
-  getLeagueEligibility,
-  signLeagueContract,
+  evaluateLeagueOffers,
+  acceptLeagueOffer,
+  declineLeagueOffer,
   releaseGalaExclusivity,
 } from '../engine/LeagueEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
@@ -88,7 +89,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v3.9';
+const APP_VERSION = 'v4.0';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -361,6 +362,8 @@ class WebApp {
     this._galaSetup = null;
     /** Live Text Feed playback state ({ beats, revealedCount, playing, timerId }) for the fight currently in progress, or null — see _beginCombatPlayback()/_scheduleNextBeat(). Runtime-only, torn down on every fight reset. */
     this._combatPlayback = null;
+    /** V4.0 "Offres de Contrat Recues": queue of { fighterId, orgId } freshly-generated league offers not yet shown to the player — popped one at a time on the next Hub render (see _checkForNewLeagueOffers). Runtime-only, never persisted (the offers themselves live on Fighter#contracts.pendingOffers, which IS persisted). */
+    this._pendingLeagueOfferNotifications = [];
     this.dom = {};
   }
 
@@ -670,6 +673,8 @@ class WebApp {
   // ---- HUB panel --------------------------------------------------------------
 
   _renderHub() {
+    this._checkForNewLeagueOffers();
+
     const panel = this.dom.panels.hub;
     panel.innerHTML = '';
     const snapshot = this.gymHub.getSnapshot();
@@ -1539,17 +1544,21 @@ class WebApp {
     this._showModal(content);
   }
 
-  /** V3.9: the fighter-profile league-status badge — "Roster Officiel" while signed to a requiresContract organization (ECL/APEX), or the default "Circuit Local / Independant" standing otherwise (see engine/LeagueEngine.js#getLeagueEligibility/signLeagueContract). */
+  /** V4.0: the fighter-profile league-status badge — "Roster Officiel" while signed to a requiresContract organization (ECL/APEX), a pending-offer count while waiting on a decision, or the default "Circuit Local / Independant" standing (see engine/LeagueEngine.js#evaluateLeagueOffers/acceptLeagueOffer/declineLeagueOffer). */
   _buildLeagueStatusBadge(fighter) {
     const exclusivity = fighter.contracts.exclusivity;
-    if (!exclusivity) {
-      return el('p', { class: 'fighter-meta', text: '\u{1F94A} Circuit Local / Independant — libre de tout contrat.' });
+    if (exclusivity) {
+      const org = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === exclusivity.orgId);
+      return el('p', {
+        class: 'fighter-meta',
+        text: `\u{270D}\u{FE0F} Roster Officiel : ${org?.label ?? exclusivity.orgId} (${exclusivity.fightsRemaining} combat${exclusivity.fightsRemaining > 1 ? 's' : ''} restant${exclusivity.fightsRemaining > 1 ? 's' : ''})`,
+      });
     }
-    const org = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === exclusivity.orgId);
-    return el('p', {
-      class: 'fighter-meta',
-      text: `\u{270D}\u{FE0F} Roster Officiel : ${org?.label ?? exclusivity.orgId} (${exclusivity.fightsRemaining} combat${exclusivity.fightsRemaining > 1 ? 's' : ''} restant${exclusivity.fightsRemaining > 1 ? 's' : ''})`,
-    });
+    const pendingCount = fighter.getPendingOffers().length;
+    if (pendingCount > 0) {
+      return el('p', { class: 'fighter-meta', text: `\u{1F4E9} ${pendingCount} offre${pendingCount > 1 ? 's' : ''} de contrat en attente.` });
+    }
+    return el('p', { class: 'fighter-meta', text: '\u{1F94A} Circuit Local / Independant — libre de tout contrat.' });
   }
 
   /** Tap-to-explain trait badge: native `title` hover tooltips don't work on mobile touch, so a tap opens the description here instead, with a button back to the profile it came from. */
@@ -1987,9 +1996,11 @@ class WebApp {
 
       panel.appendChild(el('div', { class: 'card-title', text: '\u{1F3DB}\u{FE0F} Organisations' }));
       for (const org of Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS)) {
-        if (!org.requiresContract) continue; // LOCAL_FIGHTING/UNDERGROUND_CIRCUIT stay open to everyone — nothing to sign.
+        if (!org.requiresContract) continue; // LOCAL_FIGHTING/UNDERGROUND_CIRCUIT stay open to everyone — no contract, nothing to show here.
 
-        const eligibility = getLeagueEligibility(playerState, selectedFighter, org.id);
+        const alreadySigned = selectedFighter.contracts.exclusivity?.orgId === org.id;
+        const boundElsewhere = selectedFighter.contracts.exclusivity && !alreadySigned;
+        const pendingOffer = selectedFighter.getPendingOffer(org.id);
         const rows = [
           el('div', { class: 'card-title', text: org.label }),
           el('p', {
@@ -1997,23 +2008,33 @@ class WebApp {
             text: `${org.contract.fightsRequired} combats reserves — Bourse ~${org.contract.pursePerFight.toLocaleString('fr-FR')}$/combat — Prime signature ${org.contract.signingBonus.toLocaleString('fr-FR')}$ — Clause liberatoire ${org.contract.releaseClauseCost.toLocaleString('fr-FR')}$`,
           }),
         ];
-        if (eligibility.alreadySigned) {
+        if (alreadySigned) {
           rows.push(el('p', { text: `\u{2705} ${selectedFighter.identity.name} fait deja partie du roster ${org.label}.` }));
-        } else if (eligibility.eligible) {
-          rows.push(
-            el('button', {
-              class: 'btn btn-gold btn-block',
-              text: `\u{270D}\u{FE0F} Proposer au Roster ${org.label}`,
-              onclick: () => this._showLeagueContractModal(org.id),
-            })
+        } else if (boundElsewhere) {
+          const boundOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find(
+            (entry) => entry.id === selectedFighter.contracts.exclusivity.orgId
           );
-        } else if (eligibility.reason === 'UNDER_CONTRACT_ELSEWHERE') {
-          const boundOrg = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === eligibility.boundOrgId);
-          rows.push(el('p', { text: `Impossible : le combattant est sous contrat exclusif avec ${boundOrg?.label ?? eligibility.boundOrgId}.` }));
+          rows.push(el('p', { text: `Impossible : le combattant est sous contrat exclusif avec ${boundOrg?.label ?? selectedFighter.contracts.exclusivity.orgId}.` }));
+        } else if (pendingOffer) {
+          rows.push(
+            el('p', { text: `\u{1F4E9} Offre de contrat recue de ${org.label} !` }),
+            el('div', { class: 'slot-row' }, [
+              el('button', {
+                class: 'btn btn-gold',
+                text: '\u{2705} Accepter et Signer',
+                onclick: () => this._acceptLeagueOffer(selectedFighter.identity.id, org.id),
+              }),
+              el('button', {
+                class: 'btn btn-outline',
+                text: '\u{274C} Refuser pour le moment',
+                onclick: () => this._declineLeagueOffer(selectedFighter.identity.id, org.id),
+              }),
+            ])
+          );
         } else {
           rows.push(
             el('p', {
-              text: `Conditions non remplies — Reputation gym ${playerState.reputation}/${org.eligibility.minReputation}, Overall ${selectedFighter.getOverallRating()}/${org.eligibility.minOverall}.`,
+              text: `En attente d'une offre de ${org.label}\u{2026} enchainez les victoires ou faites grimper la Hype de la salle pour attirer leur attention.`,
             })
           );
         }
@@ -2150,19 +2171,37 @@ class WebApp {
     }
   }
 
-  /** V3.9: the League Contract signing modal — presents a requiresContract organization's terms (fights reserved, fixed purse per fight, signing bonus, release clause) before the manager commits, per engine/LeagueEngine.js#getLeagueEligibility/signLeagueContract. */
-  _showLeagueContractModal(orgId) {
-    const setup = this._galaSetup;
-    const { playerState } = this.gameState;
-    const fighter = setup?.fighterId ? playerState.getFighter(setup.fighterId) : null;
-    if (!fighter) return;
+  /** V4.0: pops one queued league-offer notification (if any, and no other modal is already showing) and displays it — see _finishCombatPlayback, the sole place notifications are queued, and _renderHub, the sole caller. */
+  _checkForNewLeagueOffers() {
+    if (this._pendingLeagueOfferNotifications.length === 0) return;
+    if (!this.dom.modalOverlay.classList.contains('hidden')) return; // a modal is already up — retried on the next Hub render.
 
+    const { fighterId, orgId } = this._pendingLeagueOfferNotifications.shift();
+    const fighter = this.gameState.playerState.getFighter(fighterId);
+    if (!fighter?.hasPendingOffer(orgId)) return; // already resolved or the fighter is gone — nothing left to notify about.
+
+    this._showLeagueOfferModal(fighterId, orgId);
+  }
+
+  /**
+   * V4.0 "Offres de Contrat Recues": the proactive Hub notification for a
+   * freshly-received league offer — "Offre de Contrat Recue de [Ligue]
+   * pour [Combattant]" with the offer's terms (fights reserved, fixed
+   * purse per fight, signing bonus, release clause) and an Accepter/
+   * Refuser choice, per engine/LeagueEngine.js#acceptLeagueOffer/
+   * declineLeagueOffer. See _checkForNewLeagueOffers, the sole caller —
+   * queued once per freshly-generated offer, popped one at a time so
+   * several simultaneous offers don't stack silently on top of each other.
+   */
+  _showLeagueOfferModal(fighterId, orgId) {
+    const { playerState } = this.gameState;
+    const fighter = playerState.getFighter(fighterId);
     const org = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === orgId);
-    if (!org?.requiresContract) return;
+    if (!fighter || !org) return;
 
     const content = el('div', {}, [
-      el('h2', { class: 'section-title', text: `Contrat de Roster — ${org.label}` }),
-      el('p', { text: `${fighter.identity.name} rejoindrait officiellement le roster de ${org.label}.` }),
+      el('h2', { class: 'section-title', text: `\u{1F4E9} Offre de Contrat Recue de ${org.label}` }),
+      el('p', { text: `${org.label} propose a ${fighter.identity.name} de rejoindre officiellement son roster.` }),
       el('div', { class: 'card' }, [
         el('div', { class: 'list-row' }, [
           el('span', { class: 'list-row-label', text: 'Combats reserves' }),
@@ -2181,42 +2220,63 @@ class WebApp {
           el('span', { class: 'list-row-value', text: `${org.contract.releaseClauseCost.toLocaleString('fr-FR')}$` }),
         ]),
       ]),
-      el('button', {
-        class: 'btn btn-gold btn-block',
-        text: `Signer le contrat et rejoindre le Roster de ${org.label}`,
-        onclick: () => this._signLeagueContract(fighter.identity.id, org.id),
-      }),
-      el('button', { class: 'btn btn-outline btn-block', text: 'Annuler', onclick: () => this._hideModal() }),
+      el('div', { class: 'slot-row' }, [
+        el('button', {
+          class: 'btn btn-gold',
+          text: '\u{2705} Accepter et Signer',
+          onclick: () => this._acceptLeagueOffer(fighterId, orgId, { fromModal: true }),
+        }),
+        el('button', {
+          class: 'btn btn-outline',
+          text: '\u{274C} Refuser pour le moment',
+          onclick: () => this._declineLeagueOffer(fighterId, orgId, { fromModal: true }),
+        }),
+      ]),
     ]);
     this._showModal(content);
   }
 
-  _signLeagueContract(fighterId, orgId) {
+  _acceptLeagueOffer(fighterId, orgId, { fromModal = false } = {}) {
     const { playerState } = this.gameState;
-    const signMessages = {
+    const messages = {
       FIGHTER_NOT_FOUND: 'combattant introuvable.',
-      ORG_NOT_FOUND: 'organisation introuvable.',
-      NO_CONTRACT_REQUIRED: 'cette organisation ne necessite pas de contrat.',
-      ALREADY_SIGNED: 'ce combattant fait deja partie de ce roster.',
+      NO_PENDING_OFFER: 'aucune offre en attente pour cette organisation.',
       UNDER_CONTRACT_ELSEWHERE: 'ce combattant est deja sous contrat avec une autre ligue.',
-      REQUIREMENTS_NOT_MET: 'les conditions de Reputation/Overall ne sont pas remplies.',
     };
 
     try {
-      const result = signLeagueContract(playerState, fighterId, orgId);
+      const result = acceptLeagueOffer(playerState, fighterId, orgId);
       if (!result.success) {
-        this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${signMessages[result.reason] ?? 'raison inconnue.'}`);
+        this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${messages[result.reason] ?? 'raison inconnue.'}`);
         return;
       }
       AudioEngine.playClick();
-      this._hideModal();
+      if (fromModal) this._hideModal();
       this._showToast(`\u{270D}\u{FE0F} ${result.org.label} : contrat signe (+${result.signingBonus.toLocaleString('fr-FR')}$, ${result.fightsRequired} combats).`);
       this._renderFight();
       this._renderTopbar();
       this._autosave();
     } catch (error) {
-      console.error('[web/app.js] _signLeagueContract failed:', error);
+      console.error('[web/app.js] _acceptLeagueOffer failed:', error);
       this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${error.message}`);
+    }
+  }
+
+  _declineLeagueOffer(fighterId, orgId, { fromModal = false } = {}) {
+    const { playerState } = this.gameState;
+    try {
+      const result = declineLeagueOffer(playerState, fighterId, orgId);
+      if (!result.success) {
+        this._showToast('\u{26A0}\u{FE0F} Aucune offre en attente pour cette organisation.');
+        return;
+      }
+      if (fromModal) this._hideModal();
+      this._showToast('\u{1F4EC} Offre refusee pour le moment.');
+      this._renderFight();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _declineLeagueOffer failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Action impossible : ${error.message}`);
     }
   }
 
@@ -3122,6 +3182,17 @@ class WebApp {
       fighterA.consumeExclusivityFight();
       if (!fighterA.isUnderExclusivityContract()) {
         this._showToast(`\u{1F4DD} Le contrat d'exclusivite de ${fighterA.identity.name} arrive a echeance.`);
+      }
+    }
+
+    // V4.0 "Offres de Contrat Recues": a win streak or enough gym Hype can
+    // now have ECL/APEX proactively reach out right after this fight —
+    // queued here, popped as a Hub notification modal (see
+    // _checkForNewLeagueOffers) rather than interrupting the result screen.
+    if (fighterA) {
+      const newOffers = evaluateLeagueOffers(this.gameState.playerState, this.gameState.worldState, fighterA);
+      for (const org of newOffers) {
+        this._pendingLeagueOfferNotifications.push({ fighterId: fighterA.identity.id, orgId: org.id });
       }
     }
 

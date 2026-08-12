@@ -17,7 +17,7 @@
  * the OFFLINE fallback itself from serving something too old to be useful.
  */
 
-const CACHE_NAME = 'mma-gym-shell-v3';
+const CACHE_NAME = 'mma-gym-shell-v4';
 const APP_SHELL = ['./', './index.html', './style.css', './app.js', './manifest.json'];
 
 self.addEventListener('install', (event) => {

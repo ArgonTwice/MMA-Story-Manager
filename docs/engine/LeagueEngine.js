@@ -39,17 +39,20 @@
  * above; resolveRegionalOrg/getWeightClassRanking's own "Classements
  * Officiels" board stays tied to REGIONAL_ORGS/country, untouched by this.
  *
- * V3.9 "Adhesion aux Ligues et Contrats d'Exclusivite (type UFC)" reworks
+ * V3.9 "Adhesion aux Ligues et Contrats d'Exclusivite (type UFC)" reworked
  * how a fighter joins one of GALA_CIRCUIT's requiresContract organizations
  * (ECL/APEX): no longer an automatic side-effect of the GYM's own
- * LEAGUE_PYRAMID standing (that V3.8 behavior is retired) — a fighter must
- * now individually clear BALANCE.GALA_CIRCUIT.ORGANIZATIONS[*].eligibility
- * (gym Reputation AND the fighter's own getOverallRating()) and the
- * manager must explicitly sign via signLeagueContract (see
- * getLeagueEligibility for the read-only eligibility check a UI calls
- * first). registerForGala now REJECTS a requiresContract org's galas for
- * any fighter not already signed to it (LEAGUE_CONTRACT_REQUIRED), instead
- * of silently signing them on the spot.
+ * LEAGUE_PYRAMID standing (that V3.8 behavior was retired) — registerForGala
+ * REJECTS a requiresContract org's galas for any fighter not already signed
+ * to it (LEAGUE_CONTRACT_REQUIRED). V3.9 itself gated signing behind a
+ * manual "apply" flow (getLeagueEligibility/signLeagueContract) — V4.0
+ * retires THAT in turn: there are no more Reputation/Overall requirements
+ * to apply against. Instead, evaluateLeagueOffers watches this fighter's
+ * own win streak and the gym's Hype and has the organization proactively
+ * SEND a contract offer once BALANCE.GALA_CIRCUIT.ORGANIZATIONS[*]
+ * .offerTriggers is cleared; the manager only ever accepts (acceptLeagueOffer)
+ * or declines (declineLeagueOffer) an offer already sitting in
+ * models/Fighter.js#contracts.pendingOffers — never applies proactively.
  * ---------------------------------------------------------------------------
  */
 
@@ -464,8 +467,8 @@ export function registerForGala(playerState, worldState, { galaId, fighterId, al
 
   // V3.9: a fighter already signed to a DIFFERENT organization cannot
   // register for this gala at all — see models/Fighter.js
-  // #signExclusivityContract, only ever set now via signLeagueContract
-  // below (never automatically).
+  // #signExclusivityContract, only ever set now via acceptLeagueOffer
+  // (V4.0: an unsolicited offer accepted, never a manual signature).
   if (fighter.contracts.exclusivity && fighter.contracts.exclusivity.orgId !== gala.orgId) {
     return { success: false, reason: 'EXCLUSIVITY_CONTRACT_VIOLATION', boundOrgId: fighter.contracts.exclusivity.orgId };
   }
@@ -510,63 +513,89 @@ function findOrganization(orgId) {
 }
 
 /**
- * V3.9: read-only eligibility check a UI calls before offering to sign a
- * fighter to a requiresContract organization (ECL/APEX) — never mutates
- * anything. Gates on BOTH the gym's own Reputation and the fighter's own
- * getOverallRating() clearing `org.eligibility`'s thresholds.
+ * V4.0 "Offres de Contrat Recues": checks every requiresContract
+ * organization (ECL/APEX) this fighter isn't already signed to or holding
+ * a pending offer from, and has it SEND one (models/Fighter.js
+ * #receiveLeagueOffer) the moment either of `offerTriggers`' thresholds is
+ * cleared — this fighter's own career.currentWinStreak, OR the gym's own
+ * Hype (playerState.hype). No Reputation/Overall requirement exists
+ * anymore (see this file's V4.0 header note) — a fighter already signed
+ * elsewhere never receives a new offer (mirrors registerForGala's own
+ * "one organization at a time" rule). Called once per resolved fight (see
+ * web/app.js#_finishCombatPlayback) — a no-op, harmless to call from
+ * anywhere else too (idempotent: never duplicates an already-pending offer).
  *
  * @param {Object} playerState
+ * @param {Object} worldState
  * @param {Object} fighter
- * @param {string} orgId
- * @returns {{ eligible: boolean, reason?: string, org?: Object, requiresContract?: boolean, alreadySigned?: boolean, boundOrgId?: string, requirements?: Object, current?: { reputation: number, overall: number } }}
+ * @returns {Object[]} Every organization entry a NEW offer was just sent for this call (empty most of the time).
  */
-export function getLeagueEligibility(playerState, fighter, orgId) {
-  const org = findOrganization(orgId);
-  if (!org) return { eligible: false, reason: 'ORG_NOT_FOUND' };
-  if (!org.requiresContract) return { eligible: true, org, requiresContract: false };
+export function evaluateLeagueOffers(playerState, worldState, fighter) {
+  const newOffers = [];
+  if (fighter.contracts.exclusivity) return newOffers;
 
-  if (fighter.contracts.exclusivity?.orgId === orgId) return { eligible: true, org, requiresContract: true, alreadySigned: true };
-  if (fighter.contracts.exclusivity) {
-    return { eligible: false, reason: 'UNDER_CONTRACT_ELSEWHERE', org, boundOrgId: fighter.contracts.exclusivity.orgId };
+  for (const org of Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS)) {
+    if (!org.requiresContract || fighter.hasPendingOffer(org.id)) continue;
+
+    const { winStreak, hype } = org.offerTriggers;
+    const streakCleared = winStreak != null && fighter.career.currentWinStreak >= winStreak;
+    const hypeCleared = hype != null && playerState.hype >= hype;
+    if (!streakCleared && !hypeCleared) continue;
+
+    fighter.receiveLeagueOffer(org.id, org.contract, worldState.currentDay);
+    newOffers.push(org);
   }
 
-  const current = { reputation: playerState.reputation, overall: fighter.getOverallRating() };
-  const meetsRequirements = current.reputation >= org.eligibility.minReputation && current.overall >= org.eligibility.minOverall;
-  if (!meetsRequirements) {
-    return { eligible: false, reason: 'REQUIREMENTS_NOT_MET', org, requiresContract: true, requirements: org.eligibility, current };
-  }
-
-  return { eligible: true, org, requiresContract: true, current };
+  return newOffers;
 }
 
 /**
- * Explicitly signs a fighter to a requiresContract organization's roster
- * (see getLeagueEligibility) — the manager-initiated replacement for
- * V3.8's automatic on-registration signing. Pays the org's signing bonus
- * immediately; the fighter is then restricted to that org's galas alone
- * (see registerForGala's EXCLUSIVITY_CONTRACT_VIOLATION/
- * LEAGUE_CONTRACT_REQUIRED rejections) until org.contract.fightsRequired
- * fights are resolved or the release clause is paid (releaseGalaExclusivity).
+ * Accepts a pending league-roster offer (see evaluateLeagueOffers) —
+ * pays the org's signing bonus immediately and binds the fighter to that
+ * organization's galas alone (see registerForGala's
+ * EXCLUSIVITY_CONTRACT_VIOLATION/LEAGUE_CONTRACT_REQUIRED rejections)
+ * until org.contract.fightsRequired fights are resolved or the release
+ * clause is paid (releaseGalaExclusivity).
  *
  * @param {Object} playerState
  * @param {string} fighterId
  * @param {string} orgId
- * @returns {{ success: boolean, reason?: string, org?: Object, fightsRequired?: number, signingBonus?: number }}
+ * @returns {{ success: boolean, reason?: string, org?: Object, boundOrgId?: string, fightsRequired?: number, signingBonus?: number }}
  */
-export function signLeagueContract(playerState, fighterId, orgId) {
+export function acceptLeagueOffer(playerState, fighterId, orgId) {
   const fighter = playerState.getFighter(fighterId);
   if (!fighter) return { success: false, reason: 'FIGHTER_NOT_FOUND' };
 
-  const eligibility = getLeagueEligibility(playerState, fighter, orgId);
-  if (!eligibility.eligible) return { success: false, reason: eligibility.reason, org: eligibility.org, boundOrgId: eligibility.boundOrgId };
-  if (!eligibility.requiresContract) return { success: false, reason: 'NO_CONTRACT_REQUIRED', org: eligibility.org };
-  if (eligibility.alreadySigned) return { success: false, reason: 'ALREADY_SIGNED', org: eligibility.org };
+  const offer = fighter.getPendingOffer(orgId);
+  if (!offer) return { success: false, reason: 'NO_PENDING_OFFER' };
+  if (fighter.contracts.exclusivity) {
+    return { success: false, reason: 'UNDER_CONTRACT_ELSEWHERE', boundOrgId: fighter.contracts.exclusivity.orgId };
+  }
 
-  const { org } = eligibility;
-  fighter.signExclusivityContract(org.id, org.contract.fightsRequired);
-  playerState.changeMoney(org.contract.signingBonus, 'LEAGUE_SIGNING_BONUS');
+  const org = findOrganization(orgId);
+  fighter.signExclusivityContract(orgId, offer.terms.fightsRequired);
+  playerState.changeMoney(offer.terms.signingBonus, 'LEAGUE_SIGNING_BONUS');
+  fighter.clearPendingOffer(orgId);
 
-  return { success: true, org, fightsRequired: org.contract.fightsRequired, signingBonus: org.contract.signingBonus };
+  return { success: true, org, fightsRequired: offer.terms.fightsRequired, signingBonus: offer.terms.signingBonus };
+}
+
+/**
+ * Declines a pending league-roster offer (see evaluateLeagueOffers) —
+ * simply removes it; the same or another organization may send a new one
+ * later if its own offerTriggers clear again.
+ *
+ * @param {Object} playerState
+ * @param {string} fighterId
+ * @param {string} orgId
+ * @returns {{ success: boolean, reason?: string }}
+ */
+export function declineLeagueOffer(playerState, fighterId, orgId) {
+  const fighter = playerState.getFighter(fighterId);
+  if (!fighter) return { success: false, reason: 'FIGHTER_NOT_FOUND' };
+
+  const removed = fighter.clearPendingOffer(orgId);
+  return removed ? { success: true } : { success: false, reason: 'NO_PENDING_OFFER' };
 }
 
 /**
@@ -608,7 +637,8 @@ export default {
   getGalaById,
   drawGalaOpponent,
   registerForGala,
-  getLeagueEligibility,
-  signLeagueContract,
+  evaluateLeagueOffers,
+  acceptLeagueOffer,
+  declineLeagueOffer,
   releaseGalaExclusivity,
 };

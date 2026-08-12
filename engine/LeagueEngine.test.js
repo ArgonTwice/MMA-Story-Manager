@@ -25,19 +25,15 @@ import {
   getGalaById,
   drawGalaOpponent,
   registerForGala,
-  getLeagueEligibility,
-  signLeagueContract,
+  evaluateLeagueOffers,
+  acceptLeagueOffer,
+  declineLeagueOffer,
   releaseGalaExclusivity,
 } from './LeagueEngine.js';
 
-/** A fighter whose getOverallRating() clears every GALA_CIRCUIT org's eligibility.minOverall bar (highest is APEX's 75) — used by every V3.9 league-contract test below. */
-function makeEliteFighter(overrides = {}) {
-  const skills = { boxe: 85, jambes: 85, sol: 85, soumission: 85, cardio: 85, intelligence: 85 };
-  return new Fighter({
-    identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' },
-    attributes: { skills },
-    ...overrides,
-  });
+/** Records N wins in a row on this fighter (career.currentWinStreak), the V4.0 league-offer trigger every test below drives directly rather than via a real simulated fight. */
+function winNTimes(fighter, n) {
+  for (let i = 0; i < n; i += 1) fighter.recordFightResult({ outcome: 'win' });
 }
 
 test('a fresh gym starts in the bottom tier (LOCAL_UNDERGROUND) with a 1x purse/passive-income multiplier', () => {
@@ -352,79 +348,116 @@ test('a successful registerForGala books a Fight Launch Contract with opponentSn
   assert.equal(playerState.scheduledFight.opponentSnapshot.identity.weightClass, 'Poids Welter');
 });
 
-// ---- V3.9: League roster contracts (getLeagueEligibility/signLeagueContract) ------
+// ---- V4.0: proactive league offers (evaluateLeagueOffers/acceptLeagueOffer/declineLeagueOffer) ------
 
-test('getLeagueEligibility: a non-requiresContract org (Local Fighting) is always eligible with no requirements', () => {
+test('evaluateLeagueOffers sends no offer below every trigger threshold, regardless of Reputation/Overall (V4.0 removed those requirements)', () => {
   const playerState = new PlayerState({ money: 25000, reputation: 0 });
-  const fighter = makeEliteFighter();
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
+  const worldState = new WorldState();
 
-  const eligibility = getLeagueEligibility(playerState, fighter, 'LOCAL_FIGHTING');
-  assert.equal(eligibility.eligible, true);
-  assert.equal(eligibility.requiresContract, false);
+  const newOffers = evaluateLeagueOffers(playerState, worldState, fighter);
+  assert.deepEqual(newOffers, []);
+  assert.equal(fighter.getPendingOffers().length, 0);
 });
 
-test('getLeagueEligibility: REQUIREMENTS_NOT_MET when the gym Reputation or fighter Overall falls short of the org bar', () => {
+test('evaluateLeagueOffers sends an ECL offer once the win-streak trigger is cleared, carrying the org\'s own contract terms', () => {
   const playerState = new PlayerState({ money: 25000, reputation: 0 });
-  const weakFighter = new Fighter({ identity: { id: 'f1', name: 'Weak', gender: 'M', weightClass: 'Poids Welter' } });
-  playerState.addFighter(weakFighter);
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  playerState.addFighter(fighter);
+  const worldState = new WorldState();
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
 
-  const eligibility = getLeagueEligibility(playerState, weakFighter, 'ECL');
-  assert.equal(eligibility.eligible, false);
-  assert.equal(eligibility.reason, 'REQUIREMENTS_NOT_MET');
-  assert.deepEqual(eligibility.requirements, BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL.eligibility);
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  const newOffers = evaluateLeagueOffers(playerState, worldState, fighter);
+
+  assert.equal(newOffers.length, 1);
+  assert.equal(newOffers[0].id, 'ECL');
+  assert.ok(fighter.hasPendingOffer('ECL'));
+  assert.deepEqual(fighter.getPendingOffer('ECL').terms, eclCfg.contract);
 });
 
-test('getLeagueEligibility: eligible once both Reputation and Overall clear the bar, ALREADY_SIGNED once signed, UNDER_CONTRACT_ELSEWHERE while bound to a different org', () => {
-  const playerState = new PlayerState({ money: 25000, reputation: 80 });
-  const fighter = makeEliteFighter();
+test('evaluateLeagueOffers sends an offer once the Hype trigger is cleared, even with a zero win streak', () => {
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
+  const playerState = new PlayerState({ money: 25000, reputation: 0, hype: eclCfg.offerTriggers.hype });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
+  const worldState = new WorldState();
 
-  const eligible = getLeagueEligibility(playerState, fighter, 'ECL');
-  assert.equal(eligible.eligible, true);
-  assert.equal(eligible.requiresContract, true);
-  assert.equal(eligible.alreadySigned, undefined);
-
-  const signResult = signLeagueContract(playerState, 'f1', 'ECL');
-  assert.equal(signResult.success, true);
-
-  const alreadySigned = getLeagueEligibility(playerState, fighter, 'ECL');
-  assert.equal(alreadySigned.eligible, true);
-  assert.equal(alreadySigned.alreadySigned, true);
-
-  const boundElsewhere = getLeagueEligibility(playerState, fighter, 'APEX');
-  assert.equal(boundElsewhere.eligible, false);
-  assert.equal(boundElsewhere.reason, 'UNDER_CONTRACT_ELSEWHERE');
-  assert.equal(boundElsewhere.boundOrgId, 'ECL');
+  const newOffers = evaluateLeagueOffers(playerState, worldState, fighter);
+  assert.equal(newOffers.length, 1);
+  assert.equal(newOffers[0].id, 'ECL');
 });
 
-test('signLeagueContract pays the signing bonus and sets fightsRemaining from the org contract, and fails cleanly for every rejection path', () => {
-  const playerState = new PlayerState({ money: 25000, reputation: 80 });
-  const fighter = makeEliteFighter();
+test('evaluateLeagueOffers never duplicates an already-pending offer, and never sends a new offer to a fighter already signed elsewhere', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
-  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL.contract;
+  const worldState = new WorldState();
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
 
-  assert.equal(signLeagueContract(playerState, 'missing', 'ECL').reason, 'FIGHTER_NOT_FOUND');
-  assert.equal(signLeagueContract(playerState, 'f1', 'LOCAL_FIGHTING').reason, 'NO_CONTRACT_REQUIRED');
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  evaluateLeagueOffers(playerState, worldState, fighter);
+  assert.equal(fighter.getPendingOffers().length, 1);
+
+  evaluateLeagueOffers(playerState, worldState, fighter); // called again — same streak, same org.
+  assert.equal(fighter.getPendingOffers().length, 1, 'a second call must not duplicate the pending ECL offer');
+
+  acceptLeagueOffer(playerState, 'f1', 'ECL');
+  const afterSigning = evaluateLeagueOffers(playerState, worldState, fighter);
+  assert.deepEqual(afterSigning, [], 'a fighter already signed to ECL must never receive a new offer from any org');
+});
+
+test('acceptLeagueOffer pays the signing bonus, sets fightsRemaining from the offer\'s own terms, and clears the offer, and fails cleanly for every rejection path', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  playerState.addFighter(fighter);
+  const worldState = new WorldState();
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
+
+  assert.equal(acceptLeagueOffer(playerState, 'missing', 'ECL').reason, 'FIGHTER_NOT_FOUND');
+  assert.equal(acceptLeagueOffer(playerState, 'f1', 'ECL').reason, 'NO_PENDING_OFFER');
+
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  evaluateLeagueOffers(playerState, worldState, fighter);
 
   const moneyBefore = playerState.money;
-  const result = signLeagueContract(playerState, 'f1', 'ECL');
+  const result = acceptLeagueOffer(playerState, 'f1', 'ECL');
   assert.equal(result.success, true);
-  assert.equal(result.fightsRequired, eclCfg.fightsRequired);
-  assert.equal(result.signingBonus, eclCfg.signingBonus);
-  assert.equal(playerState.money, moneyBefore + eclCfg.signingBonus);
+  assert.equal(result.fightsRequired, eclCfg.contract.fightsRequired);
+  assert.equal(result.signingBonus, eclCfg.contract.signingBonus);
+  assert.equal(playerState.money, moneyBefore + eclCfg.contract.signingBonus);
   assert.equal(fighter.contracts.exclusivity.orgId, 'ECL');
-  assert.equal(fighter.contracts.exclusivity.fightsRemaining, eclCfg.fightsRequired);
-
-  assert.equal(signLeagueContract(playerState, 'f1', 'ECL').reason, 'ALREADY_SIGNED');
-  assert.equal(signLeagueContract(playerState, 'f1', 'APEX').reason, 'UNDER_CONTRACT_ELSEWHERE');
+  assert.equal(fighter.contracts.exclusivity.fightsRemaining, eclCfg.contract.fightsRequired);
+  assert.equal(fighter.hasPendingOffer('ECL'), false);
 });
 
-test('registerForGala rejects a requiresContract org gala (LEAGUE_CONTRACT_REQUIRED) until the fighter signs, then succeeds', () => {
-  const worldState = new WorldState();
-  const playerState = new PlayerState({ money: 25000, reputation: 80 });
-  const fighter = makeEliteFighter();
+test('declineLeagueOffer removes the pending offer without touching money or the exclusivity contract, and fails cleanly when none exists', () => {
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
+  const worldState = new WorldState();
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
+
+  assert.equal(declineLeagueOffer(playerState, 'f1', 'ECL').reason, 'NO_PENDING_OFFER');
+
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  evaluateLeagueOffers(playerState, worldState, fighter);
+  const moneyBefore = playerState.money;
+
+  const result = declineLeagueOffer(playerState, 'f1', 'ECL');
+  assert.equal(result.success, true);
+  assert.equal(fighter.hasPendingOffer('ECL'), false);
+  assert.equal(fighter.isUnderExclusivityContract(), false);
+  assert.equal(playerState.money, moneyBefore);
+});
+
+test('registerForGala rejects a requiresContract org gala (LEAGUE_CONTRACT_REQUIRED) until the fighter accepts an offer, then succeeds', () => {
+  const worldState = new WorldState();
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  playerState.addFighter(fighter);
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
 
   const galas = getUpcomingGalas(worldState);
   const eclGala = galas.find((g) => g.orgId === 'ECL');
@@ -434,8 +467,9 @@ test('registerForGala rejects a requiresContract org gala (LEAGUE_CONTRACT_REQUI
   assert.equal(beforeSigning.reason, 'LEAGUE_CONTRACT_REQUIRED');
   assert.equal(beforeSigning.orgId, 'ECL');
 
-  const signResult = signLeagueContract(playerState, 'f1', 'ECL');
-  assert.equal(signResult.success, true);
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  evaluateLeagueOffers(playerState, worldState, fighter);
+  assert.equal(acceptLeagueOffer(playerState, 'f1', 'ECL').success, true);
 
   const afterSigning = registerForGala(playerState, worldState, { galaId: eclGala.id, fighterId: 'f1', rng: () => 0.99 });
   assert.equal(afterSigning.success, true);
@@ -455,10 +489,13 @@ test('registerForGala never requires a contract for LOCAL_FIGHTING/UNDERGROUND_C
 
 test('registerForGala rejects registration to a gala from another organization while under a signed roster contract', () => {
   const worldState = new WorldState();
-  const playerState = new PlayerState({ money: 25000, reputation: 80 });
-  const fighter = makeEliteFighter();
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
-  signLeagueContract(playerState, 'f1', 'ECL');
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  evaluateLeagueOffers(playerState, worldState, fighter);
+  acceptLeagueOffer(playerState, 'f1', 'ECL');
 
   const galas = getUpcomingGalas(worldState);
   const apexGala = galas.find((g) => g.orgId === 'APEX');
@@ -470,25 +507,28 @@ test('registerForGala rejects registration to a gala from another organization w
 });
 
 test('releaseGalaExclusivity fails cleanly for a missing fighter, no active contract, or insufficient funds, then succeeds and charges the signed org\'s own release clause', () => {
-  const playerState = new PlayerState({ money: 25000, reputation: 80 });
-  const fighter = makeEliteFighter();
+  const worldState = new WorldState();
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
+  const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
   playerState.addFighter(fighter);
-  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL.contract;
+  const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
 
   assert.equal(releaseGalaExclusivity(playerState, 'missing').reason, 'FIGHTER_NOT_FOUND');
   assert.equal(releaseGalaExclusivity(playerState, 'f1').reason, 'NO_ACTIVE_CONTRACT');
 
-  signLeagueContract(playerState, 'f1', 'ECL');
+  winNTimes(fighter, eclCfg.offerTriggers.winStreak);
+  evaluateLeagueOffers(playerState, worldState, fighter);
+  acceptLeagueOffer(playerState, 'f1', 'ECL');
   assert.ok(fighter.isUnderExclusivityContract());
 
-  playerState.money = eclCfg.releaseClauseCost - 1;
+  playerState.money = eclCfg.contract.releaseClauseCost - 1;
   assert.equal(releaseGalaExclusivity(playerState, 'f1').reason, 'INSUFFICIENT_FUNDS');
 
-  playerState.money = eclCfg.releaseClauseCost + 1000;
+  playerState.money = eclCfg.contract.releaseClauseCost + 1000;
   const moneyBefore = playerState.money;
   const result = releaseGalaExclusivity(playerState, 'f1');
   assert.equal(result.success, true);
-  assert.equal(result.cost, eclCfg.releaseClauseCost);
-  assert.equal(playerState.money, moneyBefore - eclCfg.releaseClauseCost);
+  assert.equal(result.cost, eclCfg.contract.releaseClauseCost);
+  assert.equal(playerState.money, moneyBefore - eclCfg.contract.releaseClauseCost);
   assert.equal(fighter.isUnderExclusivityContract(), false);
 });

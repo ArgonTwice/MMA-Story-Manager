@@ -85,6 +85,41 @@ test('contracts.exclusivity round-trips through toJSON/fromJSON', () => {
   assert.deepEqual(rebuilt.contracts.exclusivity, { orgId: 'APEX', fightsRemaining: 3 });
 });
 
+test('a new fighter has no pending league offers; receiveLeagueOffer/hasPendingOffer/getPendingOffer/getPendingOffers/clearPendingOffer manage them correctly', () => {
+  const fighter = makeFighter();
+  const terms = { fightsRequired: 4, pursePerFight: 8000, signingBonus: 5000, releaseClauseCost: 15000 };
+
+  assert.equal(fighter.hasPendingOffer('ECL'), false);
+  assert.equal(fighter.getPendingOffer('ECL'), undefined);
+  assert.deepEqual(fighter.getPendingOffers(), []);
+
+  fighter.receiveLeagueOffer('ECL', terms, 42);
+  assert.equal(fighter.hasPendingOffer('ECL'), true);
+  assert.deepEqual(fighter.getPendingOffer('ECL'), { orgId: 'ECL', offeredOnDay: 42, terms });
+  assert.equal(fighter.getPendingOffers().length, 1);
+
+  fighter.receiveLeagueOffer('ECL', terms, 99); // a second offer from the same org must not duplicate or refresh the first.
+  assert.equal(fighter.getPendingOffers().length, 1);
+  assert.equal(fighter.getPendingOffer('ECL').offeredOnDay, 42);
+
+  fighter.receiveLeagueOffer('APEX', terms, 42);
+  assert.equal(fighter.getPendingOffers().length, 2);
+
+  assert.equal(fighter.clearPendingOffer('ECL'), true);
+  assert.equal(fighter.hasPendingOffer('ECL'), false);
+  assert.equal(fighter.getPendingOffers().length, 1);
+  assert.equal(fighter.clearPendingOffer('ECL'), false, 'clearing an already-gone offer reports nothing was removed');
+});
+
+test('contracts.pendingOffers round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  const terms = { fightsRequired: 4, pursePerFight: 20000, signingBonus: 15000, releaseClauseCost: 40000 };
+  fighter.receiveLeagueOffer('APEX', terms, 7);
+
+  const rebuilt = Fighter.fromJSON(fighter.toJSON());
+  assert.deepEqual(rebuilt.getPendingOffers(), [{ orgId: 'APEX', offeredOnDay: 7, terms }]);
+});
+
 test('getReadiness matches the documented v2 formula: 100 - (0.6*PhysicalFatigue + 0.4*MentalFatigue) + MoralModifier + TacticalBonus - InjuryRisk, clamped', () => {
   const r = BALANCE.READINESS;
   const fighter = makeFighter({ attributes: { forme: 80, moral: 65, physicalFatigue: 40, mentalFatigue: 20 } });
