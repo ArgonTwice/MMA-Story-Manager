@@ -88,7 +88,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v3.8';
+const APP_VERSION = 'v3.9';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
