@@ -2800,6 +2800,49 @@ const BALANCE = {
       REFUSAL_CHANCE: 0.35,
     },
   },
+
+  // ---------------------------------------------------------------------
+  // INBOX — V4.1 "Centre de Messagerie": PlayerState#inbox, written
+  // exclusively by engine/InboxEngine.js#createMessage. Four message
+  // categories, three of which are new independent weekly-chance
+  // generators added specifically for the inbox (SPONSOR_OFFER,
+  // TRANSFER_BID, ROSTER_NEWS below) — deliberately NOT the same code
+  // path as the pre-existing, untouched BALANCE.NARRATIVE_EVENTS
+  // .SPONSOR_OFFER (engine/EventEngine.js, auto-applies with no player
+  // choice) or BALANCE.DRAMA's own weighted-lottery SPONSOR_OFFER choice
+  // (engine/DramaEngine.js) — this file's long-standing "never read the
+  // other's independent concept" convention (see e.g. GALA_CIRCUIT's own
+  // header note) applies here too: the inbox's own sponsor/transfer/roster
+  // generators are a separate, additive channel. The fourth category,
+  // CONTRACT_OFFER, has no config of its own here — it's created by
+  // engine/LeagueEngine.js#evaluateLeagueOffers directly from
+  // GALA_CIRCUIT.ORGANIZATIONS[*].offerTriggers/contract (V4.0), which
+  // this block does not duplicate.
+  // ---------------------------------------------------------------------
+  INBOX: {
+    /** Max number of messages kept in PlayerState.inbox (oldest entries are trimmed, archived or not) — same precedent as SOCIAL_MEDIA.FEED_HISTORY_LIMIT. */
+    MESSAGE_HISTORY_LIMIT: 60,
+
+    SPONSOR_OFFER: {
+      WEEKLY_CHANCE: 0.12,
+      MIN_AMOUNT: 800,
+      MAX_AMOUNT: 4000,
+      HYPE_BONUS: 4,
+    },
+
+    /** A rival gym proposing to buy one of the player's OWN fighters — the inverse of engine/MercatoEngine.js#buyoutRivalFighter (player buys FROM a rival), using that same file's computeBuyoutFee() for a consistent price. Distinct from POACHING (BALANCE.MERCATO.POACHING, an automatic Loyalty-driven departure with no player choice) — a TRANSFER_BID is always a message the manager can Accepter/Refuser. */
+    TRANSFER_BID: {
+      /** Rolled once per eligible fighter per week. */
+      WEEKLY_CHANCE_PER_FIGHTER: 0.03,
+      /** Only fighters worth a rival's attention generate bids. */
+      MIN_OVERALL: 45,
+    },
+
+    ROSTER_NEWS: {
+      /** Below this Loyalty, a fighter's discontent becomes an inbox alert — mirrors CORNER_COACHING.REFUSAL's own LOYALTY_THRESHOLD precedent for "a fighter is unhappy" (35), reused here for consistency rather than inventing a second number. */
+      LOW_LOYALTY_THRESHOLD: 35,
+    },
+  },
 };
 
 export default deepFreeze(BALANCE);

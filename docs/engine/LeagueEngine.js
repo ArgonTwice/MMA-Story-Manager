@@ -61,6 +61,7 @@ import Fighter from '../models/Fighter.js';
 import { assertNoIntraGymMatch, assertGenderMatch } from './Matchmaking.js';
 import { generatePersonality } from './FighterGenerator.js';
 import { scheduleFight } from './FightWeekEngine.js';
+import { createMessage } from './InboxEngine.js';
 
 /** @returns {Object} BALANCE.LEAGUE_PYRAMID.TIERS[playerState.leagueTier], falling back to the bottom tier for an unrecognized/legacy value. */
 export function getCurrentTier(playerState) {
@@ -525,6 +526,12 @@ function findOrganization(orgId) {
  * web/app.js#_finishCombatPlayback) — a no-op, harmless to call from
  * anywhere else too (idempotent: never duplicates an already-pending offer).
  *
+ * V4.1: also creates an inbox CONTRACT_OFFER message (see engine/
+ * InboxEngine.js#createMessage) alongside signaling the offer on the
+ * fighter itself — the Messagerie tab is the primary place a manager sees
+ * this happen; the fighter's own contracts.pendingOffers stays the single
+ * source of truth acceptLeagueOffer/declineLeagueOffer act on.
+ *
  * @param {Object} playerState
  * @param {Object} worldState
  * @param {Object} fighter
@@ -543,6 +550,17 @@ export function evaluateLeagueOffers(playerState, worldState, fighter) {
     if (!streakCleared && !hypeCleared) continue;
 
     fighter.receiveLeagueOffer(org.id, org.contract, worldState.currentDay);
+    createMessage(playerState, worldState, {
+      sender: org.label,
+      category: 'CONTRACT_OFFER',
+      title: `Offre de contrat de ${org.label}`,
+      body: `${org.label} propose a ${fighter.identity.name} de rejoindre son roster : ${org.contract.fightsRequired} combats, ${org.contract.pursePerFight.toLocaleString('fr-FR')}$/combat, prime de signature ${org.contract.signingBonus.toLocaleString('fr-FR')}$.`,
+      actions: [
+        { id: 'ACCEPT', label: 'Signer le contrat' },
+        { id: 'DECLINE', label: 'Refuser' },
+      ],
+      context: { fighterId: fighter.identity.id, orgId: org.id },
+    });
     newOffers.push(org);
   }
 

@@ -61,6 +61,13 @@ import {
   declineLeagueOffer,
   releaseGalaExclusivity,
 } from '../engine/LeagueEngine.js';
+import {
+  getMessages as getInboxMessages,
+  getUnreadCount as getInboxUnreadCount,
+  markAsRead as markInboxMessageAsRead,
+  archiveMessage as archiveInboxMessage,
+  resolveAction as resolveInboxAction,
+} from '../engine/InboxEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from '../engine/PressConferenceEngine.js';
 import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from '../engine/HallOfFameEngine.js';
@@ -89,7 +96,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v4.0';
+const APP_VERSION = 'v4.1';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -214,6 +221,14 @@ const SKILL_LABELS = Object.freeze({
 });
 
 /** Purely decorative per-style emoji for the profile avatar — not a BALANCE-owned gameplay concept. */
+/** V4.1: icons for CONTRACT_OFFER/SPONSOR_OFFER/TRANSFER_BID/ROSTER_NEWS message rows — see _renderInbox(). */
+const INBOX_CATEGORY_ICONS = Object.freeze({
+  CONTRACT_OFFER: '\u{270D}\u{FE0F}',
+  SPONSOR_OFFER: '\u{1F4B0}',
+  TRANSFER_BID: '\u{1F4B8}',
+  ROSTER_NEWS: '\u{1F94A}',
+});
+
 const STYLE_AVATARS = Object.freeze({
   Boxe: '\u{1F94A}',
   'Muay Thai': '\u{1F9B5}',
@@ -362,8 +377,8 @@ class WebApp {
     this._galaSetup = null;
     /** Live Text Feed playback state ({ beats, revealedCount, playing, timerId }) for the fight currently in progress, or null — see _beginCombatPlayback()/_scheduleNextBeat(). Runtime-only, torn down on every fight reset. */
     this._combatPlayback = null;
-    /** V4.0 "Offres de Contrat Recues": queue of { fighterId, orgId } freshly-generated league offers not yet shown to the player — popped one at a time on the next Hub render (see _checkForNewLeagueOffers). Runtime-only, never persisted (the offers themselves live on Fighter#contracts.pendingOffers, which IS persisted). */
-    this._pendingLeagueOfferNotifications = [];
+    /** V4.1 "Centre de Messagerie": id of the inbox message currently open in the Messagerie detail pane, or null — see _renderInbox()/_selectInboxMessage(). */
+    this._selectedInboxMessageId = null;
     this.dom = {};
   }
 
@@ -418,11 +433,13 @@ class WebApp {
       tbRep: document.getElementById('tbRep'),
       tbHype: document.getElementById('tbHype'),
       btnMuteToggle: document.getElementById('btnMuteToggle'),
+      navInboxBadge: document.getElementById('navInboxBadge'),
       panels: {
         hub: document.getElementById('panel-hub'),
         roster: document.getElementById('panel-roster'),
         planning: document.getElementById('panel-planning'),
         fight: document.getElementById('panel-fight'),
+        inbox: document.getElementById('panel-inbox'),
         journal: document.getElementById('panel-journal'),
       },
       navButtons: Array.from(document.querySelectorAll('.nav-btn')),
@@ -658,6 +675,7 @@ class WebApp {
     else if (name === 'roster') this._renderRoster();
     else if (name === 'planning') this._renderPlanning();
     else if (name === 'fight') this._renderFight();
+    else if (name === 'inbox') this._renderInbox();
     else if (name === 'journal') this._renderJournal();
   }
 
@@ -668,13 +686,19 @@ class WebApp {
     this.dom.tbMoney.textContent = `${Math.round(playerState.money).toLocaleString('fr-FR')}$`;
     this.dom.tbRep.textContent = Math.round(playerState.reputation);
     this.dom.tbHype.textContent = Math.round(playerState.hype);
+    this._updateInboxBadge();
+  }
+
+  /** V4.1: the "📬 Messagerie (N)" red unread-count pill on the nav bar — see engine/InboxEngine.js#getUnreadCount. Called from _renderTopbar, itself invoked after nearly every state-changing action. */
+  _updateInboxBadge() {
+    const count = getInboxUnreadCount(this.gameState.playerState);
+    this.dom.navInboxBadge.textContent = count > 99 ? '99+' : String(count);
+    this.dom.navInboxBadge.classList.toggle('hidden', count === 0);
   }
 
   // ---- HUB panel --------------------------------------------------------------
 
   _renderHub() {
-    this._checkForNewLeagueOffers();
-
     const panel = this.dom.panels.hub;
     panel.innerHTML = '';
     const snapshot = this.gymHub.getSnapshot();
@@ -2171,72 +2195,15 @@ class WebApp {
     }
   }
 
-  /** V4.0: pops one queued league-offer notification (if any, and no other modal is already showing) and displays it — see _finishCombatPlayback, the sole place notifications are queued, and _renderHub, the sole caller. */
-  _checkForNewLeagueOffers() {
-    if (this._pendingLeagueOfferNotifications.length === 0) return;
-    if (!this.dom.modalOverlay.classList.contains('hidden')) return; // a modal is already up — retried on the next Hub render.
-
-    const { fighterId, orgId } = this._pendingLeagueOfferNotifications.shift();
-    const fighter = this.gameState.playerState.getFighter(fighterId);
-    if (!fighter?.hasPendingOffer(orgId)) return; // already resolved or the fighter is gone — nothing left to notify about.
-
-    this._showLeagueOfferModal(fighterId, orgId);
-  }
-
   /**
-   * V4.0 "Offres de Contrat Recues": the proactive Hub notification for a
-   * freshly-received league offer — "Offre de Contrat Recue de [Ligue]
-   * pour [Combattant]" with the offer's terms (fights reserved, fixed
-   * purse per fight, signing bonus, release clause) and an Accepter/
-   * Refuser choice, per engine/LeagueEngine.js#acceptLeagueOffer/
-   * declineLeagueOffer. See _checkForNewLeagueOffers, the sole caller —
-   * queued once per freshly-generated offer, popped one at a time so
-   * several simultaneous offers don't stack silently on top of each other.
+   * V4.1: accepts a pending league offer (via engine/LeagueEngine.js
+   * #acceptLeagueOffer) — called both from the Organisations section
+   * (see _renderGalaCalendar) and from the Messagerie's CONTRACT_OFFER
+   * detail view (see _resolveInboxAction), which passes its own messageId
+   * so the matching inbox card is archived alongside the real contract
+   * signature (see engine/InboxEngine.js#archiveMessage).
    */
-  _showLeagueOfferModal(fighterId, orgId) {
-    const { playerState } = this.gameState;
-    const fighter = playerState.getFighter(fighterId);
-    const org = Object.values(BALANCE.GALA_CIRCUIT.ORGANIZATIONS).find((entry) => entry.id === orgId);
-    if (!fighter || !org) return;
-
-    const content = el('div', {}, [
-      el('h2', { class: 'section-title', text: `\u{1F4E9} Offre de Contrat Recue de ${org.label}` }),
-      el('p', { text: `${org.label} propose a ${fighter.identity.name} de rejoindre officiellement son roster.` }),
-      el('div', { class: 'card' }, [
-        el('div', { class: 'list-row' }, [
-          el('span', { class: 'list-row-label', text: 'Combats reserves' }),
-          el('span', { class: 'list-row-value', text: `${org.contract.fightsRequired}` }),
-        ]),
-        el('div', { class: 'list-row' }, [
-          el('span', { class: 'list-row-label', text: 'Bourse fixe par combat' }),
-          el('span', { class: 'list-row-value', text: `${org.contract.pursePerFight.toLocaleString('fr-FR')}$` }),
-        ]),
-        el('div', { class: 'list-row' }, [
-          el('span', { class: 'list-row-label', text: 'Prime de signature' }),
-          el('span', { class: 'list-row-value', text: `${org.contract.signingBonus.toLocaleString('fr-FR')}$` }),
-        ]),
-        el('div', { class: 'list-row' }, [
-          el('span', { class: 'list-row-label', text: 'Clause de rupture' }),
-          el('span', { class: 'list-row-value', text: `${org.contract.releaseClauseCost.toLocaleString('fr-FR')}$` }),
-        ]),
-      ]),
-      el('div', { class: 'slot-row' }, [
-        el('button', {
-          class: 'btn btn-gold',
-          text: '\u{2705} Accepter et Signer',
-          onclick: () => this._acceptLeagueOffer(fighterId, orgId, { fromModal: true }),
-        }),
-        el('button', {
-          class: 'btn btn-outline',
-          text: '\u{274C} Refuser pour le moment',
-          onclick: () => this._declineLeagueOffer(fighterId, orgId, { fromModal: true }),
-        }),
-      ]),
-    ]);
-    this._showModal(content);
-  }
-
-  _acceptLeagueOffer(fighterId, orgId, { fromModal = false } = {}) {
+  _acceptLeagueOffer(fighterId, orgId, { messageId } = {}) {
     const { playerState } = this.gameState;
     const messages = {
       FIGHTER_NOT_FOUND: 'combattant introuvable.',
@@ -2251,7 +2218,7 @@ class WebApp {
         return;
       }
       AudioEngine.playClick();
-      if (fromModal) this._hideModal();
+      if (messageId) archiveInboxMessage(playerState, messageId);
       this._showToast(`\u{270D}\u{FE0F} ${result.org.label} : contrat signe (+${result.signingBonus.toLocaleString('fr-FR')}$, ${result.fightsRequired} combats).`);
       this._renderFight();
       this._renderTopbar();
@@ -2262,7 +2229,7 @@ class WebApp {
     }
   }
 
-  _declineLeagueOffer(fighterId, orgId, { fromModal = false } = {}) {
+  _declineLeagueOffer(fighterId, orgId, { messageId } = {}) {
     const { playerState } = this.gameState;
     try {
       const result = declineLeagueOffer(playerState, fighterId, orgId);
@@ -2270,7 +2237,7 @@ class WebApp {
         this._showToast('\u{26A0}\u{FE0F} Aucune offre en attente pour cette organisation.');
         return;
       }
-      if (fromModal) this._hideModal();
+      if (messageId) archiveInboxMessage(playerState, messageId);
       this._showToast('\u{1F4EC} Offre refusee pour le moment.');
       this._renderFight();
       this._autosave();
@@ -3185,15 +3152,13 @@ class WebApp {
       }
     }
 
-    // V4.0 "Offres de Contrat Recues": a win streak or enough gym Hype can
-    // now have ECL/APEX proactively reach out right after this fight —
-    // queued here, popped as a Hub notification modal (see
-    // _checkForNewLeagueOffers) rather than interrupting the result screen.
+    // V4.0/V4.1 "Offres de Contrat Recues": a win streak or enough gym Hype
+    // can have ECL/APEX proactively reach out right after this fight —
+    // evaluateLeagueOffers itself creates the CONTRACT_OFFER inbox message
+    // (see engine/LeagueEngine.js), surfaced via the Messagerie tab's own
+    // unread badge rather than interrupting this result screen.
     if (fighterA) {
-      const newOffers = evaluateLeagueOffers(this.gameState.playerState, this.gameState.worldState, fighterA);
-      for (const org of newOffers) {
-        this._pendingLeagueOfferNotifications.push({ fighterId: fighterA.identity.id, orgId: org.id });
-      }
+      evaluateLeagueOffers(this.gameState.playerState, this.gameState.worldState, fighterA);
     }
 
     this._autosave();
@@ -3303,6 +3268,143 @@ class WebApp {
         },
       })
     );
+  }
+
+  // ---- INBOX / MESSAGERIE panel ----------------------------------------------------
+
+  _renderInbox() {
+    const panel = this.dom.panels.inbox;
+    panel.innerHTML = '';
+    panel.appendChild(el('h2', { class: 'section-title', text: '\u{1F4EC} Messagerie' }));
+
+    if (!this._inboxTab) this._inboxTab = 'active';
+    panel.appendChild(
+      el('div', { class: 'subtab-row' }, [
+        el('button', {
+          class: `subtab-btn${this._inboxTab === 'active' ? ' active' : ''}`,
+          text: 'Actifs',
+          onclick: () => {
+            this._inboxTab = 'active';
+            this._renderInbox();
+          },
+        }),
+        el('button', {
+          class: `subtab-btn${this._inboxTab === 'archived' ? ' active' : ''}`,
+          text: 'Archives',
+          onclick: () => {
+            this._inboxTab = 'archived';
+            this._renderInbox();
+          },
+        }),
+      ])
+    );
+
+    const { playerState } = this.gameState;
+    const messages =
+      this._inboxTab === 'archived'
+        ? getInboxMessages(playerState, { includeArchived: true }).filter((message) => message.isArchived)
+        : getInboxMessages(playerState);
+
+    if (messages.length === 0) {
+      panel.appendChild(el('p', { text: this._inboxTab === 'archived' ? 'Aucun message archive.' : 'Aucun message pour le moment.' }));
+      return;
+    }
+
+    const list = el('div', { class: 'inbox-list' });
+    for (const message of messages) {
+      const selected = this._selectedInboxMessageId === message.id;
+      list.appendChild(
+        el(
+          'div',
+          {
+            class: `card inbox-row${selected ? ' selected' : ''}${!message.isRead ? ' unread' : ''}`,
+            onclick: () => this._selectInboxMessage(message.id),
+          },
+          [
+            el('div', { class: 'inbox-row-head' }, [
+              el('span', { text: `${INBOX_CATEGORY_ICONS[message.category] ?? '\u{1F4E9}'} ${message.title}` }),
+            ]),
+            el('div', { class: 'fighter-meta', text: `${message.sender} — Jour ${message.date}` }),
+          ]
+        )
+      );
+    }
+    panel.appendChild(list);
+
+    const selectedMessage = messages.find((message) => message.id === this._selectedInboxMessageId);
+    if (!selectedMessage) return;
+
+    const detail = el('div', { class: 'card' }, [
+      el('div', { class: 'card-title', text: selectedMessage.title }),
+      el('p', { class: 'fighter-meta', text: `${selectedMessage.sender} — Jour ${selectedMessage.date}` }),
+      el('p', { text: selectedMessage.body }),
+    ]);
+    if (!selectedMessage.isArchived && selectedMessage.actions.length > 0) {
+      const actionsRow = el('div', { class: 'slot-row' });
+      for (const action of selectedMessage.actions) {
+        actionsRow.appendChild(
+          el('button', {
+            class: action.id === 'ACCEPT' ? 'btn btn-gold' : 'btn btn-outline',
+            text: action.label,
+            onclick: () => this._handleInboxAction(selectedMessage, action.id),
+          })
+        );
+      }
+      detail.appendChild(actionsRow);
+    }
+    panel.appendChild(detail);
+  }
+
+  _selectInboxMessage(messageId) {
+    this._selectedInboxMessageId = messageId;
+    markInboxMessageAsRead(this.gameState.playerState, messageId);
+    this._renderInbox();
+    this._renderTopbar();
+  }
+
+  /**
+   * Dispatches an inbox action button. CONTRACT_OFFER routes through
+   * engine/LeagueEngine.js's own acceptLeagueOffer/declineLeagueOffer (see
+   * _acceptLeagueOffer/_declineLeagueOffer, which also archive this
+   * message on success) — every other category resolves directly through
+   * engine/InboxEngine.js#resolveAction.
+   */
+  _handleInboxAction(message, actionId) {
+    const { playerState, worldState } = this.gameState;
+
+    if (message.category === 'CONTRACT_OFFER') {
+      if (actionId === 'ACCEPT') this._acceptLeagueOffer(message.context.fighterId, message.context.orgId, { messageId: message.id });
+      else this._declineLeagueOffer(message.context.fighterId, message.context.orgId, { messageId: message.id });
+      this._selectedInboxMessageId = null;
+      this._renderInbox();
+      return;
+    }
+
+    try {
+      const result = resolveInboxAction(playerState, worldState, message.id, actionId);
+      if (!result.success) {
+        this._showToast(`\u{26A0}\u{FE0F} Action impossible : ${result.reason ?? 'raison inconnue.'}`);
+        return;
+      }
+
+      AudioEngine.playClick();
+      if (message.category === 'SPONSOR_OFFER' && result.applied) {
+        this._showToast(`\u{1F4B0} Sponsoring accepte : +${message.context.amount.toLocaleString('fr-FR')}$, +${message.context.hypeBonus} Hype.`);
+      } else if (message.category === 'TRANSFER_BID' && result.fee) {
+        this._showToast(`\u{1F4B8} ${message.context.fighterName} vendu pour ${result.fee.toLocaleString('fr-FR')}$.`);
+      } else {
+        this._showToast('\u{1F4ED} Message traite.');
+      }
+
+      this._selectedInboxMessageId = null;
+      this._renderTopbar();
+      this._renderRoster();
+      this._renderInbox();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _handleInboxAction failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Action impossible : ${error.message}`);
+    }
   }
 
   // ---- JOURNAL panel --------------------------------------------------------------

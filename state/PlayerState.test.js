@@ -87,3 +87,52 @@ test('addActiveDeal/removeActiveDeal manage playerState.activeDeals, and toJSON/
   rebuilt.removeActiveDeal(deal.id);
   assert.equal(snapshot.activeDeals.length, 1, 'mutating the rebuilt copy must never reach back into the original snapshot');
 });
+
+test('pushInboxMessage/markInboxMessageRead/archiveInboxMessage manage playerState.inbox, and toJSON/fromJSON round-trips it as an independent copy', () => {
+  const player = new PlayerState();
+  assert.deepEqual(player.inbox, []);
+
+  const message = player.pushInboxMessage({
+    sender: 'NordFit',
+    category: 'SPONSOR_OFFER',
+    title: 'Titre',
+    body: 'Corps',
+    actions: [{ id: 'ACCEPT', label: 'Accepter' }],
+    context: { amount: 1000 },
+  });
+  assert.ok(message.id, 'pushInboxMessage must assign an id when none is provided');
+  assert.equal(message.isRead, false);
+  assert.equal(message.isArchived, false);
+  assert.equal(player.inbox.length, 1);
+
+  assert.equal(player.markInboxMessageRead(message.id), true);
+  assert.equal(player.inbox[0].isRead, true);
+  assert.equal(player.markInboxMessageRead(message.id), false, 'already read — no-op reports nothing changed');
+  assert.equal(player.markInboxMessageRead('nonexistent-message-id'), false);
+
+  const snapshot = player.toJSON();
+  assert.deepEqual(snapshot.inbox, player.inbox);
+
+  assert.equal(player.archiveInboxMessage(message.id), true);
+  assert.equal(player.inbox[0].isArchived, true);
+  assert.equal(player.archiveInboxMessage(message.id), false, 'already archived — no-op reports nothing changed');
+  assert.equal(player.archiveInboxMessage('nonexistent-message-id'), false);
+
+  // The earlier snapshot must be unaffected by the later archive (independent copy, not a shared array/object reference).
+  assert.equal(snapshot.inbox[0].isArchived, false);
+
+  const rebuilt = PlayerState.fromJSON(snapshot);
+  assert.deepEqual(rebuilt.inbox, snapshot.inbox);
+  rebuilt.archiveInboxMessage(message.id);
+  assert.equal(snapshot.inbox[0].isArchived, false, 'mutating the rebuilt copy must never reach back into the original snapshot');
+});
+
+test('MESSAGE_HISTORY_LIMIT trims the oldest inbox messages first, keeping only the newest ones', () => {
+  const player = new PlayerState();
+  // Push well past the real BALANCE.INBOX.MESSAGE_HISTORY_LIMIT to confirm trimming happens at all, without hardcoding its exact value here.
+  for (let i = 0; i < 200; i += 1) {
+    player.pushInboxMessage({ sender: 'X', category: 'ROSTER_NEWS', title: `t${i}`, body: 'b' });
+  }
+  assert.ok(player.inbox.length < 200, 'the inbox must trim past its own history limit');
+  assert.equal(player.inbox[player.inbox.length - 1].title, 't199', 'the newest message must survive trimming');
+});

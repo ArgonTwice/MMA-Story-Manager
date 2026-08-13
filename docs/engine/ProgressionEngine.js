@@ -29,6 +29,7 @@ import { advanceWeeksAtGym } from './ScoutingEngine.js';
 import { processWeeklyCommunityManagement } from './SocialFeedEngine.js';
 import { rollWeeklyPoaching } from './MercatoEngine.js';
 import { applyWeeklyCampOrientation } from './FightWeekEngine.js';
+import { evaluateSponsorOffers, evaluateTransferBids, evaluateRosterNews } from './InboxEngine.js';
 
 /** Event names published on EventBus by ProgressionEngine. Import instead of raw strings. */
 export const PROGRESSION_EVENTS = Object.freeze({
@@ -331,6 +332,14 @@ export function advanceWeek(gameState, options = {}) {
   const prospectWaveReport =
     worldState.year !== yearBefore && isProspectWaveDue(worldState) ? generateProspectWave(worldState, { rng }) : null;
 
+  // V4.1 "Centre de Messagerie": three independent weekly-chance inbox
+  // generators — see engine/InboxEngine.js's own header for why these are
+  // deliberately separate from the pre-existing SPONSOR_OFFER/POACHING
+  // mechanics above.
+  const sponsorOfferMessage = evaluateSponsorOffers(playerState, worldState, rng);
+  const transferBidMessage = evaluateTransferBids(playerState, worldState, rng);
+  const rosterNewsMessages = evaluateRosterNews(playerState, worldState);
+
   const summary = {
     day: worldState.currentDay,
     season: worldState.season,
@@ -347,6 +356,7 @@ export function advanceWeek(gameState, options = {}) {
     poachingReport,
     transferMarketReport,
     prospectWaveReport,
+    inboxReport: { sponsorOfferMessage, transferBidMessage, rosterNewsMessages },
   };
 
   EventBus.publish(PROGRESSION_EVENTS.WEEK_ADVANCED, summary);

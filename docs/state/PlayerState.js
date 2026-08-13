@@ -52,6 +52,10 @@ export const PLAYER_EVENTS = Object.freeze({
   FIGHT_SCHEDULED: 'fightWeek:scheduled',
   FIGHT_SCHEDULE_UPDATED: 'fightWeek:schedule_updated',
   FIGHT_SCHEDULE_CLEARED: 'fightWeek:schedule_cleared',
+  /** V4.1 "Centre de Messagerie": engine/InboxEngine.js pushed/read/archived a message on PlayerState#inbox. */
+  INBOX_MESSAGE_ADDED: 'inbox:message_added',
+  INBOX_MESSAGE_READ: 'inbox:message_read',
+  INBOX_MESSAGE_ARCHIVED: 'inbox:message_archived',
 });
 
 let idCounter = 0;
@@ -79,6 +83,7 @@ export class PlayerState {
    * @param {Object[]} [config.socialFeed]
    * @param {number|null} [config.lastAcademyDraftYear]
    * @param {Object[]} [config.activeDeals]
+   * @param {Object[]} [config.inbox]
    */
   constructor(config = {}) {
     this.gymName = config.gymName ?? 'New Gym';
@@ -106,6 +111,10 @@ export class PlayerState {
 
     this.coaches = config.coaches ? config.coaches.map((coach) => ({ ...coach })) : [];
     this.socialFeed = config.socialFeed ? config.socialFeed.map((entry) => ({ ...entry })) : [];
+    /** V4.1 "Centre de Messagerie": every CONTRACT_OFFER/SPONSOR_OFFER/TRANSFER_BID/ROSTER_NEWS message the gym has ever received — see engine/InboxEngine.js#createMessage, the sole writer. */
+    this.inbox = config.inbox
+      ? config.inbox.map((message) => ({ ...message, actions: message.actions.map((action) => ({ ...action })), context: { ...message.context } }))
+      : [];
 
     /** Year (WorldState.year) the Academy Draft was last offered — see engine/AcademyEngine.js#isAcademyDraftAvailable. null before the first offer. */
     this.lastAcademyDraftYear = config.lastAcademyDraftYear ?? null;
@@ -535,6 +544,54 @@ export class PlayerState {
     return record;
   }
 
+  // ---- inbox --------------------------------------------------------------------
+
+  /**
+   * V4.1 "Centre de Messagerie": appends a message to the gym's inbox,
+   * trimming the oldest entries past BALANCE.INBOX.MESSAGE_HISTORY_LIMIT —
+   * same "id assigned if missing, capped history" shape as
+   * pushSocialFeedEntry above. See engine/InboxEngine.js#createMessage, the
+   * sole caller (never called directly by a UI or another engine file).
+   *
+   * @param {Object} message
+   * @returns {Object} The stored message (with an id assigned if missing).
+   */
+  pushInboxMessage(message) {
+    const record = {
+      id: message.id ?? generateId('msg'),
+      isRead: false,
+      isArchived: false,
+      ...message,
+    };
+
+    this.inbox.push(record);
+    if (this.inbox.length > BALANCE.INBOX.MESSAGE_HISTORY_LIMIT) {
+      this.inbox.splice(0, this.inbox.length - BALANCE.INBOX.MESSAGE_HISTORY_LIMIT);
+    }
+
+    EventBus.publish(PLAYER_EVENTS.INBOX_MESSAGE_ADDED, { message: record });
+    return record;
+  }
+
+  /** Marks a message read — a no-op if the id doesn't exist or it's already read. @returns {boolean} True if a message was actually flipped to read. */
+  markInboxMessageRead(messageId) {
+    const message = this.inbox.find((entry) => entry.id === messageId);
+    if (!message || message.isRead) return false;
+    message.isRead = true;
+    EventBus.publish(PLAYER_EVENTS.INBOX_MESSAGE_READ, { messageId });
+    return true;
+  }
+
+  /** Archives a message (resolved or dismissed) — implicitly marks it read too, since an archived message can no longer be "unread". A no-op if the id doesn't exist or it's already archived. @returns {boolean} True if a message was actually archived. */
+  archiveInboxMessage(messageId) {
+    const message = this.inbox.find((entry) => entry.id === messageId);
+    if (!message || message.isArchived) return false;
+    message.isArchived = true;
+    message.isRead = true;
+    EventBus.publish(PLAYER_EVENTS.INBOX_MESSAGE_ARCHIVED, { messageId });
+    return true;
+  }
+
   // ---- serialization ----------------------------------------------------------
 
   /**
@@ -554,6 +611,7 @@ export class PlayerState {
         coach.awards ? { ...coach, awards: coach.awards.map((award) => ({ ...award })) } : { ...coach }
       ),
       socialFeed: this.socialFeed.map((entry) => ({ ...entry })),
+      inbox: this.inbox.map((message) => ({ ...message, actions: message.actions.map((action) => ({ ...action })), context: { ...message.context } })),
       lastAcademyDraftYear: this.lastAcademyDraftYear,
       activeDeals: this.activeDeals.map((deal) => ({ ...deal })),
       leagueTier: this.leagueTier,

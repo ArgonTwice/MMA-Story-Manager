@@ -385,12 +385,49 @@ input[type='text'] {
 
 .nav-btn .nav-badge {
   position: absolute;
-  top: 4px;
-  right: 22%;
-  min-width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  top: 2px;
+  right: 18%;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 999px;
   background: var(--red-bright);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.nav-btn .nav-badge.hidden {
+  display: none;
+}
+
+/* V4.1 Centre de Messagerie */
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.inbox-row {
+  cursor: pointer;
+}
+
+.inbox-row.selected {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.35);
+}
+
+.inbox-row.unread .inbox-row-head {
+  font-family: var(--font-display);
+  color: var(--gold-bright);
+}
+
+.inbox-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 /* ---- cards --------------------------------------------------------------- */
