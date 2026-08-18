@@ -45,6 +45,36 @@ import { computeBuyoutFee } from './MercatoEngine.js';
 /** The only valid PlayerState#inbox message categories — see this file's own header for what each means. */
 export const MESSAGE_CATEGORIES = Object.freeze(['CONTRACT_OFFER', 'SPONSOR_OFFER', 'TRANSFER_BID', 'ROSTER_NEWS']);
 
+/**
+ * V4.2 "Curation Inbox": every message category maps to one of three
+ * priority buckets, in display order — 🔥 Prioritaire (offers that gate a
+ * fighter's career: league contracts and sponsorships), 💰 Opportunités
+ * (a rival's cash offer for a roster fighter), ℹ️ Infos (informational,
+ * nothing to sign). Both CONTRACT_OFFER and SPONSOR_OFFER share the
+ * PRIORITY bucket regardless of which SPONSOR_OFFER flow produced them
+ * (this file's own gym-wide evaluateSponsorOffers, or engine/
+ * SponsorEngine.js's individual fighter offers).
+ */
+export const PRIORITY_LEVELS = Object.freeze(['PRIORITY', 'OPPORTUNITY', 'INFO']);
+
+export const PRIORITY_LABELS = Object.freeze({
+  PRIORITY: '🔥 Prioritaire',
+  OPPORTUNITY: '💰 Opportunités',
+  INFO: 'ℹ️ Infos',
+});
+
+const CATEGORY_PRIORITY = Object.freeze({
+  CONTRACT_OFFER: 'PRIORITY',
+  SPONSOR_OFFER: 'PRIORITY',
+  TRANSFER_BID: 'OPPORTUNITY',
+  ROSTER_NEWS: 'INFO',
+});
+
+/** @returns {string} One of PRIORITY_LEVELS for this message category — unknown categories default to 'INFO'. */
+export function getMessagePriority(category) {
+  return CATEGORY_PRIORITY[category] ?? 'INFO';
+}
+
 const SPONSOR_NAMES = Object.freeze(['NordFit', 'IronCore Nutrition', 'Apex Wear', 'Volt Energy', 'Titan Supplements', 'Fusion Gear']);
 
 function pick(rng, list) {
@@ -90,6 +120,21 @@ export function createMessage(playerState, worldState, { sender, category, title
 export function getMessages(playerState, { includeArchived = false } = {}) {
   const messages = includeArchived ? playerState.inbox : playerState.inbox.filter((message) => !message.isArchived);
   return [...messages].reverse();
+}
+
+/**
+ * V4.2 "Curation Inbox": buckets getMessages()'s own result into the three
+ * PRIORITY_LEVELS, in display order, each group keeping the same
+ * newest-first ordering getMessages already provides.
+ * @returns {{ level: string, label: string, messages: Object[] }[]} One entry per PRIORITY_LEVELS, always all three (possibly empty).
+ */
+export function groupMessagesByPriority(playerState, options) {
+  const messages = getMessages(playerState, options);
+  const groups = new Map(PRIORITY_LEVELS.map((level) => [level, []]));
+  for (const message of messages) {
+    groups.get(getMessagePriority(message.category)).push(message);
+  }
+  return PRIORITY_LEVELS.map((level) => ({ level, label: PRIORITY_LABELS[level], messages: groups.get(level) }));
 }
 
 /** @returns {number} Count of unread, non-archived messages — the nav badge's own source of truth. */
@@ -251,6 +296,17 @@ export function evaluateRosterNews(playerState, worldState) {
  * on a CONTRACT_OFFER message calls LeagueEngine's acceptLeagueOffer/
  * declineLeagueOffer directly, then archiveMessage() here to clear the card.
  *
+ * V4.2: the SAME 'SPONSOR_OFFER' category now covers two independent
+ * flows — this file's own gym-wide evaluateSponsorOffers (context:
+ * {amount, hypeBonus}, resolved below by resolveSponsorOffer) and engine/
+ * SponsorEngine.js's individual fighter sponsorships (context:
+ * {fighterId, offerId}, no amount/hypeBonus). The latter is deliberately
+ * NOT handled here either, for the same reason as CONTRACT_OFFER — this
+ * module never imports engine/SponsorEngine.js (that file imports THIS
+ * one). A UI acting on a fighter-level SPONSOR_OFFER (context.fighterId
+ * present) must call SponsorEngine's acceptSponsorshipOffer/
+ * declineSponsorshipOffer directly, then archiveMessage() here.
+ *
  * @param {Object} playerState
  * @param {Object} worldState
  * @param {string} messageId
@@ -262,7 +318,7 @@ export function resolveAction(playerState, worldState, messageId, actionId) {
   if (!message) return { success: false, reason: 'MESSAGE_NOT_FOUND' };
   if (message.isArchived) return { success: false, reason: 'ALREADY_RESOLVED' };
 
-  if (message.category === 'SPONSOR_OFFER') return resolveSponsorOffer(playerState, message, actionId);
+  if (message.category === 'SPONSOR_OFFER' && message.context.fighterId == null) return resolveSponsorOffer(playerState, message, actionId);
   if (message.category === 'TRANSFER_BID') return resolveTransferBid(playerState, worldState, message, actionId);
   if (message.category === 'ROSTER_NEWS') {
     playerState.archiveInboxMessage(message.id);
@@ -274,8 +330,12 @@ export function resolveAction(playerState, worldState, messageId, actionId) {
 
 export default {
   MESSAGE_CATEGORIES,
+  PRIORITY_LEVELS,
+  PRIORITY_LABELS,
+  getMessagePriority,
   createMessage,
   getMessages,
+  groupMessagesByPriority,
   getUnreadCount,
   markAsRead,
   archiveMessage,

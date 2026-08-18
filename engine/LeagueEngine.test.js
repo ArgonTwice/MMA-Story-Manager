@@ -379,8 +379,9 @@ test('evaluateLeagueOffers sends an ECL offer once the win-streak trigger is cle
 
 test('evaluateLeagueOffers sends an offer once the Hype trigger is cleared, even with a zero win streak', () => {
   const eclCfg = BALANCE.GALA_CIRCUIT.ORGANIZATIONS.ECL;
-  const playerState = new PlayerState({ money: 25000, reputation: 0, hype: eclCfg.offerTriggers.hype });
+  const playerState = new PlayerState({ money: 25000, reputation: 0 });
   const fighter = new Fighter({ identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' } });
+  fighter.adjustHype(eclCfg.offerTriggers.hype);
   playerState.addFighter(fighter);
   const worldState = new WorldState();
 

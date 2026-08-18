@@ -483,3 +483,74 @@ test('confidence round-trips through toJSON/fromJSON, and an old save missing th
   const fromLegacySave = Fighter.fromJSON(legacySave);
   assert.equal(fromLegacySave.attributes.confidence, BALANCE.CONFIDENCE.STARTING_VALUE);
 });
+
+test('a new fighter starts at BALANCE.FIGHTER_HYPE.STARTING_VALUE; adjustHype clamps to [MIN, MAX] and round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  assert.equal(fighter.attributes.hype, BALANCE.FIGHTER_HYPE.STARTING_VALUE);
+
+  fighter.adjustHype(999);
+  assert.equal(fighter.attributes.hype, BALANCE.FIGHTER_HYPE.MAX);
+  fighter.adjustHype(-9999);
+  assert.equal(fighter.attributes.hype, BALANCE.FIGHTER_HYPE.MIN);
+
+  fighter.adjustHype(42);
+  const restored = Fighter.fromJSON(fighter.toJSON());
+  assert.equal(restored.attributes.hype, fighter.attributes.hype);
+
+  const legacySave = fighter.toJSON();
+  delete legacySave.attributes.hype;
+  const fromLegacySave = Fighter.fromJSON(legacySave);
+  assert.equal(fromLegacySave.attributes.hype, BALANCE.FIGHTER_HYPE.STARTING_VALUE);
+});
+
+test('triggerHotStreak/isHotStreakActive manage the temporary status, and it round-trips through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  assert.equal(fighter.isHotStreakActive(1), false);
+
+  fighter.triggerHotStreak(10);
+  assert.equal(fighter.status.hotStreakUntilDay, 10 + BALANCE.FIGHTER_HYPE.HOT_STREAK.DURATION_DAYS);
+  assert.equal(fighter.isHotStreakActive(10), true);
+  assert.equal(fighter.isHotStreakActive(10 + BALANCE.FIGHTER_HYPE.HOT_STREAK.DURATION_DAYS), false, 'expires exactly at the boundary day');
+  assert.equal(fighter.isHotStreakActive(10 + BALANCE.FIGHTER_HYPE.HOT_STREAK.DURATION_DAYS + 100), false);
+
+  const restored = Fighter.fromJSON(fighter.toJSON());
+  assert.equal(restored.status.hotStreakUntilDay, fighter.status.hotStreakUntilDay);
+});
+
+test('hasBeenNotifiedForSponsorThreshold/markSponsorThresholdNotified track each threshold permanently and independently, and round-trip through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  assert.equal(fighter.hasBeenNotifiedForSponsorThreshold(30), false);
+
+  fighter.markSponsorThresholdNotified(30);
+  assert.equal(fighter.hasBeenNotifiedForSponsorThreshold(30), true);
+  assert.equal(fighter.hasBeenNotifiedForSponsorThreshold(60), false);
+
+  fighter.markSponsorThresholdNotified(30); // marking twice must not duplicate the entry.
+  assert.deepEqual(fighter.status.notifiedSponsorThresholds, [30]);
+
+  const restored = Fighter.fromJSON(fighter.toJSON());
+  assert.deepEqual(restored.status.notifiedSponsorThresholds, [30]);
+});
+
+test('signSponsorship/consumeSponsorshipFights manage contracts.sponsorships (multiple deals at once, unlike the single-slot league exclusivity), and round-trip through toJSON/fromJSON', () => {
+  const fighter = makeFighter();
+  assert.deepEqual(fighter.contracts.sponsorships, []);
+
+  fighter.signSponsorship('Volt Athletics', 2, 500);
+  fighter.signSponsorship('Monster Energy', 1, 300);
+  assert.equal(fighter.contracts.sponsorships.length, 2);
+
+  const firstPurse = fighter.consumeSponsorshipFights();
+  assert.equal(firstPurse, 800, 'both active sponsorships pay out on the same resolved fight');
+  assert.equal(fighter.contracts.sponsorships.length, 1, 'Monster Energy expired after its 1 fight');
+  assert.equal(fighter.contracts.sponsorships[0].sponsorName, 'Volt Athletics');
+  assert.equal(fighter.contracts.sponsorships[0].fightsRemaining, 1);
+
+  const secondPurse = fighter.consumeSponsorshipFights();
+  assert.equal(secondPurse, 500);
+  assert.deepEqual(fighter.contracts.sponsorships, [], 'Volt Athletics expired too');
+
+  fighter.signSponsorship('FightWear', 3, 200);
+  const restored = Fighter.fromJSON(fighter.toJSON());
+  assert.deepEqual(restored.contracts.sponsorships, fighter.contracts.sponsorships);
+});

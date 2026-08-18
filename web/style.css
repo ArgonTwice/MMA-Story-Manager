@@ -430,6 +430,20 @@ input[type='text'] {
   gap: 8px;
 }
 
+/* V4.2 Curation Inbox: priority group headers (🔥 Prioritaire / 💰 Opportunités / ℹ️ Infos) */
+.inbox-priority-header {
+  font-family: var(--font-display);
+  color: var(--text-muted);
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin: 14px 0 4px;
+}
+
+.inbox-priority-header:first-child {
+  margin-top: 0;
+}
+
 /* ---- cards --------------------------------------------------------------- */
 
 .card {

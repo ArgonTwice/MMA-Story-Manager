@@ -124,6 +124,10 @@ function clampConfidence(value) {
   return Math.min(BALANCE.CONFIDENCE.MAX, Math.max(BALANCE.CONFIDENCE.MIN, value));
 }
 
+function clampHype(value) {
+  return Math.min(BALANCE.FIGHTER_HYPE.MAX, Math.max(BALANCE.FIGHTER_HYPE.MIN, value));
+}
+
 function clampForm(value) {
   return Math.min(BALANCE.FORM.MAX, Math.max(BALANCE.FORM.MIN, value));
 }
@@ -189,6 +193,8 @@ export class Fighter {
       moral: clampMorale(config.attributes?.moral ?? BALANCE.MORALE.STARTING_VALUE),
       /** Ring/cage self-belief, distinct from moral (which reacts to everything — pay, injuries, drama events): confidence moves only with fight results (see CombatEngine#_processPostMatchRewards) and nudges initiative-taking mid-fight (see CombatEngine's momentum computation). Starts perfectly neutral, same "STARTING_VALUE === no effect yet" baseline as moral. */
       confidence: clampConfidence(config.attributes?.confidence ?? BALANCE.CONFIDENCE.STARTING_VALUE),
+      /** V4.2 "Migration Hype Individuelle": this fighter's OWN buzz (0-100), distinct from the gym-wide BALANCE.GYM.HYPE — see adjustHype(). */
+      hype: clampHype(config.attributes?.hype ?? BALANCE.FIGHTER_HYPE.STARTING_VALUE),
       /** Phase 3.1 v1/v2: weekly-persisted physical load, spent/recovered by WEEKLY_PLANNING activities. See getReadiness(). */
       physicalFatigue: clampPhysicalFatigue(config.attributes?.physicalFatigue ?? BALANCE.PHYSICAL_FATIGUE.STARTING_VALUE),
       /** Phase 3.1 v2: weekly-persisted cognitive/promotional load — "Charge Mentale", spent by VIDEO_PREP/MEDIA_SPONSORS. See getReadiness(). */
@@ -275,6 +281,17 @@ export class Fighter {
       pendingOffers: config.contracts?.pendingOffers
         ? config.contracts.pendingOffers.map((offer) => ({ ...offer, terms: { ...offer.terms } }))
         : [],
+      /**
+       * V4.2 "Sponsoring Dynamique": every individually-signed sponsor deal
+       * currently active — { sponsorName, fightsRemaining, pursePerFight }.
+       * Unlike `exclusivity` (a single league slot), a fighter may hold
+       * several of these at once. Set by engine/SponsorEngine.js
+       * #acceptSponsorshipOffer (see signSponsorship()); each entry pays
+       * pursePerFight once per resolved fight and decrements fightsRemaining
+       * (consumeSponsorshipFights(), called once per resolved fight
+       * alongside consumeExclusivityFight()) until it expires.
+       */
+      sponsorships: config.contracts?.sponsorships ? config.contracts.sponsorships.map((deal) => ({ ...deal })) : [],
     };
 
     /**
@@ -309,6 +326,13 @@ export class Fighter {
       injuredUntil: config.medical?.injuredUntil ?? null,
       injuriesHistory: config.medical?.injuriesHistory ? [...config.medical.injuriesHistory] : [],
       chronicIssues: config.medical?.chronicIssues ? [...config.medical.chronicIssues] : [],
+    };
+
+    this.status = {
+      /** V4.2 "🔥 Hot Streak": temporary status set by triggerHotStreak() when a single fight's Hype gain clears BALANCE.FIGHTER_HYPE.HOT_STREAK.GAIN_THRESHOLD — see isHotStreakActive(). */
+      hotStreakUntilDay: config.status?.hotStreakUntilDay ?? null,
+      /** V4.2 "Sponsoring Dynamique": every BALANCE.FIGHTER_HYPE.SPONSOR_THRESHOLDS value that has ever produced a sponsor offer for this fighter — see markSponsorThresholdNotified()/hasBeenNotifiedForSponsorThreshold(). Permanent: crossing the same threshold again later never re-offers it. */
+      notifiedSponsorThresholds: config.status?.notifiedSponsorThresholds ? [...config.status.notifiedSponsorThresholds] : [],
     };
 
     /** Unlocked traits (e.g. "Iron Chin", "Killer Instinct"). Plain id strings. */
@@ -751,6 +775,70 @@ export class Fighter {
   }
 
   /**
+   * V4.2 "Migration Hype Individuelle": adjusts this fighter's OWN Hype —
+   * see engine/CombatEngine.js#_processPostMatchRewards, the sole caller
+   * after a resolved match (BALANCE.FIGHTER_HYPE.EVENTS.WIN_DECISION/
+   * WIN_FINISH on a win, or a LOSS_DECAY_PERCENT shrink of the current
+   * value on a loss).
+   * @param {number} delta
+   */
+  adjustHype(delta) {
+    this.attributes.hype = clampHype(this.attributes.hype + delta);
+  }
+
+  /** Arms the "🔥 Hot Streak" status for BALANCE.FIGHTER_HYPE.HOT_STREAK.DURATION_DAYS from `currentDay`. */
+  triggerHotStreak(currentDay) {
+    this.status.hotStreakUntilDay = currentDay + BALANCE.FIGHTER_HYPE.HOT_STREAK.DURATION_DAYS;
+  }
+
+  /** @returns {boolean} True while "🔥 Hot Streak" is still active as of `currentDay`. */
+  isHotStreakActive(currentDay) {
+    return this.status.hotStreakUntilDay !== null && currentDay < this.status.hotStreakUntilDay;
+  }
+
+  /** @returns {boolean} True if this Hype threshold has already produced a sponsor offer for this fighter (accepted or declined — either way, it's used up). */
+  hasBeenNotifiedForSponsorThreshold(threshold) {
+    return this.status.notifiedSponsorThresholds.includes(threshold);
+  }
+
+  /** Marks a Hype threshold as having produced its one-time sponsor offer — a no-op if already marked. */
+  markSponsorThresholdNotified(threshold) {
+    if (!this.hasBeenNotifiedForSponsorThreshold(threshold)) this.status.notifiedSponsorThresholds.push(threshold);
+  }
+
+  /**
+   * V4.2 "Sponsoring Dynamique": signs a new individual sponsor deal — see
+   * engine/SponsorEngine.js#acceptSponsorshipOffer, the only caller. Adds
+   * to `contracts.sponsorships` rather than replacing (a fighter may hold
+   * several sponsors at once, unlike the single-slot league `exclusivity`).
+   * @param {string} sponsorName
+   * @param {number} fightsRequired
+   * @param {number} pursePerFight
+   */
+  signSponsorship(sponsorName, fightsRequired, pursePerFight) {
+    this.contracts.sponsorships.push({ sponsorName, fightsRemaining: fightsRequired, pursePerFight });
+  }
+
+  /**
+   * Credits one resolved fight against EVERY active sponsorship — called
+   * once per resolved fight (win, loss, or draw all count equally, same
+   * convention as consumeExclusivityFight()), dropping any deal that
+   * reaches 0 fightsRemaining.
+   * @returns {number} The combined pursePerFight owed this fight across all active sponsorships (the caller is responsible for actually crediting it).
+   */
+  consumeSponsorshipFights() {
+    let totalPurse = 0;
+    const remaining = [];
+    for (const deal of this.contracts.sponsorships) {
+      totalPurse += deal.pursePerFight;
+      const fightsRemaining = deal.fightsRemaining - 1;
+      if (fightsRemaining > 0) remaining.push({ ...deal, fightsRemaining });
+    }
+    this.contracts.sponsorships = remaining;
+    return totalPurse;
+  }
+
+  /**
    * @param {number} delta
    */
   adjustForm(delta) {
@@ -940,6 +1028,7 @@ export class Fighter {
         confidence: this.attributes.confidence,
         physicalFatigue: this.attributes.physicalFatigue,
         mentalFatigue: this.attributes.mentalFatigue,
+        hype: this.attributes.hype,
       },
       psychology: {
         ...this.psychology,
@@ -960,6 +1049,7 @@ export class Fighter {
         scoutOffers: [...this.contracts.scoutOffers],
         exclusivity: this.contracts.exclusivity ? { ...this.contracts.exclusivity } : null,
         pendingOffers: this.contracts.pendingOffers.map((offer) => ({ ...offer, terms: { ...offer.terms } })),
+        sponsorships: this.contracts.sponsorships.map((deal) => ({ ...deal })),
       },
       weeklySalary: this.weeklySalary,
       weeksAtGym: this.weeksAtGym,
@@ -967,6 +1057,10 @@ export class Fighter {
         injuredUntil: this.medical.injuredUntil,
         injuriesHistory: [...this.medical.injuriesHistory],
         chronicIssues: [...this.medical.chronicIssues],
+      },
+      status: {
+        hotStreakUntilDay: this.status.hotStreakUntilDay,
+        notifiedSponsorThresholds: [...this.status.notifiedSponsorThresholds],
       },
       perks: [...this.perks],
       training: { ...this.training },

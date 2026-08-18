@@ -781,6 +781,55 @@ const BALANCE = {
   },
 
   // ---------------------------------------------------------------------
+  // FIGHTER_HYPE — V4.2 "Migration Hype Individuelle": an athlete's OWN
+  // buzz/popularity (0-100), distinct from the pre-existing gym-wide
+  // BALANCE.GYM.HYPE (left untouched — still read by EconomyEngine's
+  // passive income and the V4.1 one-time gym sponsor generator, just no
+  // longer surfaced in the topbar UI). Updated by engine/CombatEngine.js
+  // #_processPostMatchRewards after every resolved match, for BOTH
+  // corners regardless of which gym they belong to (models/Fighter.js
+  // #adjustHype), and read by that same file's per-corner purse
+  // multiplier (Purse = BasePurse * (1 + FighterHype/100)), by
+  // engine/SponsorEngine.js's individual sponsor-offer thresholds, and by
+  // engine/LeagueEngine.js#evaluateLeagueOffers's own Hype trigger
+  // (fighter.attributes.hype, replacing the old playerState.hype check).
+  // ---------------------------------------------------------------------
+  FIGHTER_HYPE: {
+    MIN: 0,
+    MAX: 100,
+    STARTING_VALUE: 0,
+
+    EVENTS: {
+      WIN_DECISION: 10,
+      /** KO/TKO/Submission/Doctor Stoppage — same "byFinish" bucket _processPostMatchRewards already computes for confidence/morale. */
+      WIN_FINISH: 25,
+      /** A LOSS multiplies current Hype by this factor rather than subtracting a flat amount — "-15% Hype", so a bigger name loses more raw points from one bad night than a nobody does. */
+      LOSS_DECAY_PERCENT: 0.15,
+    },
+
+    /** "🔥 Hot Streak": a temporary status flag set when a single fight's ACTUAL Hype gain (post-clamp) exceeds GAIN_THRESHOLD — WIN_FINISH (25) alone clears it, WIN_DECISION (10) alone never does. */
+    HOT_STREAK: {
+      GAIN_THRESHOLD: 20,
+      DURATION_DAYS: 14,
+    },
+
+    /** Hype thresholds engine/SponsorEngine.js's individual sponsor offers fire at (crossed upward) — each threshold notifies AT MOST ONCE per fighter's whole career (models/Fighter.js#markSponsorThresholdNotified), whether the offer it produced was accepted or declined. */
+    SPONSOR_THRESHOLDS: [30, 60, 80],
+    /** Caps how many pending sponsor offers (see MESSAGE_CATEGORIES.SPONSOR_OFFER) one fighter may hold at once — "evite le spam" — without limiting how many already-SIGNED sponsorships (models/Fighter.js#contracts.sponsorships) they can carry. */
+    MAX_ACTIVE_SPONSOR_OFFERS: 2,
+
+    /** Brand pool engine/SponsorEngine.js draws from for individual sponsor offers. */
+    SPONSOR_BRANDS: Object.freeze(['Volt Athletics', 'Monster Energy', 'FightWear']),
+
+    /** A sponsor contract's terms scale with the Hype threshold crossed — a Hype-80 offer pays far more than a Hype-30 one. */
+    SPONSOR_CONTRACT: {
+      FIGHTS_REQUIRED: 3,
+      SIGNING_BONUS_PER_HYPE_POINT: 100,
+      PURSE_PER_FIGHT_PER_HYPE_POINT: 40,
+    },
+  },
+
+  // ---------------------------------------------------------------------
   // TRAINING — camps, drills, attribute gains
   // ---------------------------------------------------------------------
   TRAINING: {

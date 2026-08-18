@@ -820,9 +820,22 @@ export class CombatEngine {
         // finish on top of the base win bonus.
         const finishBonus = byFinish ? BALANCE.CONFIDENCE.EVENTS.WIN_FIGHT_FINISH_BONUS : 0;
         fighter.adjustConfidence(BALANCE.CONFIDENCE.EVENTS.WIN_FIGHT + finishBonus);
+
+        // V4.2 "Migration Hype Individuelle": this fighter's OWN Hype, for
+        // BOTH corners regardless of which gym they belong to — unlike the
+        // gymShare crediting further below, never gated on _isPlayerFighter.
+        // "🔥 Hot Streak" arms only if the ACTUAL post-clamp gain (a
+        // near-MAX fighter may be clamped short of the nominal event value)
+        // clears HOT_STREAK.GAIN_THRESHOLD.
+        const hypeBefore = fighter.attributes.hype;
+        fighter.adjustHype(byFinish ? BALANCE.FIGHTER_HYPE.EVENTS.WIN_FINISH : BALANCE.FIGHTER_HYPE.EVENTS.WIN_DECISION);
+        if (fighter.attributes.hype - hypeBefore > BALANCE.FIGHTER_HYPE.HOT_STREAK.GAIN_THRESHOLD) {
+          fighter.triggerHotStreak(this.worldState ? this.worldState.currentDay : 0);
+        }
       } else if (outcome === 'loss') {
         fighter.adjustMorale(BALANCE.MORALE.EVENTS.LOSE_FIGHT);
         fighter.adjustConfidence(BALANCE.CONFIDENCE.EVENTS.LOSE_FIGHT);
+        fighter.adjustHype(-Math.round(fighter.attributes.hype * BALANCE.FIGHTER_HYPE.EVENTS.LOSS_DECAY_PERCENT));
       }
 
       // Vale Tudo: an extra trait/archetype-driven morale swing from having
@@ -2018,7 +2031,13 @@ export class CombatEngine {
     const leaguePurseMultiplier = this.playerState ? getPurseMultiplier(this.playerState) : 1;
     const combinedPurseMultiplier = c.rules.purseMultiplier * leaguePurseMultiplier;
 
-    const gross = { A: basePurse * combinedPurseMultiplier, B: basePurse * combinedPurseMultiplier };
+    // V4.2 "Migration Hype Individuelle": Purse = BasePurse * (1 + FighterHype/100),
+    // applied PER CORNER on top of the shared event-wide multiplier above —
+    // a famous fighter draws a bigger purse than an unknown even on the same card.
+    const gross = {
+      A: basePurse * combinedPurseMultiplier * (1 + c.fighters.A.attributes.hype / 100),
+      B: basePurse * combinedPurseMultiplier * (1 + c.fighters.B.attributes.hype / 100),
+    };
 
     if (!isDraw) {
       gross[finish.winnerKey] *= econ.WIN_BONUS_MULTIPLIER;

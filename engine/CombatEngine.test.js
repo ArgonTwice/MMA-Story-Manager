@@ -1125,3 +1125,77 @@ test('a chosen directive is consumed after exactly one round — cornerDirective
 
   assert.equal(engine.context.cornerDirectives.A, null, 'the directive must not survive past the round it was chosen for');
 });
+
+// ---- V4.2: individual Fighter Hype ---------------------------------------------
+
+test('post-match Hype follows the documented per-outcome formula for both corners (decision +10 / finish +25 / loss -15%, draw untouched)', () => {
+  const a = makeFighter('Hype A', 55);
+  const b = makeFighter('Hype B', 45);
+  a.adjustHype(40);
+  b.adjustHype(40);
+  const hypeBefore = { A: a.attributes.hype, B: b.attributes.hype };
+
+  const engine = new CombatEngine({ rng: createSeededRng(7) });
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'STRIKING', tempo: 'BALANCED' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'BALANCED' });
+  const result = engine.simulateFullMatch();
+
+  const cfg = BALANCE.FIGHTER_HYPE.EVENTS;
+  const byFinish = !DECISION_METHODS.has(result.method);
+
+  for (const [fighter, key] of [[a, 'A'], [b, 'B']]) {
+    if (result.winner === null) {
+      assert.equal(fighter.attributes.hype, hypeBefore[key], 'a draw must not move Hype for either corner');
+    } else if (result.winner === key) {
+      const expectedGain = byFinish ? cfg.WIN_FINISH : cfg.WIN_DECISION;
+      assert.equal(fighter.attributes.hype, Math.min(BALANCE.FIGHTER_HYPE.MAX, hypeBefore[key] + expectedGain));
+    } else {
+      const expectedLoss = Math.round(hypeBefore[key] * cfg.LOSS_DECAY_PERCENT);
+      assert.equal(fighter.attributes.hype, Math.max(BALANCE.FIGHTER_HYPE.MIN, hypeBefore[key] - expectedLoss));
+    }
+  }
+});
+
+test('a finish win (Hype gain 25 clears HOT_STREAK.GAIN_THRESHOLD 20) arms Hot Streak for the winner; a decision win alone never does', () => {
+  const a = makeFighter('Finish A', 90);
+  const b = makeFighter('Finish B', 10);
+  const engine = new CombatEngine({ rng: createSeededRng(3) });
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  engine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  const result = engine.simulateFullMatch();
+  if (result.winner === null) return; // draw — nothing to assert here, covered by the test above.
+
+  const winner = result.winner === 'A' ? a : b;
+  const byFinish = !DECISION_METHODS.has(result.method);
+  if (byFinish) {
+    assert.notEqual(winner.status.hotStreakUntilDay, null, 'a finish win must arm Hot Streak');
+  } else {
+    assert.equal(winner.status.hotStreakUntilDay, null, 'a decision win alone must never arm Hot Streak');
+  }
+});
+
+test('Purse = BasePurse * (1 + FighterHype/100): an otherwise-identical fight with higher Hype yields a proportionally bigger purse for that corner only, and Hype never influences the fight\'s own resolution', () => {
+  function runFight(hypeA, hypeB) {
+    const a = makeFighter('Purse A', 60);
+    const b = makeFighter('Purse B', 60);
+    a.adjustHype(hypeA);
+    b.adjustHype(hypeB);
+    const engine = new CombatEngine({ rng: createSeededRng(5) });
+    engine.setupMatch(a, b, 'WFC', false);
+    engine.setGameplan('A', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+    engine.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+    return engine.simulateFullMatch();
+  }
+
+  const baseline = runFight(0, 0);
+  const boosted = runFight(50, 0);
+
+  assert.equal(baseline.method, boosted.method, 'Hype must never influence combat resolution itself, only the purse');
+  assert.equal(baseline.winner, boosted.winner);
+  assert.equal(boosted.purses.B.gross, baseline.purses.B.gross, "fighter B's own purse is unaffected by fighter A's Hype");
+  if (baseline.purses.A.gross > 0) {
+    assert.equal(boosted.purses.A.gross, Math.round(baseline.purses.A.gross * 1.5));
+  }
+});

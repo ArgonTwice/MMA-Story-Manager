@@ -518,8 +518,10 @@ function findOrganization(orgId) {
  * organization (ECL/APEX) this fighter isn't already signed to or holding
  * a pending offer from, and has it SEND one (models/Fighter.js
  * #receiveLeagueOffer) the moment either of `offerTriggers`' thresholds is
- * cleared — this fighter's own career.currentWinStreak, OR the gym's own
- * Hype (playerState.hype). No Reputation/Overall requirement exists
+ * cleared — this fighter's own career.currentWinStreak, OR this fighter's
+ * own Hype (fighter.attributes.hype) — V4.2 "Migration Hype Individuelle"
+ * replaces the old gym-wide playerState.hype check here. No Reputation/
+ * Overall requirement exists
  * anymore (see this file's V4.0 header note) — a fighter already signed
  * elsewhere never receives a new offer (mirrors registerForGala's own
  * "one organization at a time" rule). Called once per resolved fight (see
@@ -546,7 +548,7 @@ export function evaluateLeagueOffers(playerState, worldState, fighter) {
 
     const { winStreak, hype } = org.offerTriggers;
     const streakCleared = winStreak != null && fighter.career.currentWinStreak >= winStreak;
-    const hypeCleared = hype != null && playerState.hype >= hype;
+    const hypeCleared = hype != null && fighter.attributes.hype >= hype;
     if (!streakCleared && !hypeCleared) continue;
 
     fighter.receiveLeagueOffer(org.id, org.contract, worldState.currentDay);

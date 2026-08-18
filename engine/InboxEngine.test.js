@@ -12,8 +12,12 @@ import PlayerState from '../state/PlayerState.js';
 import WorldState from '../state/WorldState.js';
 import {
   MESSAGE_CATEGORIES,
+  PRIORITY_LEVELS,
+  PRIORITY_LABELS,
+  getMessagePriority,
   createMessage,
   getMessages,
+  groupMessagesByPriority,
   getUnreadCount,
   markAsRead,
   archiveMessage,
@@ -96,6 +100,56 @@ test('getUnreadCount/markAsRead/archiveMessage behave correctly, including archi
   assert.equal(getUnreadCount(playerState), 1);
   assert.equal(archiveMessage(playerState, second.id), true);
   assert.equal(getUnreadCount(playerState), 0, 'archiving implicitly marks read too');
+});
+
+// ---- V4.2 priority curation ----------------------------------------------------
+
+test('getMessagePriority classifies every category, defaulting unknown ones to INFO', () => {
+  assert.equal(getMessagePriority('CONTRACT_OFFER'), 'PRIORITY');
+  assert.equal(getMessagePriority('SPONSOR_OFFER'), 'PRIORITY');
+  assert.equal(getMessagePriority('TRANSFER_BID'), 'OPPORTUNITY');
+  assert.equal(getMessagePriority('ROSTER_NEWS'), 'INFO');
+  assert.equal(getMessagePriority('NOT_A_CATEGORY'), 'INFO');
+});
+
+test('groupMessagesByPriority always returns all 3 PRIORITY_LEVELS in order, each keeping newest-first ordering', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const worldState = new WorldState();
+  const news1 = createMessage(playerState, worldState, { sender: 'A', category: 'ROSTER_NEWS', title: 't1', body: 'b1' });
+  const contract = createMessage(playerState, worldState, {
+    sender: 'ECL', category: 'CONTRACT_OFFER', title: 't2', body: 'b2', context: { fighterId: 'f1', orgId: 'ECL' },
+  });
+  const sponsor = createMessage(playerState, worldState, {
+    sender: 'Volt Athletics', category: 'SPONSOR_OFFER', title: 't3', body: 'b3', context: { fighterId: 'f1', offerId: 'SPONSOR_30' },
+  });
+  const bid = createMessage(playerState, worldState, { sender: 'Rival', category: 'TRANSFER_BID', title: 't4', body: 'b4' });
+  const news2 = createMessage(playerState, worldState, { sender: 'B', category: 'ROSTER_NEWS', title: 't5', body: 'b5' });
+
+  const groups = groupMessagesByPriority(playerState);
+  assert.deepEqual(groups.map((g) => g.level), PRIORITY_LEVELS);
+  assert.deepEqual(groups.map((g) => g.label), PRIORITY_LEVELS.map((level) => PRIORITY_LABELS[level]));
+
+  const priorityGroup = groups.find((g) => g.level === 'PRIORITY');
+  assert.deepEqual(priorityGroup.messages.map((m) => m.id), [sponsor.id, contract.id], 'newest first within the group');
+
+  const opportunityGroup = groups.find((g) => g.level === 'OPPORTUNITY');
+  assert.deepEqual(opportunityGroup.messages.map((m) => m.id), [bid.id]);
+
+  const infoGroup = groups.find((g) => g.level === 'INFO');
+  assert.deepEqual(infoGroup.messages.map((m) => m.id), [news2.id, news1.id]);
+});
+
+test('groupMessagesByPriority excludes archived messages by default and honors includeArchived', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const worldState = new WorldState();
+  const news = createMessage(playerState, worldState, { sender: 'A', category: 'ROSTER_NEWS', title: 't', body: 'b' });
+  archiveMessage(playerState, news.id);
+
+  const withoutArchived = groupMessagesByPriority(playerState);
+  assert.deepEqual(withoutArchived.find((g) => g.level === 'INFO').messages, []);
+
+  const withArchived = groupMessagesByPriority(playerState, { includeArchived: true });
+  assert.equal(withArchived.find((g) => g.level === 'INFO').messages.length, 1);
 });
 
 // ---- SPONSOR_OFFER ------------------------------------------------------------
@@ -243,4 +297,19 @@ test('resolveAction reports MESSAGE_NOT_FOUND, ALREADY_RESOLVED, and UNSUPPORTED
   const dismissed = createMessage(playerState, worldState, { sender: 'X', category: 'ROSTER_NEWS', title: 't', body: 'b', actions: [{ id: 'DISMISS', label: 'OK' }] });
   archiveMessage(playerState, dismissed.id);
   assert.equal(resolveAction(playerState, worldState, dismissed.id, 'DISMISS').reason, 'ALREADY_RESOLVED');
+});
+
+test('resolveAction routes a V4.2 fighter-level SPONSOR_OFFER (context.fighterId present) to UNSUPPORTED_CATEGORY, leaving it for SponsorEngine.js', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const worldState = new WorldState();
+
+  const fighterSponsorOffer = createMessage(playerState, worldState, {
+    sender: 'Volt Athletics', category: 'SPONSOR_OFFER', title: 't', body: 'b',
+    actions: [{ id: 'ACCEPT', label: 'Signer le sponsor' }, { id: 'DECLINE', label: 'Refuser' }],
+    context: { fighterId: 'f1', offerId: 'SPONSOR_30' },
+  });
+  const result = resolveAction(playerState, worldState, fighterSponsorOffer.id, 'ACCEPT');
+  assert.equal(result.reason, 'UNSUPPORTED_CATEGORY');
+  assert.equal(playerState.money, 25000, 'must not touch money — this is not the gym-wide flow');
+  assert.equal(getMessages(playerState).length, 1, 'left unresolved for the UI to route through SponsorEngine.js');
 });

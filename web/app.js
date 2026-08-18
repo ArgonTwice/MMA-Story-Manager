@@ -63,11 +63,13 @@ import {
 } from '../engine/LeagueEngine.js';
 import {
   getMessages as getInboxMessages,
+  groupMessagesByPriority,
   getUnreadCount as getInboxUnreadCount,
   markAsRead as markInboxMessageAsRead,
   archiveMessage as archiveInboxMessage,
   resolveAction as resolveInboxAction,
 } from '../engine/InboxEngine.js';
+import { evaluateSponsorshipOffers, acceptSponsorshipOffer, declineSponsorshipOffer } from '../engine/SponsorEngine.js';
 import { isTreasuryCrisis, takePredatoryLoan, getFireSalePrice, fireSaleEquipment } from '../engine/EmergencyFinanceEngine.js';
 import { isMainEventEligible, getStances, applyPressConferenceChoice } from '../engine/PressConferenceEngine.js';
 import { HallOfFameEngine, evaluateBadgeUnlocks, generateGoldenBookEntry, getAllBadgeDefinitions } from '../engine/HallOfFameEngine.js';
@@ -96,7 +98,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v4.1';
+const APP_VERSION = 'v4.2';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -431,7 +433,6 @@ class WebApp {
       tbDay: document.getElementById('tbDay'),
       tbMoney: document.getElementById('tbMoney'),
       tbRep: document.getElementById('tbRep'),
-      tbHype: document.getElementById('tbHype'),
       btnMuteToggle: document.getElementById('btnMuteToggle'),
       navInboxBadge: document.getElementById('navInboxBadge'),
       panels: {
@@ -685,7 +686,6 @@ class WebApp {
     this.dom.tbDay.textContent = `Jour ${worldState.currentDay} — ${worldState.season}, an ${worldState.year}`;
     this.dom.tbMoney.textContent = `${Math.round(playerState.money).toLocaleString('fr-FR')}$`;
     this.dom.tbRep.textContent = Math.round(playerState.reputation);
-    this.dom.tbHype.textContent = Math.round(playerState.hype);
     this._updateInboxBadge();
   }
 
@@ -1546,6 +1546,10 @@ class WebApp {
       ]),
       this._buildLeagueStatusBadge(fighter),
       gaugeRow('Loyaute envers le gym', fighter.psychology.loyalty),
+      gaugeRow('Hype', fighter.attributes.hype),
+      fighter.isHotStreakActive(this.gameState.worldState.currentDay)
+        ? el('p', { class: 'fighter-meta', text: '\u{1F525} Hot Streak — la cote de ce combattant explose en ce moment.' })
+        : null,
       el('div', { class: 'trait-list' }, traitBadges),
 
       trophyRows.length > 0 ? el('div', { class: 'card' }, [el('div', { class: 'card-title', text: 'Palmares' }), ...trophyRows]) : null,
@@ -2243,6 +2247,56 @@ class WebApp {
       this._autosave();
     } catch (error) {
       console.error('[web/app.js] _declineLeagueOffer failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Action impossible : ${error.message}`);
+    }
+  }
+
+  /**
+   * V4.2 "Sponsoring Dynamique": accepts/declines a pending individual
+   * sponsor offer (see engine/SponsorEngine.js#acceptSponsorshipOffer/
+   * declineSponsorshipOffer) — the fighter-level SPONSOR_OFFER counterpart
+   * to _acceptLeagueOffer/_declineLeagueOffer above, called only from the
+   * Messagerie's own detail view (see _handleInboxAction, which
+   * distinguishes this from the older gym-wide SPONSOR_OFFER flow by the
+   * presence of message.context.fighterId).
+   */
+  _acceptSponsorshipOffer(fighterId, offerId, messageId) {
+    const { playerState } = this.gameState;
+    try {
+      const result = acceptSponsorshipOffer(playerState, fighterId, offerId);
+      if (!result.success) {
+        this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${result.reason ?? 'raison inconnue.'}`);
+        return;
+      }
+      AudioEngine.playClick();
+      archiveInboxMessage(playerState, messageId);
+      this._showToast(`\u{1F4B0} ${result.sponsorName} : sponsor signe (+${result.terms.signingBonus.toLocaleString('fr-FR')}$, ${result.terms.pursePerFight.toLocaleString('fr-FR')}$/combat, ${result.terms.fightsRequired} combats).`);
+      this._selectedInboxMessageId = null;
+      this._renderTopbar();
+      this._renderRoster();
+      this._renderInbox();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _acceptSponsorshipOffer failed:', error);
+      this._showToast(`\u{26A0}\u{FE0F} Signature impossible : ${error.message}`);
+    }
+  }
+
+  _declineSponsorshipOffer(fighterId, offerId, messageId) {
+    const { playerState } = this.gameState;
+    try {
+      const result = declineSponsorshipOffer(playerState, fighterId, offerId);
+      if (!result.success) {
+        this._showToast('\u{26A0}\u{FE0F} Aucune offre de sponsor en attente.');
+        return;
+      }
+      archiveInboxMessage(playerState, messageId);
+      this._showToast('\u{1F4EC} Offre de sponsor refusee.');
+      this._selectedInboxMessageId = null;
+      this._renderInbox();
+      this._autosave();
+    } catch (error) {
+      console.error('[web/app.js] _declineSponsorshipOffer failed:', error);
       this._showToast(`\u{26A0}\u{FE0F} Action impossible : ${error.message}`);
     }
   }
@@ -3152,13 +3206,34 @@ class WebApp {
       }
     }
 
-    // V4.0/V4.1 "Offres de Contrat Recues": a win streak or enough gym Hype
-    // can have ECL/APEX proactively reach out right after this fight —
+    // V4.0/V4.1 "Offres de Contrat Recues": a win streak or enough fighter
+    // Hype can have ECL/APEX proactively reach out right after this fight —
     // evaluateLeagueOffers itself creates the CONTRACT_OFFER inbox message
     // (see engine/LeagueEngine.js), surfaced via the Messagerie tab's own
     // unread badge rather than interrupting this result screen.
     if (fighterA) {
       evaluateLeagueOffers(this.gameState.playerState, this.gameState.worldState, fighterA);
+    }
+
+    // V4.2 "Sponsoring Dynamique": every active individual sponsorship pays
+    // its pursePerFight for this resolved fight too (win/loss/draw all
+    // count, same convention as consumeExclusivityFight above) — models/
+    // Fighter.js#consumeSponsorshipFights only decrements/drops expired
+    // deals and reports the total owed; crediting it is this call site's job.
+    if (fighterA) {
+      const sponsorshipPurse = fighterA.consumeSponsorshipFights();
+      if (sponsorshipPurse > 0) {
+        this.gameState.playerState.changeMoney(sponsorshipPurse, 'SPONSOR_PURSE_PER_FIGHT');
+      }
+    }
+
+    // V4.2 "Sponsoring Dynamique": this fighter's OWN Hype (just updated by
+    // CombatEngine's post-match rewards) can cross a sponsor threshold right
+    // after this fight — evaluateSponsorshipOffers creates its own
+    // SPONSOR_OFFER inbox message (see engine/SponsorEngine.js), same
+    // "surfaced via the Messagerie tab" pattern as evaluateLeagueOffers above.
+    if (fighterA) {
+      evaluateSponsorshipOffers(this.gameState.playerState, this.gameState.worldState, fighterA);
     }
 
     this._autosave();
@@ -3300,39 +3375,73 @@ class WebApp {
     );
 
     const { playerState } = this.gameState;
-    const messages =
-      this._inboxTab === 'archived'
-        ? getInboxMessages(playerState, { includeArchived: true }).filter((message) => message.isArchived)
-        : getInboxMessages(playerState);
 
+    // V4.2 "Curation Inbox": the Actifs tab groups messages by priority
+    // (🔥 Prioritaire / 💰 Opportunités / ℹ️ Infos — see engine/
+    // InboxEngine.js#groupMessagesByPriority) so contract/sponsor offers
+    // never get buried under routine roster news. The Archives tab stays a
+    // flat newest-first list — priority no longer matters once resolved.
+    if (this._inboxTab !== 'archived') {
+      const groups = groupMessagesByPriority(playerState).filter((group) => group.messages.length > 0);
+
+      if (groups.length === 0) {
+        panel.appendChild(el('p', { text: 'Aucun message pour le moment.' }));
+        return;
+      }
+
+      const list = el('div', { class: 'inbox-list' });
+      let selectedMessage;
+      for (const group of groups) {
+        list.appendChild(el('div', { class: 'inbox-priority-header', text: group.label }));
+        for (const message of group.messages) {
+          list.appendChild(this._buildInboxRow(message));
+          if (message.id === this._selectedInboxMessageId) selectedMessage = message;
+        }
+      }
+      panel.appendChild(list);
+
+      if (!selectedMessage) return;
+      panel.appendChild(this._buildInboxDetail(selectedMessage));
+      return;
+    }
+
+    const messages = getInboxMessages(playerState, { includeArchived: true }).filter((message) => message.isArchived);
     if (messages.length === 0) {
-      panel.appendChild(el('p', { text: this._inboxTab === 'archived' ? 'Aucun message archive.' : 'Aucun message pour le moment.' }));
+      panel.appendChild(el('p', { text: 'Aucun message archive.' }));
       return;
     }
 
     const list = el('div', { class: 'inbox-list' });
     for (const message of messages) {
-      const selected = this._selectedInboxMessageId === message.id;
-      list.appendChild(
-        el(
-          'div',
-          {
-            class: `card inbox-row${selected ? ' selected' : ''}${!message.isRead ? ' unread' : ''}`,
-            onclick: () => this._selectInboxMessage(message.id),
-          },
-          [
-            el('div', { class: 'inbox-row-head' }, [
-              el('span', { text: `${INBOX_CATEGORY_ICONS[message.category] ?? '\u{1F4E9}'} ${message.title}` }),
-            ]),
-            el('div', { class: 'fighter-meta', text: `${message.sender} — Jour ${message.date}` }),
-          ]
-        )
-      );
+      list.appendChild(this._buildInboxRow(message));
     }
     panel.appendChild(list);
 
     const selectedMessage = messages.find((message) => message.id === this._selectedInboxMessageId);
     if (!selectedMessage) return;
+    panel.appendChild(this._buildInboxDetail(selectedMessage));
+  }
+
+  /** V4.2: one clickable Messagerie list row — factored out of _renderInbox so both the priority-grouped Actifs tab and the flat Archives tab share it. */
+  _buildInboxRow(message) {
+    const selected = this._selectedInboxMessageId === message.id;
+    return el(
+      'div',
+      {
+        class: `card inbox-row${selected ? ' selected' : ''}${!message.isRead ? ' unread' : ''}`,
+        onclick: () => this._selectInboxMessage(message.id),
+      },
+      [
+        el('div', { class: 'inbox-row-head' }, [
+          el('span', { text: `${INBOX_CATEGORY_ICONS[message.category] ?? '\u{1F4E9}'} ${message.title}` }),
+        ]),
+        el('div', { class: 'fighter-meta', text: `${message.sender} — Jour ${message.date}` }),
+      ]
+    );
+  }
+
+  /** V4.2: the selected message's detail card + action buttons — factored out of _renderInbox for the same reason as _buildInboxRow. */
+  _buildInboxDetail(selectedMessage) {
 
     const detail = el('div', { class: 'card' }, [
       el('div', { class: 'card-title', text: selectedMessage.title }),
@@ -3352,7 +3461,7 @@ class WebApp {
       }
       detail.appendChild(actionsRow);
     }
-    panel.appendChild(detail);
+    return detail;
   }
 
   _selectInboxMessage(messageId) {
@@ -3377,6 +3486,16 @@ class WebApp {
       else this._declineLeagueOffer(message.context.fighterId, message.context.orgId, { messageId: message.id });
       this._selectedInboxMessageId = null;
       this._renderInbox();
+      return;
+    }
+
+    // V4.2: a fighter-level SPONSOR_OFFER (engine/SponsorEngine.js) shares
+    // the 'SPONSOR_OFFER' category with the older gym-wide flow below —
+    // distinguished by context.fighterId, exactly like engine/InboxEngine.js
+    // #resolveAction itself does (see that function's own header comment).
+    if (message.category === 'SPONSOR_OFFER' && message.context.fighterId != null) {
+      if (actionId === 'ACCEPT') this._acceptSponsorshipOffer(message.context.fighterId, message.context.offerId, message.id);
+      else this._declineSponsorshipOffer(message.context.fighterId, message.context.offerId, message.id);
       return;
     }
 
