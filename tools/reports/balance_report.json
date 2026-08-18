@@ -8,7 +8,7 @@
         0,
         999
       ],
-      "durationMs": 135109
+      "durationMs": 141970
     },
     "economy": {
       "bankruptcyRate": {
@@ -17,24 +17,24 @@
       },
       "cashPercentiles": {
         "year1": {
-          "p10": 74300.63,
-          "p50": 98256.85,
-          "p90": 128649.42999999996
+          "p10": 71681.49,
+          "p50": 98441.26999999999,
+          "p90": 128668.47000000003
         },
         "year3": {
-          "p10": 263573.38000000006,
-          "p50": 331261.07,
-          "p90": 411022.5600000001
+          "p10": 278917.98,
+          "p50": 348481.0499999999,
+          "p90": 430632.2499999999
         },
         "year5": {
-          "p10": 556074.23,
-          "p50": 664868.8400000001,
-          "p90": 800470.9400000004
+          "p10": 603923.5099999997,
+          "p50": 707964.9299999998,
+          "p90": 850550.0500000004
         },
         "year10": {
-          "p10": 1742178.7199999995,
-          "p50": 1955918.0599999998,
-          "p90": 2213521.379999999
+          "p10": 1857937.0800000029,
+          "p50": 2065531.9999999977,
+          "p90": 2344076.5799999987
         }
       },
       "millionaireRateAtYear10": 1
@@ -42,69 +42,69 @@
     "combat": {
       "overallGapMatrix": {
         "0-5": {
-          "fights": 140344,
-          "favoriteWinRate": 0.6245867297497577,
-          "underdogWinRate": 0.3276591802998347,
-          "drawRate": 0.04775408995040757,
+          "fights": 140285,
+          "favoriteWinRate": 0.626531703318245,
+          "underdogWinRate": 0.32582956125031187,
+          "drawRate": 0.04763873543144313,
           "methodShare": {
-            "KO": 0.05334748902696232,
-            "SUBMISSION": 0.20395599384369834,
-            "DECISION": 0.6935601094453628,
-            "OTHER": 0.049136407683976514
+            "KO": 0.05200128310225612,
+            "SUBMISSION": 0.20425562248280288,
+            "DECISION": 0.6946002780054888,
+            "OTHER": 0.049142816409452186
           }
         },
         "6-10": {
-          "fights": 96123,
-          "favoriteWinRate": 0.8431176721492255,
-          "underdogWinRate": 0.12695192617791787,
-          "drawRate": 0.02993040167285665,
+          "fights": 96203,
+          "favoriteWinRate": 0.8441004958265335,
+          "underdogWinRate": 0.1255885991081359,
+          "drawRate": 0.030310905065330605,
           "methodShare": {
-            "KO": 0.08711754730917678,
-            "SUBMISSION": 0.20836844459702672,
-            "DECISION": 0.6699333146073261,
-            "OTHER": 0.03458069348647046
+            "KO": 0.08690997162250658,
+            "SUBMISSION": 0.2109705518538923,
+            "DECISION": 0.6668918848684553,
+            "OTHER": 0.03522759165514589
           }
         },
         "11-20": {
-          "fights": 90486,
-          "favoriteWinRate": 0.949439692328095,
-          "underdogWinRate": 0.03868001679817872,
-          "drawRate": 0.011880290873726322,
+          "fights": 90506,
+          "favoriteWinRate": 0.950312686451727,
+          "underdogWinRate": 0.0377985989879124,
+          "drawRate": 0.01188871456036064,
           "methodShare": {
-            "KO": 0.15521738169440577,
-            "SUBMISSION": 0.22307318259178216,
-            "DECISION": 0.5969652763963486,
-            "OTHER": 0.024744159317463474
+            "KO": 0.15255342187258303,
+            "SUBMISSION": 0.22324486774357502,
+            "DECISION": 0.5999823216140366,
+            "OTHER": 0.024219388769805318
           }
         },
         "21+": {
-          "fights": 11055,
-          "favoriteWinRate": 0.9912256897331524,
-          "underdogWinRate": 0.006512890094979647,
-          "drawRate": 0.002261420171867933,
+          "fights": 11335,
+          "favoriteWinRate": 0.9919717688575209,
+          "underdogWinRate": 0.0061755624172915745,
+          "drawRate": 0.0018526687251874724,
           "methodShare": {
-            "KO": 0.2568973315241972,
-            "SUBMISSION": 0.26503844414292177,
-            "DECISION": 0.4423337856173677,
-            "OTHER": 0.03573043871551334
+            "KO": 0.2612262902514336,
+            "SUBMISSION": 0.2568151742390825,
+            "DECISION": 0.4418173797970887,
+            "OTHER": 0.04014115571239524
           }
         }
       },
       "overallMethodShare": {
-        "KO": 0.0968793638020402,
-        "SUBMISSION": 0.2123263354713498,
-        "DECISION": 0.6527656150150293,
-        "OTHER": 0.038028685711580794
+        "KO": 0.09583571021106674,
+        "SUBMISSION": 0.21300568381664,
+        "DECISION": 0.6529413677219511,
+        "OTHER": 0.03821723825034212
       },
-      "totalFights": 338008,
-      "favoriteWinRateUnderGap20": 0.7787388401391026
+      "totalFights": 338329,
+      "favoriteWinRateUnderGap20": 0.780158045713377
     },
     "mercato": {
-      "avgBuyoutToSalaryRatio": 1.7096890751753322,
-      "buyoutSampleSize": 8500,
-      "poachingRatePerGymYear": 0.0068,
+      "avgBuyoutToSalaryRatio": 1.709696234337021,
+      "buyoutSampleSize": 8495,
+      "poachingRatePerGymYear": 0.0057,
       "prospectRetentionAt3Years": 1,
-      "prospectsEligibleTotal": 19
+      "prospectsEligibleTotal": 20
     },
     "targets": {
       "maxMillionaireRateAtYear10": {
@@ -114,7 +114,7 @@
       },
       "maxFavoriteWinrateUnderGap20": {
         "limit": 0.92,
-        "observed": 0.7787388401391026,
+        "observed": 0.780158045713377,
         "pass": true
       }
     }
@@ -126,13 +126,13 @@
       "changes": [
         {
           "field": "PER_REPUTATION_POINT",
-          "before": 3,
-          "after": 1.5
+          "before": 1.5,
+          "after": 0.75
         },
         {
           "field": "PER_HYPE_POINT",
-          "before": 2,
-          "after": 1
+          "before": 1,
+          "after": 0.5
         }
       ]
     }
@@ -146,7 +146,7 @@
         0,
         999
       ],
-      "durationMs": 134322
+      "durationMs": 144324
     },
     "economy": {
       "bankruptcyRate": {
@@ -155,24 +155,24 @@
       },
       "cashPercentiles": {
         "year1": {
-          "p10": 63560.679999999986,
-          "p50": 86860.09,
-          "p90": 116921.42
+          "p10": 66334.52,
+          "p50": 92845.09000000001,
+          "p90": 122643.47000000002
         },
         "year3": {
-          "p10": 227193.44000000012,
-          "p50": 293513.8500000001,
-          "p90": 373311.30999999976
+          "p10": 260690.8199999999,
+          "p50": 330010.3200000002,
+          "p90": 411708.2499999999
         },
         "year5": {
-          "p10": 493181.23000000004,
-          "p50": 601611.7300000006,
-          "p90": 736826.9400000002
+          "p10": 572425.7599999997,
+          "p50": 676222.4299999999,
+          "p90": 818723.8000000004
         },
         "year10": {
-          "p10": 1614360.579999998,
-          "p50": 1827661.5599999994,
-          "p90": 2084780.5400000012
+          "p10": 1793939.0800000026,
+          "p50": 2001412.2499999977,
+          "p90": 2279643.079999998
         }
       },
       "millionaireRateAtYear10": 1
@@ -180,69 +180,69 @@
     "combat": {
       "overallGapMatrix": {
         "0-5": {
-          "fights": 140345,
-          "favoriteWinRate": 0.6245894046813211,
-          "underdogWinRate": 0.32765684563041075,
-          "drawRate": 0.0477537496882682,
+          "fights": 140285,
+          "favoriteWinRate": 0.626531703318245,
+          "underdogWinRate": 0.32582956125031187,
+          "drawRate": 0.04763873543144313,
           "methodShare": {
-            "KO": 0.05334710891018561,
-            "SUBMISSION": 0.20395454059638748,
-            "DECISION": 0.6935622929210161,
-            "OTHER": 0.049136057572410845
+            "KO": 0.05200128310225612,
+            "SUBMISSION": 0.20425562248280288,
+            "DECISION": 0.6946002780054888,
+            "OTHER": 0.049142816409452186
           }
         },
         "6-10": {
-          "fights": 96122,
-          "favoriteWinRate": 0.8431160400324588,
-          "underdogWinRate": 0.12695324691537838,
-          "drawRate": 0.029930713052162876,
+          "fights": 96203,
+          "favoriteWinRate": 0.8441004958265335,
+          "underdogWinRate": 0.1255885991081359,
+          "drawRate": 0.030310905065330605,
           "methodShare": {
-            "KO": 0.08711845363184287,
-            "SUBMISSION": 0.20837061234680926,
-            "DECISION": 0.6699298807765132,
-            "OTHER": 0.03458105324483469
+            "KO": 0.08690997162250658,
+            "SUBMISSION": 0.2109705518538923,
+            "DECISION": 0.6668918848684553,
+            "OTHER": 0.03522759165514589
           }
         },
         "11-20": {
-          "fights": 90486,
-          "favoriteWinRate": 0.949439692328095,
-          "underdogWinRate": 0.03868001679817872,
-          "drawRate": 0.011880290873726322,
+          "fights": 90506,
+          "favoriteWinRate": 0.950312686451727,
+          "underdogWinRate": 0.0377985989879124,
+          "drawRate": 0.01188871456036064,
           "methodShare": {
-            "KO": 0.15521738169440577,
-            "SUBMISSION": 0.22307318259178216,
-            "DECISION": 0.5969652763963486,
-            "OTHER": 0.024744159317463474
+            "KO": 0.15255342187258303,
+            "SUBMISSION": 0.22324486774357502,
+            "DECISION": 0.5999823216140366,
+            "OTHER": 0.024219388769805318
           }
         },
         "21+": {
-          "fights": 11055,
-          "favoriteWinRate": 0.9912256897331524,
-          "underdogWinRate": 0.006512890094979647,
-          "drawRate": 0.002261420171867933,
+          "fights": 11335,
+          "favoriteWinRate": 0.9919717688575209,
+          "underdogWinRate": 0.0061755624172915745,
+          "drawRate": 0.0018526687251874724,
           "methodShare": {
-            "KO": 0.2568973315241972,
-            "SUBMISSION": 0.26503844414292177,
-            "DECISION": 0.4423337856173677,
-            "OTHER": 0.03573043871551334
+            "KO": 0.2612262902514336,
+            "SUBMISSION": 0.2568151742390825,
+            "DECISION": 0.4418173797970887,
+            "OTHER": 0.04014115571239524
           }
         }
       },
       "overallMethodShare": {
-        "KO": 0.0968793638020402,
-        "SUBMISSION": 0.2123263354713498,
-        "DECISION": 0.6527656150150293,
-        "OTHER": 0.038028685711580794
+        "KO": 0.09583571021106674,
+        "SUBMISSION": 0.21300568381664,
+        "DECISION": 0.6529413677219511,
+        "OTHER": 0.03821723825034212
       },
-      "totalFights": 338008,
-      "favoriteWinRateUnderGap20": 0.7787388401391026
+      "totalFights": 338329,
+      "favoriteWinRateUnderGap20": 0.780158045713377
     },
     "mercato": {
-      "avgBuyoutToSalaryRatio": 1.7096890751753322,
-      "buyoutSampleSize": 8500,
-      "poachingRatePerGymYear": 0.0068,
+      "avgBuyoutToSalaryRatio": 1.709696234337021,
+      "buyoutSampleSize": 8495,
+      "poachingRatePerGymYear": 0.0057,
       "prospectRetentionAt3Years": 1,
-      "prospectsEligibleTotal": 19
+      "prospectsEligibleTotal": 20
     },
     "targets": {
       "maxMillionaireRateAtYear10": {
@@ -252,7 +252,7 @@
       },
       "maxFavoriteWinrateUnderGap20": {
         "limit": 0.92,
-        "observed": 0.7787388401391026,
+        "observed": 0.780158045713377,
         "pass": true
       }
     }
