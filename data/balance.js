@@ -2574,6 +2574,27 @@ const BALANCE = {
       /** Additional chance per point of Loyalty BELOW the threshold (the lower it is, the more likely). */
       CHANCE_PER_LOYALTY_POINT_BELOW_THRESHOLD: 0.006,
     },
+
+    /**
+     * "Debauchage Rival": weekly evaluation of the PLAYER'S OWN roster by
+     * rival gyms (see engine/MercatoEngine.js#isRivalTransferTarget/
+     * computeRivalTransferValue) — a fighter becomes a bid target once
+     * their Hype, win streak, or a title clears one of these bars. Distinct
+     * from POACHING above (an automatic Loyalty-driven departure with no
+     * player choice) — a rival transfer bid is always a message the
+     * manager can Accepter/Refuser/Contre-proposer (see
+     * engine/InboxEngine.js's own TRANSFER_BID, BALANCE.INBOX.TRANSFER_BID).
+     */
+    RIVAL_TRANSFER_TARGET: {
+      HYPE_THRESHOLD: 50,
+      WIN_STREAK_THRESHOLD: 3,
+      /** BaseValue = Overall*OVERALL_MULTIPLIER + Hype*HYPE_MULTIPLIER. */
+      OVERALL_MULTIPLIER: 200,
+      HYPE_MULTIPLIER: 150,
+      /** The "Contre-proposition +25%" inbox action multiplies the original offer by this, with COUNTER_OFFER_ACCEPT_CHANCE odds the rival AI accepts it outright rather than walking away. */
+      COUNTER_OFFER_MULTIPLIER: 1.25,
+      COUNTER_OFFER_ACCEPT_CHANCE: 0.5,
+    },
   },
 
   // ---------------------------------------------------------------------
@@ -2879,17 +2900,17 @@ const BALANCE = {
       HYPE_BONUS: 4,
     },
 
-    /** A rival gym proposing to buy one of the player's OWN fighters — the inverse of engine/MercatoEngine.js#buyoutRivalFighter (player buys FROM a rival), using that same file's computeBuyoutFee() for a consistent price. Distinct from POACHING (BALANCE.MERCATO.POACHING, an automatic Loyalty-driven departure with no player choice) — a TRANSFER_BID is always a message the manager can Accepter/Refuser. */
+    /** A rival gym proposing to buy one of the player's OWN fighters — the inverse of engine/MercatoEngine.js#buyoutRivalFighter (player buys FROM a rival). Eligibility and BaseValue now come from BALANCE.MERCATO.RIVAL_TRANSFER_TARGET (see engine/MercatoEngine.js#isRivalTransferTarget/computeRivalTransferValue) rather than a flat rating floor. Distinct from POACHING (BALANCE.MERCATO.POACHING, an automatic Loyalty-driven departure with no player choice) — a TRANSFER_BID is always a message the manager can Accepter/Refuser/Contre-proposer. */
     TRANSFER_BID: {
       /** Rolled once per eligible fighter per week. */
       WEEKLY_CHANCE_PER_FIGHTER: 0.03,
-      /** Only fighters worth a rival's attention generate bids. */
-      MIN_OVERALL: 45,
     },
 
     ROSTER_NEWS: {
       /** Below this Loyalty, a fighter's discontent becomes an inbox alert — mirrors CORNER_COACHING.REFUSAL's own LOYALTY_THRESHOLD precedent for "a fighter is unhappy" (35), reused here for consistency rather than inventing a second number. */
       LOW_LOYALTY_THRESHOLD: 35,
+      /** "Envie de depart": a fighter whose own Hype (Fighter#attributes.hype, both 0-100) clears the gym's own Reputation by at least this many points has outgrown the gym — a second, independent "wants to leave" trigger alongside LOW_LOYALTY_THRESHOLD above (see engine/InboxEngine.js#evaluateRosterNews / engine/MercatoEngine.js#fighterWantsToLeave, which OR's the two). */
+      HYPE_OUTGROWS_GYM_GAP: 30,
     },
   },
 };

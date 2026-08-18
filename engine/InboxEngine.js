@@ -19,15 +19,19 @@
  *     BALANCE.INBOX.SPONSOR_OFFER config is a separate, additive channel.
  *   - TRANSFER_BID: a rival gym proposing to BUY one of the player's own
  *     fighters (see evaluateTransferBids) — the inverse of engine/
- *     MercatoEngine.js#buyoutRivalFighter (player buys FROM a rival),
- *     reusing that file's own computeBuyoutFee() for a consistent price.
- *     Distinct from BALANCE.MERCATO.POACHING (engine/MercatoEngine.js
- *     #rollWeeklyPoaching), which silently removes a low-Loyalty fighter
- *     with no player choice at all — a TRANSFER_BID always waits for a
- *     decision.
+ *     MercatoEngine.js#buyoutRivalFighter (player buys FROM a rival).
+ *     V4.3 "Debauchage Rival" reworked eligibility/pricing to read off
+ *     engine/MercatoEngine.js#isRivalTransferTarget/computeRivalTransferValue
+ *     (Hype/win-streak/title, not a flat rating floor) and added a
+ *     Contre-proposition action (see resolveTransferBid). Distinct from
+ *     BALANCE.MERCATO.POACHING (engine/MercatoEngine.js#rollWeeklyPoaching),
+ *     which silently removes a low-Loyalty fighter with no player choice at
+ *     all — a TRANSFER_BID always waits for a decision.
  *   - ROSTER_NEWS: informational alerts about the player's own roster (see
- *     evaluateRosterNews) — today just a low-Loyalty warning, dismissed
- *     rather than acted on.
+ *     evaluateRosterNews) — a low-Loyalty warning, and (V4.3) an "envie de
+ *     depart" alert once a fighter's own Hype has outgrown the gym's own
+ *     Reputation (engine/MercatoEngine.js#fighterWantsToLeave) — both
+ *     dismissed rather than acted on.
  *
  * Every message shares one shape: { id, date, sender, category, title,
  * body, actions, context, isRead, isArchived }. `actions` is a list of
@@ -40,7 +44,7 @@
  */
 
 import BALANCE from '../data/balance.js';
-import { computeBuyoutFee } from './MercatoEngine.js';
+import { isRivalTransferTarget, computeRivalTransferValue, fighterWantsToLeave } from './MercatoEngine.js';
 
 /** The only valid PlayerState#inbox message categories — see this file's own header for what each means. */
 export const MESSAGE_CATEGORIES = Object.freeze(['CONTRACT_OFFER', 'SPONSOR_OFFER', 'TRANSFER_BID', 'ROSTER_NEWS']);
@@ -48,12 +52,12 @@ export const MESSAGE_CATEGORIES = Object.freeze(['CONTRACT_OFFER', 'SPONSOR_OFFE
 /**
  * V4.2 "Curation Inbox": every message category maps to one of three
  * priority buckets, in display order — 🔥 Prioritaire (offers that gate a
- * fighter's career: league contracts and sponsorships), 💰 Opportunités
- * (a rival's cash offer for a roster fighter), ℹ️ Infos (informational,
- * nothing to sign). Both CONTRACT_OFFER and SPONSOR_OFFER share the
- * PRIORITY bucket regardless of which SPONSOR_OFFER flow produced them
- * (this file's own gym-wide evaluateSponsorOffers, or engine/
- * SponsorEngine.js's individual fighter offers).
+ * fighter's career: league contracts, sponsorships, and — V4.3 — rival
+ * transfer bids), 💰 Opportunités (reserved for a future lower-urgency
+ * cash-opportunity category), ℹ️ Infos (informational, nothing to sign).
+ * CONTRACT_OFFER, SPONSOR_OFFER, and TRANSFER_BID all share the PRIORITY
+ * bucket — a transfer bid is time-boxed and moves real money, same urgency
+ * class as a contract/sponsor offer (see this file's header note).
  */
 export const PRIORITY_LEVELS = Object.freeze(['PRIORITY', 'OPPORTUNITY', 'INFO']);
 
@@ -66,7 +70,7 @@ export const PRIORITY_LABELS = Object.freeze({
 const CATEGORY_PRIORITY = Object.freeze({
   CONTRACT_OFFER: 'PRIORITY',
   SPONSOR_OFFER: 'PRIORITY',
-  TRANSFER_BID: 'OPPORTUNITY',
+  TRANSFER_BID: 'PRIORITY',
   ROSTER_NEWS: 'INFO',
 });
 
@@ -189,10 +193,33 @@ function resolveSponsorOffer(playerState, message, actionId) {
 
 // ---- TRANSFER_BID -------------------------------------------------------------
 
+/** Builds the "Motivation du combattant" line — see evaluateTransferBids. */
+function describeMotivation(fighter, wantsToLeave, reason) {
+  if (wantsToLeave) {
+    return `${fighter.identity.name} n'est plus epanoui(e) dans la salle et pourrait bien accepter de partir.`;
+  }
+  const byReason = {
+    HYPE: `${fighter.identity.name} attire les regards avec sa Hype montante, mais reste attache(e) a la salle.`,
+    WIN_STREAK: `${fighter.identity.name} enchaine les victoires et fait tourner les tetes, mais reste attache(e) a la salle.`,
+    TITLE: `${fighter.identity.name} porte fierement son titre, mais reste attache(e) a la salle.`,
+  };
+  return byReason[reason] ?? `${fighter.identity.name} reste attache(e) a la salle malgre l'interet exterieur.`;
+}
+
+/** @returns {'HYPE'|'WIN_STREAK'|'TITLE'} Which BALANCE.MERCATO.RIVAL_TRANSFER_TARGET trigger this fighter cleared — for the message's own flavor text (see describeMotivation). Checked in the same precedence order as isRivalTransferTarget(). */
+function describeTransferReason(fighter) {
+  const cfg = BALANCE.MERCATO.RIVAL_TRANSFER_TARGET;
+  if (fighter.attributes.hype > cfg.HYPE_THRESHOLD) return 'HYPE';
+  if (fighter.career.currentWinStreak >= cfg.WIN_STREAK_THRESHOLD) return 'WIN_STREAK';
+  return 'TITLE';
+}
+
 /**
- * Weekly chance a rival gym bids to buy one of the player's own fighters —
- * see this file's header for how this differs from POACHING. At most one
- * bid is created per call (kept rare and readable, one at a time).
+ * "Debauchage Rival" (V4.3): weekly evaluation of the player's OWN roster
+ * by rival gyms — see this file's header and engine/MercatoEngine.js
+ * #isRivalTransferTarget/computeRivalTransferValue for the eligibility/
+ * pricing rules. At most one bid is created per call (kept rare and
+ * readable, one at a time, same precedent as the pre-V4.3 version).
  * @returns {Object|null} The created message, or null if none fired.
  */
 export function evaluateTransferBids(playerState, worldState, rng = Math.random) {
@@ -201,7 +228,7 @@ export function evaluateTransferBids(playerState, worldState, rng = Math.random)
 
   const candidates = playerState.roster.filter(
     (fighter) =>
-      fighter.getOverallRating() >= cfg.MIN_OVERALL &&
+      isRivalTransferTarget(fighter) &&
       !playerState.inbox.some((m) => m.category === 'TRANSFER_BID' && !m.isArchived && m.context.fighterId === fighter.identity.id)
   );
 
@@ -209,55 +236,112 @@ export function evaluateTransferBids(playerState, worldState, rng = Math.random)
     if (rng() >= cfg.WEEKLY_CHANCE_PER_FIGHTER) continue;
 
     const gym = worldState.rivalGyms[Math.floor(rng() * worldState.rivalGyms.length)];
-    const fee = computeBuyoutFee(fighter);
+    const fee = computeRivalTransferValue(fighter);
     const gymLabel = gym.name ?? gym.id;
+    const wantsToLeave = fighterWantsToLeave(fighter, playerState);
+    const motivation = describeMotivation(fighter, wantsToLeave, describeTransferReason(fighter));
 
     return createMessage(playerState, worldState, {
       sender: gymLabel,
       category: 'TRANSFER_BID',
       title: `Offre de rachat pour ${fighter.identity.name}`,
-      body: `${gymLabel} propose ${fee.toLocaleString('fr-FR')}$ pour recruter ${fighter.identity.name} dans son roster.`,
+      body: `${gymLabel} propose ${fee.toLocaleString('fr-FR')}$ pour recruter ${fighter.identity.name} dans son roster. ${motivation}`,
       actions: [
-        { id: 'ACCEPT', label: 'Vendre' },
-        { id: 'DECLINE', label: 'Garder' },
+        { id: 'ACCEPT', label: 'Accepter le transfert' },
+        { id: 'COUNTER', label: 'Contre-proposition +25%' },
+        { id: 'DECLINE', label: 'Refuser' },
       ],
-      context: { fighterId: fighter.identity.id, fighterName: fighter.identity.name, gymId: gym.id, fee },
+      context: { fighterId: fighter.identity.id, fighterName: fighter.identity.name, gymId: gym.id, fee, wantsToLeave },
     });
   }
 
   return null;
 }
 
-function resolveTransferBid(playerState, worldState, message, actionId) {
+/** Moves `fighter` from PlayerState#roster onto rival gym `gymId`'s own roster and credits `fee` — shared by resolveTransferBid's ACCEPT and accepted-COUNTER paths. */
+function sellFighterToRival(playerState, worldState, fighter, gymId, fee, reason) {
+  const gym = worldState.rivalGyms.find((entry) => entry.id === gymId);
+  playerState.removeFighter(fighter.identity.id);
+  if (gym) {
+    fighter.contracts.currentContract = { leagueId: null, gymId: gym.id, signedYear: worldState.year, expiresYear: worldState.year + 1 };
+    worldState.updateRivalGym(gym.id, { roster: [...(gym.roster ?? []), fighter.toJSON()] });
+  }
+  playerState.changeMoney(fee, reason);
+}
+
+/**
+ * V4.3: resolves ACCEPT/DECLINE/COUNTER on a TRANSFER_BID.
+ *   - ACCEPT: sells the fighter for the offer's own `fee`.
+ *   - DECLINE: keeps the fighter; if context.wantsToLeave (see
+ *     engine/MercatoEngine.js#fighterWantsToLeave, snapshotted onto the
+ *     message when it was created), knocks -5 Loyalty — refusing a fighter
+ *     who already wanted to go costs their trust.
+ *   - COUNTER: "Contre-proposition +25%" — COUNTER_OFFER_ACCEPT_CHANCE odds
+ *     the rival AI accepts fee*COUNTER_OFFER_MULTIPLIER outright (sells at
+ *     the bumped fee); otherwise the rival walks away (message archived,
+ *     fighter stays, no money changes hands, no Loyalty penalty — the
+ *     player tried to negotiate rather than refusing outright).
+ */
+function resolveTransferBid(playerState, worldState, message, actionId, rng = Math.random) {
+  const { fighterId, fee, wantsToLeave } = message.context;
+
   if (actionId === 'ACCEPT') {
-    const fighter = playerState.getFighter(message.context.fighterId);
+    const fighter = playerState.getFighter(fighterId);
     if (!fighter) {
       playerState.archiveInboxMessage(message.id);
       return { success: false, reason: 'FIGHTER_NOT_FOUND' };
     }
-
-    const gym = worldState.rivalGyms.find((entry) => entry.id === message.context.gymId);
-    playerState.removeFighter(fighter.identity.id);
-    if (gym) {
-      fighter.contracts.currentContract = { leagueId: null, gymId: gym.id, signedYear: worldState.year, expiresYear: worldState.year + 1 };
-      worldState.updateRivalGym(gym.id, { roster: [...(gym.roster ?? []), fighter.toJSON()] });
-    }
-    playerState.changeMoney(message.context.fee, 'INBOX:TRANSFER_BID_ACCEPTED');
+    sellFighterToRival(playerState, worldState, fighter, message.context.gymId, fee, 'INBOX:TRANSFER_BID_ACCEPTED');
     playerState.archiveInboxMessage(message.id);
-    return { success: true, fee: message.context.fee };
+    return { success: true, applied: true, fee };
   }
 
+  if (actionId === 'COUNTER') {
+    const fighter = playerState.getFighter(fighterId);
+    if (!fighter) {
+      playerState.archiveInboxMessage(message.id);
+      return { success: false, reason: 'FIGHTER_NOT_FOUND' };
+    }
+    const cfg = BALANCE.MERCATO.RIVAL_TRANSFER_TARGET;
+    const counterFee = Math.round(fee * cfg.COUNTER_OFFER_MULTIPLIER);
+    const accepted = rng() < cfg.COUNTER_OFFER_ACCEPT_CHANCE;
+    playerState.archiveInboxMessage(message.id);
+    if (!accepted) return { success: true, applied: false, countered: true, accepted: false };
+
+    sellFighterToRival(playerState, worldState, fighter, message.context.gymId, counterFee, 'INBOX:TRANSFER_BID_COUNTERED');
+    return { success: true, applied: true, countered: true, accepted: true, fee: counterFee };
+  }
+
+  // DECLINE (or any other action id defaults to a decline).
+  if (wantsToLeave) {
+    const fighter = playerState.getFighter(fighterId);
+    fighter?.adjustLoyalty(-5);
+  }
   playerState.archiveInboxMessage(message.id);
-  return { success: true, applied: false };
+  return { success: true, applied: false, loyaltyPenalty: Boolean(wantsToLeave) };
 }
 
 // ---- ROSTER_NEWS ----------------------------------------------------------------
 
+/** @returns {boolean} True if an unarchived ROSTER_NEWS alert of this alertType already exists for this fighter — shared dedup check for both alert kinds below. */
+function alreadyAlerted(playerState, fighterId, alertType) {
+  return playerState.inbox.some(
+    (m) => m.category === 'ROSTER_NEWS' && !m.isArchived && m.context.fighterId === fighterId && m.context.alertType === alertType
+  );
+}
+
 /**
- * Checks every roster fighter's Loyalty against LOW_LOYALTY_THRESHOLD and
- * sends one informational alert per fighter (never duplicated while an
- * unarchived alert for that fighter already exists — dismiss it to allow a
- * fresh one later).
+ * Checks every roster fighter against two independent "envie de depart"
+ * triggers and sends at most one alert per fighter per trigger (never
+ * duplicated while an unarchived alert of that alertType already exists —
+ * dismiss it to allow a fresh one later):
+ *   - LOW_LOYALTY: Loyalty below ROSTER_NEWS.LOW_LOYALTY_THRESHOLD.
+ *   - HYPE_OUTGROWS_GYM (V4.3): the fighter's own Hype has cleared the
+ *     gym's own Reputation by ROSTER_NEWS.HYPE_OUTGROWS_GYM_GAP points or
+ *     more — a star who has outgrown their own gym.
+ * Both conditions are also engine/MercatoEngine.js#fighterWantsToLeave's
+ * own definition of "wants to leave", reused by resolveTransferBid's own
+ * DECLINE Loyalty-penalty branch.
  * @returns {Object[]} Every message created this call.
  */
 export function evaluateRosterNews(playerState, worldState) {
@@ -265,22 +349,34 @@ export function evaluateRosterNews(playerState, worldState) {
   const created = [];
 
   for (const fighter of playerState.roster) {
-    if (fighter.psychology.loyalty >= cfg.LOW_LOYALTY_THRESHOLD) continue;
+    if (fighter.psychology.loyalty < cfg.LOW_LOYALTY_THRESHOLD && !alreadyAlerted(playerState, fighter.identity.id, 'LOW_LOYALTY')) {
+      created.push(
+        createMessage(playerState, worldState, {
+          sender: 'Vestiaire',
+          category: 'ROSTER_NEWS',
+          title: `Loyaute en baisse : ${fighter.identity.name}`,
+          body: `${fighter.identity.name} exprime des doutes sur son avenir dans la salle (Loyaute : ${Math.round(fighter.psychology.loyalty)}). Un rival pourrait en profiter.`,
+          actions: [{ id: 'DISMISS', label: 'Pris note' }],
+          context: { fighterId: fighter.identity.id, alertType: 'LOW_LOYALTY' },
+        })
+      );
+    }
 
-    const alreadyAlerted = playerState.inbox.some(
-      (m) => m.category === 'ROSTER_NEWS' && !m.isArchived && m.context.fighterId === fighter.identity.id && m.context.alertType === 'LOW_LOYALTY'
-    );
-    if (alreadyAlerted) continue;
-
-    const message = createMessage(playerState, worldState, {
-      sender: 'Vestiaire',
-      category: 'ROSTER_NEWS',
-      title: `Loyaute en baisse : ${fighter.identity.name}`,
-      body: `${fighter.identity.name} exprime des doutes sur son avenir dans la salle (Loyaute : ${Math.round(fighter.psychology.loyalty)}). Un rival pourrait en profiter.`,
-      actions: [{ id: 'DISMISS', label: 'Pris note' }],
-      context: { fighterId: fighter.identity.id, alertType: 'LOW_LOYALTY' },
-    });
-    created.push(message);
+    if (
+      fighter.attributes.hype - playerState.reputation >= cfg.HYPE_OUTGROWS_GYM_GAP &&
+      !alreadyAlerted(playerState, fighter.identity.id, 'HYPE_OUTGROWS_GYM')
+    ) {
+      created.push(
+        createMessage(playerState, worldState, {
+          sender: 'Vestiaire',
+          category: 'ROSTER_NEWS',
+          title: `Envie de depart : ${fighter.identity.name}`,
+          body: `${fighter.identity.name} (Hype ${Math.round(fighter.attributes.hype)}) a depasse la reputation de la salle (${Math.round(playerState.reputation)}) — des rivaux pourraient bientot faire une offre.`,
+          actions: [{ id: 'DISMISS', label: 'Pris note' }],
+          context: { fighterId: fighter.identity.id, alertType: 'HYPE_OUTGROWS_GYM' },
+        })
+      );
+    }
   }
 
   return created;
@@ -311,15 +407,16 @@ export function evaluateRosterNews(playerState, worldState) {
  * @param {Object} worldState
  * @param {string} messageId
  * @param {string} actionId
+ * @param {() => number} [rng] - Only consulted by TRANSFER_BID's COUNTER action (see resolveTransferBid).
  * @returns {{ success: boolean, reason?: string }}
  */
-export function resolveAction(playerState, worldState, messageId, actionId) {
+export function resolveAction(playerState, worldState, messageId, actionId, rng = Math.random) {
   const message = playerState.inbox.find((entry) => entry.id === messageId);
   if (!message) return { success: false, reason: 'MESSAGE_NOT_FOUND' };
   if (message.isArchived) return { success: false, reason: 'ALREADY_RESOLVED' };
 
   if (message.category === 'SPONSOR_OFFER' && message.context.fighterId == null) return resolveSponsorOffer(playerState, message, actionId);
-  if (message.category === 'TRANSFER_BID') return resolveTransferBid(playerState, worldState, message, actionId);
+  if (message.category === 'TRANSFER_BID') return resolveTransferBid(playerState, worldState, message, actionId, rng);
   if (message.category === 'ROSTER_NEWS') {
     playerState.archiveInboxMessage(message.id);
     return { success: true };

@@ -98,7 +98,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v4.2';
+const APP_VERSION = 'v4.3';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -3509,8 +3509,20 @@ class WebApp {
       AudioEngine.playClick();
       if (message.category === 'SPONSOR_OFFER' && result.applied) {
         this._showToast(`\u{1F4B0} Sponsoring accepte : +${message.context.amount.toLocaleString('fr-FR')}$, +${message.context.hypeBonus} Hype.`);
-      } else if (message.category === 'TRANSFER_BID' && result.fee) {
+      } else if (message.category === 'TRANSFER_BID' && actionId === 'ACCEPT') {
         this._showToast(`\u{1F4B8} ${message.context.fighterName} vendu pour ${result.fee.toLocaleString('fr-FR')}$.`);
+      } else if (message.category === 'TRANSFER_BID' && actionId === 'COUNTER') {
+        this._showToast(
+          result.accepted
+            ? `\u{1F4B8} Contre-proposition acceptee : ${message.context.fighterName} vendu pour ${result.fee.toLocaleString('fr-FR')}$.`
+            : `\u{1F91D} Le rival refuse la contre-proposition et retire son offre.`
+        );
+      } else if (message.category === 'TRANSFER_BID' && actionId === 'DECLINE') {
+        this._showToast(
+          result.loyaltyPenalty
+            ? `\u{1F4C9} Offre refusee — ${message.context.fighterName} en veut a la salle (Loyaute -5).`
+            : `\u{1F4ED} Offre de transfert refusee.`
+        );
       } else {
         this._showToast('\u{1F4ED} Message traite.');
       }

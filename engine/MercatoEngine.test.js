@@ -16,6 +16,9 @@ import {
   computeBuyoutFee,
   buyoutRivalFighter,
   rollWeeklyPoaching,
+  isRivalTransferTarget,
+  computeRivalTransferValue,
+  fighterWantsToLeave,
 } from './MercatoEngine.js';
 
 function seededRng(seed) {
@@ -201,4 +204,53 @@ test('a low-loyalty fighter is safe when the roll misses', () => {
   const poached = rollWeeklyPoaching(player, world, () => 0.999); // always beats no positive chance
   assert.deepEqual(poached, []);
   assert.equal(player.roster.length, 1);
+});
+
+// ---- V4.3 "Debauchage Rival" -------------------------------------------------
+
+test('isRivalTransferTarget clears on Hype, win streak, OR a title, independently — and stays false for a plain fighter', () => {
+  const cfg = BALANCE.MERCATO.RIVAL_TRANSFER_TARGET;
+  const plain = new Fighter({ identity: { id: 'f1', name: 'Plain', gender: 'M', weightClass: 'Poids Welter' } });
+  assert.equal(isRivalTransferTarget(plain), false);
+
+  const hyped = new Fighter({ identity: { id: 'f2', name: 'Hyped', gender: 'M', weightClass: 'Poids Welter' }, attributes: { hype: cfg.HYPE_THRESHOLD + 1 } });
+  assert.equal(isRivalTransferTarget(hyped), true);
+  const notQuiteHyped = new Fighter({ identity: { id: 'f2b', name: 'NotQuite', gender: 'M', weightClass: 'Poids Welter' }, attributes: { hype: cfg.HYPE_THRESHOLD } });
+  assert.equal(isRivalTransferTarget(notQuiteHyped), false, 'the threshold itself is exclusive (>), not inclusive');
+
+  const streaker = new Fighter({ identity: { id: 'f3', name: 'Streaker', gender: 'M', weightClass: 'Poids Welter' } });
+  for (let i = 0; i < cfg.WIN_STREAK_THRESHOLD; i += 1) streaker.recordFightResult({ outcome: 'win' });
+  assert.equal(isRivalTransferTarget(streaker), true);
+
+  const champion = new Fighter({ identity: { id: 'f4', name: 'Champion', gender: 'M', weightClass: 'Poids Welter' } });
+  champion.recordFightResult({ outcome: 'win', titleWon: 'ECL_WELTER' });
+  assert.equal(isRivalTransferTarget(champion), true);
+});
+
+test('computeRivalTransferValue matches BaseValue = Overall*OVERALL_MULTIPLIER + Hype*HYPE_MULTIPLIER', () => {
+  const cfg = BALANCE.MERCATO.RIVAL_TRANSFER_TARGET;
+  const fighter = new Fighter({
+    identity: { id: 'f1', name: 'F1', gender: 'M', weightClass: 'Poids Welter' },
+    attributes: { skills: { boxe: 70, jambes: 70, sol: 70, soumission: 70, cardio: 70, intelligence: 70 }, hype: 65 },
+  });
+  const expected = Math.round(fighter.getOverallRating() * cfg.OVERALL_MULTIPLIER + 65 * cfg.HYPE_MULTIPLIER);
+  assert.equal(computeRivalTransferValue(fighter), expected);
+});
+
+test('fighterWantsToLeave is true below LOW_LOYALTY_THRESHOLD OR once Hype clears Reputation by HYPE_OUTGROWS_GYM_GAP, and false otherwise', () => {
+  const roomCfg = BALANCE.INBOX.ROSTER_NEWS;
+  const player = new PlayerState({ money: 1000, reputation: 50 });
+
+  const content = new Fighter({ identity: { id: 'f1', name: 'Content', gender: 'M', weightClass: 'Poids Welter' } });
+  assert.equal(fighterWantsToLeave(content, player), false);
+
+  const unhappy = new Fighter({ identity: { id: 'f2', name: 'Unhappy', gender: 'M', weightClass: 'Poids Welter' } });
+  unhappy.adjustLoyalty(roomCfg.LOW_LOYALTY_THRESHOLD - 1 - unhappy.psychology.loyalty);
+  assert.equal(fighterWantsToLeave(unhappy, player), true);
+
+  const outgrown = new Fighter({
+    identity: { id: 'f3', name: 'Outgrown', gender: 'M', weightClass: 'Poids Welter' },
+    attributes: { hype: player.reputation + roomCfg.HYPE_OUTGROWS_GYM_GAP },
+  });
+  assert.equal(fighterWantsToLeave(outgrown, player), true);
 });

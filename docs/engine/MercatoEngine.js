@@ -173,4 +173,67 @@ export function rollWeeklyPoaching(playerState, worldState, rng = Math.random) {
   return poached;
 }
 
-export default { getScoutableGyms, sendScout, computeBuyoutFee, buyoutRivalFighter, rollWeeklyPoaching };
+/**
+ * "Debauchage Rival": does this roster fighter's Hype, win streak, or a
+ * held title make them worth a rival gym's attention? See
+ * BALANCE.MERCATO.RIVAL_TRANSFER_TARGET — the sole eligibility gate for
+ * engine/InboxEngine.js#evaluateTransferBids (V4.3 rework; replaces the
+ * old flat MIN_OVERALL floor).
+ * @param {Fighter} fighter
+ * @returns {boolean}
+ */
+export function isRivalTransferTarget(fighter) {
+  const cfg = BALANCE.MERCATO.RIVAL_TRANSFER_TARGET;
+  return (
+    fighter.attributes.hype > cfg.HYPE_THRESHOLD ||
+    fighter.career.currentWinStreak >= cfg.WIN_STREAK_THRESHOLD ||
+    fighter.isChampion()
+  );
+}
+
+/**
+ * "Debauchage Rival": BaseValue = Overall*OVERALL_MULTIPLIER +
+ * Hype*HYPE_MULTIPLIER — the transfer amount a rival gym opens with for an
+ * isRivalTransferTarget() fighter (see BALANCE.MERCATO.RIVAL_TRANSFER_TARGET).
+ * Deliberately a different formula from computeBuyoutFee() above (that one
+ * prices the PLAYER buying FROM a rival off RECRUITMENT_MARKET's own
+ * exponential signing-cost curve; this one prices a RIVAL buying the
+ * player's fighter off Hype/Overall directly, per the spec's own formula).
+ * @param {Fighter} fighter
+ * @returns {number}
+ */
+export function computeRivalTransferValue(fighter) {
+  const cfg = BALANCE.MERCATO.RIVAL_TRANSFER_TARGET;
+  return Math.round(fighter.getOverallRating() * cfg.OVERALL_MULTIPLIER + fighter.attributes.hype * cfg.HYPE_MULTIPLIER);
+}
+
+/**
+ * "Envie de depart": does this fighter already want to leave the gym,
+ * independent of any transfer bid? True below BALANCE.INBOX.ROSTER_NEWS
+ * .LOW_LOYALTY_THRESHOLD, or once Hype clears the gym's own Reputation by
+ * at least HYPE_OUTGROWS_GYM_GAP points — the same two conditions
+ * engine/InboxEngine.js#evaluateRosterNews alerts on, reused here so a
+ * TRANSFER_BID decline only costs Loyalty when the fighter was already
+ * unhappy (see resolveTransferBid's own DECLINE branch).
+ * @param {Fighter} fighter
+ * @param {Object} playerState
+ * @returns {boolean}
+ */
+export function fighterWantsToLeave(fighter, playerState) {
+  const cfg = BALANCE.INBOX.ROSTER_NEWS;
+  return (
+    fighter.psychology.loyalty < cfg.LOW_LOYALTY_THRESHOLD ||
+    fighter.attributes.hype - playerState.reputation >= cfg.HYPE_OUTGROWS_GYM_GAP
+  );
+}
+
+export default {
+  getScoutableGyms,
+  sendScout,
+  computeBuyoutFee,
+  buyoutRivalFighter,
+  rollWeeklyPoaching,
+  isRivalTransferTarget,
+  computeRivalTransferValue,
+  fighterWantsToLeave,
+};
