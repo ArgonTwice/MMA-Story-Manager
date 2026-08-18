@@ -165,7 +165,7 @@ test('groupMessagesByPriority excludes archived messages by default and honors i
 // ---- SPONSOR_OFFER ------------------------------------------------------------
 
 test('evaluateSponsorOffers only fires below WEEKLY_CHANCE, and resolveAction ACCEPT/DECLINE behave correctly', () => {
-  const playerState = new PlayerState({ money: 25000, hype: 10 });
+  const playerState = new PlayerState({ money: 25000, reputation: 10 });
   const worldState = new WorldState();
   const cfg = BALANCE.INBOX.SPONSOR_OFFER;
 
@@ -177,17 +177,17 @@ test('evaluateSponsorOffers only fires below WEEKLY_CHANCE, and resolveAction AC
   assert.ok(message.context.amount >= cfg.MIN_AMOUNT);
 
   const moneyBefore = playerState.money;
-  const hypeBefore = playerState.hype;
+  const reputationBefore = playerState.reputation;
   const result = resolveAction(playerState, worldState, message.id, 'ACCEPT');
   assert.equal(result.success, true);
   assert.equal(playerState.money, moneyBefore + message.context.amount);
-  assert.equal(playerState.hype, hypeBefore + cfg.HYPE_BONUS);
+  assert.equal(playerState.reputation, reputationBefore + cfg.REPUTATION_BONUS);
   assert.equal(getMessages(playerState).length, 0, 'accepted offer is archived');
 
   const second = createMessage(playerState, worldState, {
     sender: 'X', category: 'SPONSOR_OFFER', title: 't', body: 'b',
     actions: [{ id: 'ACCEPT', label: 'Accepter' }, { id: 'DECLINE', label: 'Refuser' }],
-    context: { amount: 500, hypeBonus: 2 },
+    context: { amount: 500, reputationBonus: 2 },
   });
   const moneyBeforeDecline = playerState.money;
   const declineResult = resolveAction(playerState, worldState, second.id, 'DECLINE');

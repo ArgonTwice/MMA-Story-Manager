@@ -98,7 +98,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v4.3';
+const APP_VERSION = 'v4.4';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -527,8 +527,10 @@ class WebApp {
    * V3.5: applies exactly one BALANCE.MANAGER_BACKGROUNDS bonus, read from
    * the checked radio in the "Nouvelle Partie" form — called once, right
    * after gameState.newGame() constructs a fresh PlayerState. Each
-   * background hands out a single kind of bonus (money/hype/reputation),
-   * never combined.
+   * background hands out a single kind of bonus (money/reputation), never
+   * combined. V4.4 "Nettoyage Hype du Gym": the FIGHTER background used to
+   * grant gym-wide Hype — redirected to Reputation so no visible bonus
+   * touches the retired gym-Hype stat anymore.
    */
   _applyManagerBackground() {
     const checked = this.dom.managerBackgroundChoice.querySelector('input[name="managerBackground"]:checked');
@@ -537,7 +539,6 @@ class WebApp {
 
     const { playerState } = this.gameState;
     if (background.moneyBonus) playerState.changeMoney(background.moneyBonus, `MANAGER_BACKGROUND:${background.id}`);
-    if (background.hypeBonus) playerState.changeHype(background.hypeBonus, `MANAGER_BACKGROUND:${background.id}`);
     if (background.reputationBonus) playerState.changeReputation(background.reputationBonus, `MANAGER_BACKGROUND:${background.id}`);
   }
 
@@ -732,7 +733,6 @@ class WebApp {
         el('ul', { class: 'stat-grid' }, [
           el('li', { class: 'stat-tile' }, [el('span', { class: 'stat-label', text: 'Tresorerie' }), el('span', { class: 'stat-value', text: `${Math.round(snapshot.gym.money).toLocaleString('fr-FR')}$` })]),
           el('li', { class: 'stat-tile' }, [el('span', { class: 'stat-label', text: 'Reputation' }), el('span', { class: 'stat-value', text: `${Math.round(snapshot.gym.reputation)}` })]),
-          el('li', { class: 'stat-tile' }, [el('span', { class: 'stat-label', text: 'Hype' }), el('span', { class: 'stat-value', text: `${Math.round(snapshot.gym.hype)}` })]),
         ]),
       ])
     );
@@ -1803,7 +1803,7 @@ class WebApp {
         author: 'Rumeur de Mercato',
         authorType: 'JOURNALIST',
         text: `${signing.gymName} vient de signer ${signing.fighterName}.`,
-        likes: Math.round(5 + playerState.hype * 0.3),
+        likes: Math.round(5 + playerState.reputation * 0.3),
       });
     }
   }
@@ -2062,7 +2062,7 @@ class WebApp {
         } else {
           rows.push(
             el('p', {
-              text: `En attente d'une offre de ${org.label}\u{2026} enchainez les victoires ou faites grimper la Hype de la salle pour attirer leur attention.`,
+              text: `En attente d'une offre de ${org.label}\u{2026} enchainez les victoires ou faites grimper la Hype de ${selectedFighter.identity.name} pour attirer leur attention.`,
             })
           );
         }
@@ -3508,7 +3508,7 @@ class WebApp {
 
       AudioEngine.playClick();
       if (message.category === 'SPONSOR_OFFER' && result.applied) {
-        this._showToast(`\u{1F4B0} Sponsoring accepte : +${message.context.amount.toLocaleString('fr-FR')}$, +${message.context.hypeBonus} Hype.`);
+        this._showToast(`\u{1F4B0} Sponsoring accepte : +${message.context.amount.toLocaleString('fr-FR')}$, +${message.context.reputationBonus} Reputation.`);
       } else if (message.category === 'TRANSFER_BID' && actionId === 'ACCEPT') {
         this._showToast(`\u{1F4B8} ${message.context.fighterName} vendu pour ${result.fee.toLocaleString('fr-FR')}$.`);
       } else if (message.category === 'TRANSFER_BID' && actionId === 'COUNTER') {

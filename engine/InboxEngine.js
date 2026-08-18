@@ -10,8 +10,10 @@
  *     (V4.0) — a league (ECL/APEX) proposing to sign a fighter. Resolved by
  *     that same file's acceptLeagueOffer/declineLeagueOffer; this module
  *     never touches league contracts itself (see resolveAction's own note).
- *   - SPONSOR_OFFER: a new, independent weekly-chance cash+Hype offer (see
- *     evaluateSponsorOffers) — deliberately NOT the same mechanic as the
+ *   - SPONSOR_OFFER: a new, independent weekly-chance cash+Reputation offer
+ *     (see evaluateSponsorOffers; V4.4 "Nettoyage Hype du Gym" redirected
+ *     its reward off the retired gym-Hype stat onto Reputation) —
+ *     deliberately NOT the same mechanic as the
  *     pre-existing BALANCE.NARRATIVE_EVENTS.SPONSOR_OFFER (engine/
  *     EventEngine.js, auto-applies with no player choice) or BALANCE.DRAMA's
  *     own weighted-lottery SPONSOR_OFFER choice (engine/DramaEngine.js) —
@@ -157,9 +159,12 @@ export function archiveMessage(playerState, messageId) {
 // ---- SPONSOR_OFFER -----------------------------------------------------------
 
 /**
- * Weekly chance of an independent sponsor cash+Hype offer — see this
+ * Weekly chance of an independent sponsor cash+Reputation offer — see this
  * file's header for why this is a separate channel from the two
- * pre-existing sponsor mechanics.
+ * pre-existing sponsor mechanics. V4.4 "Nettoyage Hype du Gym": this used
+ * to grant gym-wide Hype; redirected to Reputation so no visible reward
+ * touches the retired gym-Hype stat anymore (see BALANCE.INBOX
+ * .SPONSOR_OFFER.REPUTATION_BONUS).
  * @returns {Object|null} The created message, or null if it didn't fire.
  */
 export function evaluateSponsorOffers(playerState, worldState, rng = Math.random) {
@@ -173,19 +178,19 @@ export function evaluateSponsorOffers(playerState, worldState, rng = Math.random
     sender: sponsor,
     category: 'SPONSOR_OFFER',
     title: `Proposition de sponsoring de ${sponsor}`,
-    body: `${sponsor} propose ${amount.toLocaleString('fr-FR')}$ et +${cfg.HYPE_BONUS} de Hype en echange d'une mise en avant de votre salle.`,
+    body: `${sponsor} propose ${amount.toLocaleString('fr-FR')}$ et +${cfg.REPUTATION_BONUS} de Reputation en echange d'une mise en avant de votre salle.`,
     actions: [
       { id: 'ACCEPT', label: 'Accepter' },
       { id: 'DECLINE', label: 'Refuser' },
     ],
-    context: { amount, hypeBonus: cfg.HYPE_BONUS },
+    context: { amount, reputationBonus: cfg.REPUTATION_BONUS },
   });
 }
 
 function resolveSponsorOffer(playerState, message, actionId) {
   if (actionId === 'ACCEPT') {
     playerState.changeMoney(message.context.amount, 'INBOX:SPONSOR_OFFER_ACCEPTED');
-    playerState.changeHype(message.context.hypeBonus, 'INBOX:SPONSOR_OFFER_ACCEPTED');
+    playerState.changeReputation(message.context.reputationBonus, 'INBOX:SPONSOR_OFFER_ACCEPTED');
   }
   playerState.archiveInboxMessage(message.id);
   return { success: true, applied: actionId === 'ACCEPT' };
@@ -394,9 +399,9 @@ export function evaluateRosterNews(playerState, worldState) {
  *
  * V4.2: the SAME 'SPONSOR_OFFER' category now covers two independent
  * flows — this file's own gym-wide evaluateSponsorOffers (context:
- * {amount, hypeBonus}, resolved below by resolveSponsorOffer) and engine/
- * SponsorEngine.js's individual fighter sponsorships (context:
- * {fighterId, offerId}, no amount/hypeBonus). The latter is deliberately
+ * {amount, reputationBonus}, resolved below by resolveSponsorOffer) and
+ * engine/SponsorEngine.js's individual fighter sponsorships (context:
+ * {fighterId, offerId}, no amount/reputationBonus). The latter is deliberately
  * NOT handled here either, for the same reason as CONTRACT_OFFER — this
  * module never imports engine/SponsorEngine.js (that file imports THIS
  * one). A UI acting on a fighter-level SPONSOR_OFFER (context.fighterId

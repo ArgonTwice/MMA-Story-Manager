@@ -2364,7 +2364,7 @@ const BALANCE = {
     DYNASTIE: { id: 'DYNASTIE', label: 'Dynastie', description: 'Un combattant a decroche 3 titres au cours de sa carriere.', icon: '\u{1F3F0}' },
     UPSET_DU_SIECLE: { id: 'UPSET_DU_SIECLE', label: 'Upset du Siecle', description: 'Victoire ecrasante contre un adversaire largement mieux note.', icon: '\u{1F4A5}' },
     MILLIONNAIRE: { id: 'MILLIONNAIRE', label: 'Millionnaire', description: 'Tresorerie de la salle a atteint 1 000 000$.', icon: '\u{1F4B0}' },
-    ICONE_MEDIATIQUE: { id: 'ICONE_MEDIATIQUE', label: 'Icone Mediatique', description: 'Le Hype de la salle a atteint son maximum.', icon: '\u{1F4F8}' },
+    ICONE_MEDIATIQUE: { id: 'ICONE_MEDIATIQUE', label: 'Icone Mediatique', description: 'Un combattant du roster a atteint le maximum de Hype individuelle.', icon: '\u{1F4F8}' },
     RESEAU_ETABLI: { id: 'RESEAU_ETABLI', label: 'Reseau Etabli', description: 'Le fil Reseaux a accumule au moins 50 publications.', icon: '\u{1F4F1}' },
     EMPIRE_IMMOBILIER: { id: 'EMPIRE_IMMOBILIER', label: 'Empire Immobilier', description: "La salle a atteint le palier Academie Elite.", icon: '\u{1F3DB}\u{FE0F}' },
     ARSENAL_COMPLET: { id: 'ARSENAL_COMPLET', label: 'Arsenal Complet', description: "Tout le catalogue d'equipements est possede.", icon: '\u{1F6E0}\u{FE0F}' },
@@ -2452,8 +2452,8 @@ const BALANCE = {
     FIGHTER: {
       id: 'FIGHTER',
       label: 'Ancien Combattant',
-      description: 'Un nom deja connu du public : +15 de Hype de depart.',
-      hypeBonus: 15,
+      description: 'Un nom deja connu du public : +15 de Reputation de depart.',
+      reputationBonus: 15,
     },
     COACH: {
       id: 'COACH',
@@ -2893,11 +2893,12 @@ const BALANCE = {
     /** Max number of messages kept in PlayerState.inbox (oldest entries are trimmed, archived or not) — same precedent as SOCIAL_MEDIA.FEED_HISTORY_LIMIT. */
     MESSAGE_HISTORY_LIMIT: 60,
 
+    /** V4.4 "Nettoyage Hype du Gym": REPUTATION_BONUS replaces the old HYPE_BONUS — this gym-wide offer no longer touches the retired gym-Hype stat. */
     SPONSOR_OFFER: {
       WEEKLY_CHANCE: 0.12,
       MIN_AMOUNT: 800,
       MAX_AMOUNT: 4000,
-      HYPE_BONUS: 4,
+      REPUTATION_BONUS: 4,
     },
 
     /** A rival gym proposing to buy one of the player's OWN fighters — the inverse of engine/MercatoEngine.js#buyoutRivalFighter (player buys FROM a rival). Eligibility and BaseValue now come from BALANCE.MERCATO.RIVAL_TRANSFER_TARGET (see engine/MercatoEngine.js#isRivalTransferTarget/computeRivalTransferValue) rather than a flat rating floor. Distinct from POACHING (BALANCE.MERCATO.POACHING, an automatic Loyalty-driven departure with no player choice) — a TRANSFER_BID is always a message the manager can Accepter/Refuser/Contre-proposer. */

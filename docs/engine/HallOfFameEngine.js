@@ -49,7 +49,8 @@ const THRESHOLD_EVALUATORS = Object.freeze({
     worldState.hallOfFame.some((entry) => entry.titles?.length >= 1),
   DYNASTIE: ({ playerState }) => playerState.roster.some((fighter) => fighter.career.titles.length >= 3),
   MILLIONNAIRE: ({ playerState }) => playerState.money >= 1_000_000,
-  ICONE_MEDIATIQUE: ({ playerState }) => playerState.hype >= BALANCE.GYM.HYPE.MAX,
+  /** V4.4 "Nettoyage Hype du Gym": redirected off the retired gym-wide Hype display onto a fighter's own individual Hype (models/Fighter.js#attributes.hype) — same substitution rule as web/app.js's own UI cleanup, "Hype moyenne/individuelle du Roster" replacing "Hype de la salle" wherever a UI-visible condition used to read the gym-wide stat. */
+  ICONE_MEDIATIQUE: ({ playerState }) => playerState.roster.some((fighter) => fighter.attributes.hype >= BALANCE.FIGHTER_HYPE.MAX),
   RESEAU_ETABLI: ({ playerState }) => playerState.socialFeed.length >= 50,
   EMPIRE_IMMOBILIER: ({ playerState }) => playerState.equipLevel >= BALANCE.GYM.TIERS.length - 1,
   ARSENAL_COMPLET: ({ playerState }) => {

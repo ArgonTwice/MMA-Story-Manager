@@ -66,6 +66,20 @@ test('MILLIONNAIRE unlocks once money reaches 1,000,000$, and stays unlocked eve
   assert.ok(playerState.unlockedBadges.includes('MILLIONNAIRE'), 'badge should remain unlocked permanently');
 });
 
+test('ICONE_MEDIATIQUE unlocks once a roster fighter\'s OWN Hype reaches FIGHTER_HYPE.MAX (V4.4: redirected off the retired gym-wide Hype stat)', () => {
+  const playerState = new PlayerState({ money: 25000 });
+  const worldState = new WorldState();
+  const fighter = makeFighter();
+  playerState.addFighter(fighter);
+
+  evaluateBadgeUnlocks(playerState, worldState);
+  assert.ok(!playerState.unlockedBadges.includes('ICONE_MEDIATIQUE'), 'not yet at max individual Hype');
+
+  fighter.adjustHype(BALANCE.FIGHTER_HYPE.MAX);
+  evaluateBadgeUnlocks(playerState, worldState);
+  assert.ok(playerState.unlockedBadges.includes('ICONE_MEDIATIQUE'));
+});
+
 test('a badge is never unlocked twice — a second evaluateBadgeUnlocks call on an already-qualifying state returns nothing new', () => {
   const playerState = new PlayerState({ money: 25000 });
   const worldState = new WorldState();

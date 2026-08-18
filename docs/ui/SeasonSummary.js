@@ -65,7 +65,6 @@ export class SeasonSummary {
       endDay: this.worldState.currentDay,
       money: { start: startMoney, end: this.playerState.money, netChange: netMoneyChange },
       reputation: this.playerState.reputation,
-      hype: this.playerState.hype,
       fights: { total: fightResults.length, byMethod: methodCounts },
       dramaEventsResolved,
       retirements: retirements.map((r) => ({
@@ -100,7 +99,7 @@ export class SeasonSummary {
     const netChangeText =
       summary.money.netChange === null ? '' : ` (${summary.money.netChange >= 0 ? '+' : ''}${Math.round(summary.money.netChange)}$)`;
     lines.push(`Tresorerie : ${summary.money.start ?? '?'}$ -> ${summary.money.end}$${netChangeText}`);
-    lines.push(`Reputation : ${summary.reputation}  |  Hype : ${summary.hype}`);
+    lines.push(`Reputation : ${summary.reputation}`);
     const methodsText = Object.entries(summary.fights.byMethod)
       .map(([method, count]) => `${method}=${count}`)
       .join(', ');
