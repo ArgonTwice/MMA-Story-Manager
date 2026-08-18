@@ -1199,3 +1199,42 @@ test('Purse = BasePurse * (1 + FighterHype/100): an otherwise-identical fight wi
     assert.equal(boosted.purses.A.gross, Math.round(baseline.purses.A.gross * 1.5));
   }
 });
+
+test('V4.5: both corners take Physical/Mental Fatigue proportional to how far the fight went, and are flagged needsRestAfterFight, win/loss/draw alike', () => {
+  const a = makeFighter('Fatigue A', 60);
+  const b = makeFighter('Fatigue B', 60);
+  const engine = new CombatEngine({ rng: createSeededRng(7) });
+  engine.setupMatch(a, b, 'WFC', false);
+  engine.setGameplan('A', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.setGameplan('B', { target: 'BODY', distance: 'STRIKING', tempo: 'CONSERVATIVE' });
+  engine.simulateFullMatch();
+
+  const cfg = BALANCE.COMBAT.POST_FIGHT_FATIGUE;
+  for (const fighter of [a, b]) {
+    assert.ok(fighter.attributes.physicalFatigue >= cfg.PHYSICAL_FATIGUE_MIN, 'even a 1-round finish must cost at least the minimum');
+    assert.ok(fighter.attributes.physicalFatigue <= cfg.PHYSICAL_FATIGUE_MAX);
+    assert.ok(fighter.attributes.mentalFatigue >= cfg.MENTAL_FATIGUE_MIN);
+    assert.ok(fighter.attributes.mentalFatigue <= cfg.MENTAL_FATIGUE_MAX);
+    assert.equal(fighter.status.needsRestAfterFight, true, 'every fighter who just fought must be flagged for a required rest slot, regardless of outcome');
+  }
+});
+
+test('V4.5: post-fight fatigue scales linearly with finish.round / maxRounds — a full-distance decision costs the max, a round-1 finish costs proportionally less', () => {
+  const cfg = BALANCE.COMBAT.POST_FIGHT_FATIGUE;
+
+  const flashA = makeFighter('Flash A', 95);
+  const flashB = makeFighter('Flash B', 5);
+  const flashEngine = new CombatEngine({ rng: createSeededRng(11) });
+  flashEngine.setupMatch(flashA, flashB, 'WFC', false);
+  flashEngine.setGameplan('A', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  flashEngine.setGameplan('B', { target: 'HEAD', distance: 'STRIKING', tempo: 'AGGRESSIVE' });
+  const flashResult = flashEngine.simulateFullMatch();
+
+  const maxRounds = flashEngine.context.maxRounds;
+  const expectedFraction = Math.min(1, flashResult.round / maxRounds);
+  const expectedPhysical = Math.round(
+    cfg.PHYSICAL_FATIGUE_MIN + (cfg.PHYSICAL_FATIGUE_MAX - cfg.PHYSICAL_FATIGUE_MIN) * expectedFraction
+  );
+  assert.equal(flashA.attributes.physicalFatigue, expectedPhysical);
+  assert.equal(flashB.attributes.physicalFatigue, expectedPhysical);
+});

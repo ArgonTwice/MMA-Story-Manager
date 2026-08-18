@@ -66,13 +66,25 @@ function rollPotentialTier(rng) {
  * fixed rng — does not touch PlayerState/WorldState beyond reading from
  * them, and never adds anything to the roster.
  *
+ * V4.5 "Correctifs Critiques": promoting an academy pick is free (no
+ * signing cost), but the fighter still draws a real weekly wage from day
+ * one like any other roster member — priced off the SAME rating-based
+ * curve BALANCE.RECRUITMENT_MARKET.SALARY_RATIO_OF_COST already uses for
+ * every other recruitment channel (Recruitment Market, Mercato Scout),
+ * just never actually charged as an upfront cost here. Before this, an
+ * academy pick's Fighter#weeklySalary defaulted to 0 (models/Fighter.js's
+ * own `config.weeklySalary ?? 0`), silently understating "Salaires
+ * combattants" in the weekly economy report for what is, for many
+ * players, their very first roster fighter.
+ *
  * @param {Object} options
  * @param {Object} options.playerState - A PlayerState instance (reads .reputation/.equipLevel only).
  * @param {() => number} [options.rng] - Random source in [0, 1). Defaults to Math.random.
- * @returns {{ fighter: Fighter, potentialKey: string, potentialLabel: string }[]}
+ * @returns {{ fighter: Fighter, potentialKey: string, potentialLabel: string, weeklySalary: number }[]}
  */
 export function generateAcademyPool({ playerState, rng = Math.random }) {
   const cfg = BALANCE.ACADEMY_DRAFT;
+  const salaryCfg = BALANCE.RECRUITMENT_MARKET;
   const poolSize = cfg.POOL_SIZE_MIN + Math.floor(rng() * (cfg.POOL_SIZE_MAX - cfg.POOL_SIZE_MIN + 1));
 
   const overallBase = computeAcademyOverallBase(playerState.reputation, playerState.equipLevel);
@@ -103,7 +115,10 @@ export function generateAcademyPool({ playerState, rng = Math.random }) {
       psychology: { personality: generatePersonality(rng) },
     });
 
-    pool.push({ fighter, potentialKey: potential.key, potentialLabel: potential.label });
+    const notionalCost = Math.max(salaryCfg.MIN_COST, salaryCfg.COST_BASE * salaryCfg.COST_GROWTH_PER_RATING_POINT ** fighter.getOverallRating());
+    const weeklySalary = Math.round(notionalCost * salaryCfg.SALARY_RATIO_OF_COST);
+
+    pool.push({ fighter, potentialKey: potential.key, potentialLabel: potential.label, weeklySalary });
   }
 
   return pool;

@@ -170,6 +170,15 @@ export function selectEligibleDramaEvent(playerState, worldState, rng) {
  * shared by both the headless auto-pick path (resolveOneEvent below) and an
  * interactive caller applying a human-picked choice.
  *
+ * V4.5 "Impact Deciseur des Evenements Hebdomadaires": the report now also
+ * carries fighterName/choiceLabel/effects — every choice in data/events.js
+ * now applies at least one real effect (see this file's own EFFECT_APPLIERS
+ * and the catalog itself), and a UI needs these three fields to build an
+ * explicit "here's what just happened" notification instead of silently
+ * applying the choice with no visible confirmation (see web/app.js
+ * #_completeWeek's own dramaReport toast, the only consumer that reads
+ * `effects` off this report).
+ *
  * @param {Object} selection - A selectEligibleDramaEvent() result.
  * @param {string} choiceId - One of selection.event.choices[*].id.
  * @returns {Object} The resolution report.
@@ -190,7 +199,10 @@ export function applyDramaEventChoice(selection, choiceId) {
     eventId: event.id,
     category: event.category,
     fighterId: fighter.identity.id,
+    fighterName: fighter.identity.name,
     choiceId: choice.id,
+    choiceLabel: choice.label,
+    effects: choice.effects,
     day: worldState.currentDay,
   };
   EventBus.publish(DRAMA_ENGINE_EVENTS.RESOLVED, report);

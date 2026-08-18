@@ -301,7 +301,7 @@ export const DRAMA_EVENTS = Object.freeze([
       {
         id: 'PASS',
         label: 'Decliner l\'offre',
-        effects: [],
+        effects: [{ type: 'ADJUST_MORALE', target: 'fighter', amount: -2 }],
       },
     ],
   }),
@@ -412,7 +412,7 @@ export const DRAMA_EVENTS = Object.freeze([
       {
         id: 'WAIT',
         label: 'Attendre une meilleure occasion',
-        effects: [],
+        effects: [{ type: 'CHANGE_REPUTATION', amount: -1 }],
       },
     ],
   }),

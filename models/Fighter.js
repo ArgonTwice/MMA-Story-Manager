@@ -333,6 +333,8 @@ export class Fighter {
       hotStreakUntilDay: config.status?.hotStreakUntilDay ?? null,
       /** V4.2 "Sponsoring Dynamique": every BALANCE.FIGHTER_HYPE.SPONSOR_THRESHOLDS value that has ever produced a sponsor offer for this fighter — see markSponsorThresholdNotified()/hasBeenNotifiedForSponsorThreshold(). Permanent: crossing the same threshold again later never re-offers it. */
       notifiedSponsorThresholds: config.status?.notifiedSponsorThresholds ? [...config.status.notifiedSponsorThresholds] : [],
+      /** V4.5 "Fatigue Post-Combat Realiste": set by CombatEngine#_processPostMatchRewards right after a resolved fight — cleared by ui/WeeklyFlowController.js#resolveWeek once the player has actually scheduled a PHYSIO_REST slot for this fighter. See ui/WeeklyFlowController.js#getFightersNeedingRest, the "oblige le joueur a programmer un creneau Repos apres un gala" gate. */
+      needsRestAfterFight: config.status?.needsRestAfterFight ?? false,
     };
 
     /** Unlocked traits (e.g. "Iron Chin", "Killer Instinct"). Plain id strings. */
@@ -796,6 +798,16 @@ export class Fighter {
     return this.status.hotStreakUntilDay !== null && currentDay < this.status.hotStreakUntilDay;
   }
 
+  /** V4.5: flags this fighter as needing a scheduled PHYSIO_REST slot before the player's next week resolves — see CombatEngine#_processPostMatchRewards (the only caller) and ui/WeeklyFlowController.js#getFightersNeedingRest. */
+  flagNeedsRestAfterFight() {
+    this.status.needsRestAfterFight = true;
+  }
+
+  /** V4.5: clears the post-fight rest requirement once a PHYSIO_REST slot has actually been scheduled — see ui/WeeklyFlowController.js#resolveWeek (the only caller). */
+  clearNeedsRestAfterFight() {
+    this.status.needsRestAfterFight = false;
+  }
+
   /** @returns {boolean} True if this Hype threshold has already produced a sponsor offer for this fighter (accepted or declined — either way, it's used up). */
   hasBeenNotifiedForSponsorThreshold(threshold) {
     return this.status.notifiedSponsorThresholds.includes(threshold);
@@ -1061,6 +1073,7 @@ export class Fighter {
       status: {
         hotStreakUntilDay: this.status.hotStreakUntilDay,
         notifiedSponsorThresholds: [...this.status.notifiedSponsorThresholds],
+        needsRestAfterFight: this.status.needsRestAfterFight,
       },
       perks: [...this.perks],
       training: { ...this.training },

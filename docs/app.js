@@ -98,7 +98,7 @@ import {
 const AUTOSAVE_SLOT = 'web-autosave';
 const ONBOARDING_SEEN_KEY = 'mma_gym_manager.onboarding_seen';
 /** V3.7: shown small/discreet on the start screen and in the topbar header — lets a tester eyeball whether their PWA cache is actually serving the latest deploy (see index.html's own reload-on-new-service-worker note). */
-const APP_VERSION = 'v4.4';
+const APP_VERSION = 'v4.5';
 
 // ---- Underground Circuit: challenge catalog (V3.5: "Underground Pur") -----------
 
@@ -303,6 +303,52 @@ function gaugeRow(label, value, options = {}) {
     el('div', { class: 'gauge-bar' }, [el('div', { class: `gauge-fill ${gaugeClass(value, options)}`, style: `width:${v}%` })]),
     el('span', { class: 'gauge-value', text: `${v}` }),
   ]);
+}
+
+/**
+ * V4.5 "Impact Deciseur des Evenements Hebdomadaires": turns a resolved
+ * Drama Engine choice's own effects (see engine/DramaEngine.js
+ * #applyDramaEventChoice) into short, explicit French fragments for
+ * _completeWeek's own toast — "every choice must show what it actually
+ * did" per the spec. CHANGE_HYPE is deliberately never rendered here — it
+ * still moves the retired gym-wide Hype stat internally (untouched, same
+ * V4.2/V4.4 scoping), but V4.4 "Nettoyage Hype du Gym" retired every
+ * gym-Hype UI reference, so this toast stays silent on it too.
+ * @param {Object[]} effects
+ * @returns {string[]}
+ */
+function describeDramaEffects(effects) {
+  const parts = [];
+  for (const effect of effects) {
+    const amount = effect.amount;
+    const sign = amount >= 0 ? '+' : '';
+    switch (effect.type) {
+      case 'CHANGE_MONEY':
+        parts.push(`${sign}${amount.toLocaleString('fr-FR')}$`);
+        break;
+      case 'CHANGE_REPUTATION':
+        parts.push(`${sign}${amount} Reputation`);
+        break;
+      case 'ADJUST_PHYSICAL_FATIGUE':
+        parts.push(`${sign}${amount} Fatigue P.`);
+        break;
+      case 'ADJUST_MENTAL_FATIGUE':
+        parts.push(`${sign}${amount} Fatigue M.`);
+        break;
+      case 'ADJUST_MORALE':
+        parts.push(`${sign}${amount} Moral`);
+        break;
+      case 'ADJUST_LOYALTY':
+        parts.push(`${sign}${amount} Loyaute`);
+        break;
+      case 'DEGRADE_LOW_QUALITY_EQUIPMENT':
+        parts.push('equipement degrade');
+        break;
+      default:
+        break;
+    }
+  }
+  return parts;
 }
 
 // ---- reactive engine lifecycle (mirrors App.js/tools/play-vertical-slice.js) --
@@ -1694,10 +1740,12 @@ class WebApp {
       })
     );
 
+    const restRequiredIds = new Set(this.weeklyFlow.getFightersNeedingRest().map((entry) => entry.fighterId));
     const options = this.weeklyFlow.getPlanningOptions();
     for (const option of options) {
+      const needsRestLabel = !option.injured && restRequiredIds.has(option.fighterId) ? ' (repos requis apres le gala)' : '';
       const card = el('div', { class: 'card' }, [
-        el('div', { class: 'card-title', text: `${option.name}${option.injured ? ' (blesse — repos force)' : ''}` }),
+        el('div', { class: 'card-title', text: `${option.name}${option.injured ? ' (blesse — repos force)' : needsRestLabel}` }),
       ]);
 
       for (let slot = 0; slot < BALANCE.WEEKLY_PLANNING.SLOTS_PER_WEEK; slot += 1) {
@@ -1745,7 +1793,22 @@ class WebApp {
     );
   }
 
+  /**
+   * V4.5 "Fatigue Post-Combat Realiste": before resolving anything, refuses
+   * to proceed while any fighter CombatEngine flagged after their last
+   * fight (see Fighter#status.needsRestAfterFight) still doesn't have a
+   * PHYSIO_REST slot in their plan — "oblige le joueur a programmer un
+   * creneau Repos/Soins apres un gala" rather than letting them pile
+   * straight back into a full training week with zero recovery.
+   */
   _resolveWeek() {
+    const needingRest = this.weeklyFlow.getFightersNeedingRest();
+    if (needingRest.length > 0) {
+      const names = needingRest.map((entry) => entry.name).join(', ');
+      this._showToast(`\u{1FA79} Repos requis avant de resoudre la semaine : programmez un creneau Repos/Soins pour ${names}.`);
+      return;
+    }
+
     const result = this.weeklyFlow.resolveWeek();
     if (result.phase === WEEKLY_FLOW_PHASES.DRAMA_CHOICE) {
       this._showDramaModal(result.dramaPrompt);
@@ -1822,6 +1885,11 @@ class WebApp {
 
     const summary = result.weekSummary;
     const bits = [];
+    if (result.dramaReport) {
+      const dr = result.dramaReport;
+      const effectsText = describeDramaEffects(dr.effects ?? []);
+      bits.push(`\u{1F3AD} ${dr.fighterName} — ${dr.choiceLabel}${effectsText.length > 0 ? ` (${effectsText.join(', ')})` : ''}.`);
+    }
     if (summary.retirements.length > 0) {
       for (const retirement of summary.retirements) {
         bits.push(`\u{1F44B} ${retirement.name} part a la retraite${retirement.reconversion.isHallOfFamer ? ' \u{1F3C6} HALL OF FAME' : ''}.`);
@@ -3058,6 +3126,13 @@ class WebApp {
    * current physical/moral state and a Head Coach readout, then offers 4
    * tactical directives (see BALANCE.CORNER_COACHING.DIRECTIVES) applying
    * temporary modifiers to the round about to start.
+   *
+   * V4.5 "Simplification du Corner": those 4 directives' labels now reuse
+   * the exact same Tempo/Distance vocabulary as the pre-fight gameplan
+   * (see _renderFightSetup's TARGET/DISTANCE/TEMPO_LABELS) — Agressif/
+   * Equilibre/Prudent plus a Sol/Clinch grappling option — so this modal
+   * reads as "adjust the same gameplan" rather than a second, disconnected
+   * tactical menu.
    */
   _showCornerCoachingModal() {
     const snapshot = this.combatEngine.getSnapshot();
@@ -3075,6 +3150,7 @@ class WebApp {
 
     const content = el('div', {}, [
       el('h2', { class: 'section-title', text: `\u{1F94A} Coin — Round ${snapshot.currentRound} termine` }),
+      el('p', { class: 'fighter-meta', text: 'Ajustez le gameplan pour le round suivant.' }),
       el('div', { class: 'card' }, [
         el('div', { class: 'card-title', text: fighterA.identity.name }),
         gaugeRow('Sante', live.health),
@@ -3267,10 +3343,26 @@ class WebApp {
 
     const lastLog = roundLogs[roundLogs.length - 1];
     if (lastLog) {
-      panel.appendChild(gaugeRow('Vie A', lastLog.healthAfter.A));
-      panel.appendChild(gaugeRow('Vie B', lastLog.healthAfter.B));
-      panel.appendChild(gaugeRow('Stamina A', lastLog.staminaAfter.A));
-      panel.appendChild(gaugeRow('Stamina B', lastLog.staminaAfter.B));
+      // V4.5 "Correctifs Critiques": lastLog.healthAfter/staminaAfter are
+      // this round's FINAL values (CombatEngine simulates the whole round
+      // up front — see engine/CombatEngine.js's own round log — the beats
+      // above only narrate it progressively afterward). Without this,
+      // Vie/Stamina used to jump straight to the round's end state the
+      // instant it started, instead of tracking the live beat-by-beat
+      // reveal. Interpolating from the previous round's own final values
+      // (or a full 100/100 bar for round 1) up to this round's end values,
+      // keyed to revealedCount/beats.length, makes the bars visibly tick
+      // down beat by beat like the rest of the live feed already does.
+      const previousLog = roundLogs.length >= 2 ? roundLogs[roundLogs.length - 2] : null;
+      const startHealth = previousLog ? previousLog.healthAfter : { A: BALANCE.COMBAT.HEALTH.MAX, B: BALANCE.COMBAT.HEALTH.MAX };
+      const startStamina = previousLog ? previousLog.staminaAfter : { A: BALANCE.COMBAT.STAMINA.MAX, B: BALANCE.COMBAT.STAMINA.MAX };
+      const progress = playback && playback.beats.length > 0 ? playback.revealedCount / playback.beats.length : 1;
+      const lerp = (start, end) => start + (end - start) * progress;
+
+      panel.appendChild(gaugeRow('Vie A', lerp(startHealth.A, lastLog.healthAfter.A)));
+      panel.appendChild(gaugeRow('Vie B', lerp(startHealth.B, lastLog.healthAfter.B)));
+      panel.appendChild(gaugeRow('Stamina A', lerp(startStamina.A, lastLog.staminaAfter.A)));
+      panel.appendChild(gaugeRow('Stamina B', lerp(startStamina.B, lastLog.staminaAfter.B)));
     }
 
     const isPlaying = Boolean(playback?.playing);
@@ -4037,7 +4129,7 @@ class WebApp {
   }
 
   _buildAcademyCandidateCard(candidate) {
-    const { fighter, potentialLabel } = candidate;
+    const { fighter, potentialLabel, weeklySalary } = candidate;
     const { playerState } = this.gameState;
     const rosterFull = playerState.roster.length >= playerState.getRosterCapacity();
 
@@ -4059,22 +4151,25 @@ class WebApp {
         el('span', { class: 'badge badge-nickname', text: potentialLabel }),
       ]),
       gaugeRow('Potentiel global', fighter.getOverallRating()),
+      el('div', { class: 'fighter-meta', text: `Salaire hebdomadaire : ${weeklySalary.toLocaleString('fr-FR')}$/semaine` }),
       skillsList,
       el('button', {
         class: 'btn btn-gold btn-block',
         text: rosterFull ? 'Effectif complet' : 'Promouvoir gratuitement (1/1)',
         disabled: rosterFull ? 'disabled' : null,
-        onclick: () => this._resolveAcademyDraft(fighter),
+        onclick: () => this._resolveAcademyDraft(candidate),
       }),
     ]);
   }
 
-  _resolveAcademyDraft(chosenFighter) {
+  _resolveAcademyDraft(chosenCandidate) {
     const { playerState, worldState } = this.gameState;
-    if (chosenFighter) {
-      playerState.addFighter(chosenFighter);
+    if (chosenCandidate) {
+      const { fighter, weeklySalary } = chosenCandidate;
+      fighter.weeklySalary = weeklySalary;
+      playerState.addFighter(fighter);
       telemetry.recordFighterRecruited();
-      this._showToast(`\u{1F393} ${chosenFighter.identity.name} rejoint votre effectif (draft academie).`);
+      this._showToast(`\u{1F393} ${fighter.identity.name} rejoint votre effectif (draft academie, ${weeklySalary.toLocaleString('fr-FR')}$/semaine).`);
     }
     playerState.recordAcademyDraftOffer(worldState.year);
     this.academyPool = [];

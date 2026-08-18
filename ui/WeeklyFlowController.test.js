@@ -82,6 +82,49 @@ test('autoFillPlan fills every non-injured fighter\'s 3 slots, and forces PHYSIO
   assert.deepEqual(injured.weeklyPlan.slots, ['PHYSIO_REST', 'PHYSIO_REST', 'PHYSIO_REST']);
 });
 
+test('V4.5: getFightersNeedingRest lists a fighter flagged needsRestAfterFight until a PHYSIO_REST slot is scheduled', () => {
+  const gameState = makeGameState(2);
+  const [flagged, unflagged] = gameState.playerState.roster;
+  flagged.flagNeedsRestAfterFight();
+  const controller = new WeeklyFlowController({ gameState });
+
+  assert.deepEqual(controller.getFightersNeedingRest(), [{ fighterId: flagged.identity.id, name: flagged.identity.name }]);
+
+  controller.setSlot(flagged.identity.id, 0, 'PHYSIO_REST');
+  assert.deepEqual(controller.getFightersNeedingRest(), [], 'scheduling a PHYSIO_REST slot alone satisfies the gate, before resolveWeek even runs');
+
+  assert.equal(unflagged.status.needsRestAfterFight, false);
+});
+
+test('V4.5: autoFillPlan forces a needsRestAfterFight fighter\'s first slot to PHYSIO_REST (but not all 3, unlike an injured fighter)', () => {
+  const gameState = makeGameState(1);
+  const [fighter] = gameState.playerState.roster;
+  fighter.flagNeedsRestAfterFight();
+
+  const controller = new WeeklyFlowController({ gameState, rng: createSeededRng(4) });
+  controller.autoFillPlan();
+
+  assert.equal(fighter.weeklyPlan.slots[0], 'PHYSIO_REST');
+  assert.ok(fighter.weeklyPlan.slots.every((slot) => slot !== null));
+  assert.deepEqual(controller.getFightersNeedingRest(), [], 'auto-fill alone must be enough to clear the gate');
+});
+
+test('V4.5: resolveWeek clears needsRestAfterFight once a PHYSIO_REST slot was actually scheduled, but leaves it set otherwise', () => {
+  const restedGame = makeGameState(1);
+  const [rested] = restedGame.playerState.roster;
+  rested.flagNeedsRestAfterFight();
+  rested.setWeeklyPlanSlot(0, 'PHYSIO_REST');
+  new WeeklyFlowController({ gameState: restedGame, rng: createSeededRng(2) }).resolveWeek();
+  assert.equal(rested.status.needsRestAfterFight, false);
+
+  const skippedGame = makeGameState(1);
+  const [skipped] = skippedGame.playerState.roster;
+  skipped.flagNeedsRestAfterFight();
+  skipped.setWeeklyPlanSlot(0, 'TECHNIQUE');
+  new WeeklyFlowController({ gameState: skippedGame, rng: createSeededRng(2) }).resolveWeek();
+  assert.equal(skipped.status.needsRestAfterFight, true, 'skipping PHYSIO_REST must leave the flag armed');
+});
+
 test('resolveWeek without any eligible Drama Engine event completes the week immediately and returns to PLANNING', () => {
   // An empty roster guarantees selectEligibleDramaEvent finds no fighter to feature.
   const gameState = new GameState();

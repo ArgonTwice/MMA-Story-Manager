@@ -37,6 +37,22 @@ test('generateAcademyPool returns POOL_SIZE_MIN..POOL_SIZE_MAX real Fighter inst
   }
 });
 
+test('V4.5: every academy candidate carries a non-zero weeklySalary priced off BALANCE.RECRUITMENT_MARKET\'s own rating-based curve, even though promoting one is free', () => {
+  const playerState = new PlayerState();
+  const salaryCfg = BALANCE.RECRUITMENT_MARKET;
+  const pool = generateAcademyPool({ playerState, rng: Math.random });
+
+  for (const candidate of pool) {
+    assert.equal(typeof candidate.weeklySalary, 'number');
+    assert.ok(candidate.weeklySalary > 0, 'a promoted prospect must draw a real wage, not 0$/week');
+    const notionalCost = Math.max(
+      salaryCfg.MIN_COST,
+      salaryCfg.COST_BASE * salaryCfg.COST_GROWTH_PER_RATING_POINT ** candidate.fighter.getOverallRating()
+    );
+    assert.equal(candidate.weeklySalary, Math.round(notionalCost * salaryCfg.SALARY_RATIO_OF_COST));
+  }
+});
+
 test('generateAcademyPool produces Fighter-ready personalities (archetype + traits) via generatePersonality', () => {
   const playerState = new PlayerState();
   const pool = generateAcademyPool({ playerState, rng: Math.random });

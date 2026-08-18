@@ -842,6 +842,27 @@ export class CombatEngine {
       // fought in an unregulated brawl at all — independent of win/loss.
       if (c.rules.valeTudo) this._applyValeTudoTraitMorale(fighter);
 
+      // V4.5 "Fatigue Post-Combat Realiste": both corners pay a real
+      // Physical/Mental Fatigue toll the instant the match ends, scaled by
+      // how far it went (finish.round / maxRounds) — independent of win/
+      // loss/draw, same as the Vale Tudo morale swing above. Also arms
+      // needsRestAfterFight so the next week's planning gates on
+      // scheduling a PHYSIO_REST slot (see ui/WeeklyFlowController.js
+      // #getFightersNeedingRest).
+      {
+        const fatigueCfg = BALANCE.COMBAT.POST_FIGHT_FATIGUE;
+        const durationFraction = clamp(finish.round / c.maxRounds, 0, 1);
+        const physicalFatigueDelta = Math.round(
+          fatigueCfg.PHYSICAL_FATIGUE_MIN + (fatigueCfg.PHYSICAL_FATIGUE_MAX - fatigueCfg.PHYSICAL_FATIGUE_MIN) * durationFraction
+        );
+        const mentalFatigueDelta = Math.round(
+          fatigueCfg.MENTAL_FATIGUE_MIN + (fatigueCfg.MENTAL_FATIGUE_MAX - fatigueCfg.MENTAL_FATIGUE_MIN) * durationFraction
+        );
+        fighter.adjustPhysicalFatigue(physicalFatigueDelta);
+        fighter.adjustMentalFatigue(mentalFatigueDelta);
+        fighter.flagNeedsRestAfterFight();
+      }
+
       if (
         outcome === 'win' &&
         fighter.career.finishes >= BALANCE.PERKS.UNLOCK_THRESHOLDS.FINISHER_CAREER_FINISHES &&

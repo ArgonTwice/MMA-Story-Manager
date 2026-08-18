@@ -67,8 +67,10 @@ export class WeeklyFlowController {
 
   /**
    * @returns {Object[]} One entry per roster fighter, for a planning UI to
-   *   present: current slots, and whether they're injured (PHYSIO_REST-only
-   *   in practice, same real-game constraint the headless coach-AI respects).
+   *   present: current slots, whether they're injured (PHYSIO_REST-only
+   *   in practice, same real-game constraint the headless coach-AI respects),
+   *   and (V4.5) whether they still need a PHYSIO_REST slot scheduled after
+   *   their last resolved fight (see getFightersNeedingRest).
    */
   getPlanningOptions() {
     const { playerState, worldState } = this.gameState;
@@ -77,9 +79,26 @@ export class WeeklyFlowController {
       name: fighter.identity.name,
       archetype: fighter.psychology.personality.archetype,
       injured: fighter.isInjured(worldState.currentDay),
+      needsRestAfterFight: fighter.status.needsRestAfterFight,
       slots: [...fighter.weeklyPlan.slots],
       activityKeys: Object.keys(BALANCE.WEEKLY_PLANNING.ACTIVITIES),
     }));
+  }
+
+  /**
+   * V4.5 "Fatigue Post-Combat Realiste": every roster fighter CombatEngine
+   * flagged needsRestAfterFight (see Fighter#flagNeedsRestAfterFight) who
+   * still doesn't have a PHYSIO_REST slot anywhere in their current weekly
+   * plan — the gate a UI checks BEFORE calling resolveWeek(), so a player
+   * can't fight a gala and immediately pile back into a full SPARRING week
+   * with zero recovery. Purely a read — never mutates anything, safe to
+   * call at any phase/any time to re-check as the player edits their plan.
+   * @returns {Object[]} { fighterId, name } entries, empty if nobody needs it.
+   */
+  getFightersNeedingRest() {
+    return this.gameState.playerState.roster
+      .filter((fighter) => fighter.status.needsRestAfterFight && !fighter.weeklyPlan.slots.includes('PHYSIO_REST'))
+      .map((fighter) => ({ fighterId: fighter.identity.id, name: fighter.identity.name }));
   }
 
   /**
@@ -105,6 +124,12 @@ export class WeeklyFlowController {
    * engine/PersonalityEngine.js#computeActivityWeights), offered here as a
    * one-click default for a player who wants to skip manual planning some
    * weeks. Only valid during the PLANNING phase.
+   *
+   * V4.5: a fighter still needing post-fight rest (see
+   * getFightersNeedingRest) but not otherwise injured gets their first
+   * slot forced to PHYSIO_REST too — same idea as the pre-existing
+   * `injured` handling below, just one slot instead of all three, so
+   * auto-fill alone is always enough to clear resolveWeek()'s rest gate.
    */
   autoFillPlan() {
     this._assertPhase(WEEKLY_FLOW_PHASES.PLANNING);
@@ -113,9 +138,10 @@ export class WeeklyFlowController {
 
     for (const fighter of playerState.roster) {
       const injured = fighter.isInjured(worldState.currentDay);
+      const needsRest = !injured && fighter.status.needsRestAfterFight;
       const weights = injured ? null : computeActivityWeights(fighter);
       for (let slot = 0; slot < slotCount; slot += 1) {
-        const activityKey = injured ? 'PHYSIO_REST' : weightedPick(this.rng, weights);
+        const activityKey = injured ? 'PHYSIO_REST' : needsRest && slot === 0 ? 'PHYSIO_REST' : weightedPick(this.rng, weights);
         fighter.setWeeklyPlanSlot(slot, activityKey);
       }
     }
@@ -138,6 +164,20 @@ export class WeeklyFlowController {
     const { playerState, worldState } = this.gameState;
 
     this._weeklyPlanReport = processWeeklyPlan(playerState, worldState, { rng: this.rng });
+
+    // V4.5 "Fatigue Post-Combat Realiste": a fighter who actually got a
+    // PHYSIO_REST slot resolved this week has satisfied the post-fight
+    // rest requirement CombatEngine armed (see Fighter
+    // #flagNeedsRestAfterFight) — clear it so getFightersNeedingRest()
+    // stops gating them. Checked here, right after processWeeklyPlan, since
+    // that's the one place both this week's real slots AND their
+    // resolution are guaranteed to still be in sync.
+    for (const fighter of playerState.roster) {
+      if (fighter.status.needsRestAfterFight && fighter.weeklyPlan.slots.includes('PHYSIO_REST')) {
+        fighter.clearNeedsRestAfterFight();
+      }
+    }
+
     this._dramaSelection = selectEligibleDramaEvent(playerState, worldState, this.rng);
 
     if (this._dramaSelection) {

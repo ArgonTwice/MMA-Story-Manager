@@ -194,6 +194,26 @@ const BALANCE = {
       DOCTOR_STOPPAGE_FACE_DAMAGE_THRESHOLD: 55,
     },
 
+    /**
+     * V4.5 "Fatigue Post-Combat Realiste": Physical/Mental Fatigue applied
+     * to BOTH corners the instant a match ends (see CombatEngine
+     * #_processPostMatchRewards) — before this, a resolved fight left
+     * Fighter#attributes.physicalFatigue/mentalFatigue completely
+     * untouched, so a fighter could walk straight from a 5-round war back
+     * into a full SPARRING week with no consequence. Scales linearly with
+     * how far the fight went (finish.round / maxRounds) — a 1-round finish
+     * still costs real physical toll, a full-distance decision costs the
+     * most. Also arms Fighter#status.needsRestAfterFight (see
+     * ui/WeeklyFlowController.js#getFightersNeedingRest), which gates the
+     * next week's planning until a PHYSIO_REST slot is actually scheduled.
+     */
+    POST_FIGHT_FATIGUE: {
+      PHYSICAL_FATIGUE_MIN: 30,
+      PHYSICAL_FATIGUE_MAX: 50,
+      MENTAL_FATIGUE_MIN: 15,
+      MENTAL_FATIGUE_MAX: 25,
+    },
+
     /** Submission attempt resolution. */
     SUBMISSIONS: {
       BASE_SUCCESS_CHANCE: 0.12,
@@ -2819,10 +2839,23 @@ const BALANCE = {
   // exact same call shape.
   // ---------------------------------------------------------------------
   CORNER_COACHING: {
+    /**
+     * V4.5 "Simplification du Corner": labels/descriptions realigned onto
+     * the SAME 3-axis vocabulary the pre-fight gameplan already uses
+     * (web/app.js's TARGET_LABELS/DISTANCE_LABELS/TEMPO_LABELS — Tete/
+     * Corps/Jambes, Frappe/Clinch/Sol, Prudent/Equilibre/Agressif) instead
+     * of a second, disconnected set of tactical names — 3 of these 4
+     * directives already map almost exactly onto a Tempo variant
+     * (Agressif/Equilibre/Prudent), the 4th onto the Distance axis
+     * (Sol/Clinch). The underlying multipliers themselves are unchanged —
+     * only the words a player sees changed, so the between-round Corner
+     * modal now reads as "the same gameplan, dialed up/down" rather than
+     * an unrelated tactical menu.
+     */
     DIRECTIVES: {
       ATTAQUER_TOUT_PRIX: {
-        label: 'Attaquer a tout prix',
-        description: '+20% Degats, +30% Consommation Fatigue, -10% Defense',
+        label: 'Agressif',
+        description: 'Comme le Tempo Agressif du gameplan : +20% Degats, +30% Consommation Fatigue, -10% Defense',
         damageMultiplier: 1.2,
         staminaCostMultiplier: 1.3,
         damageTakenMultiplier: 1.1,
@@ -2830,8 +2863,8 @@ const BALANCE = {
         submissionChanceMultiplier: 1,
       },
       TRAVAILLER_GRAPPLING: {
-        label: 'Travaille le grappling',
-        description: '+40% Takedown, +20% Soumission, +10% Fatigue',
+        label: 'Sol / Clinch',
+        description: 'Comme la Distance Sol/Clinch du gameplan : +40% Takedown, +20% Soumission, +10% Fatigue',
         damageMultiplier: 1,
         staminaCostMultiplier: 1.1,
         damageTakenMultiplier: 1,
@@ -2839,8 +2872,8 @@ const BALANCE = {
         submissionChanceMultiplier: 1.2,
       },
       DEFENDS_TOI: {
-        label: 'Defends-toi / Gerer',
-        description: '+30% Defense, -10% Consommation Fatigue, -20% Degats',
+        label: 'Prudent',
+        description: 'Comme le Tempo Prudent du gameplan : +30% Defense, -10% Consommation Fatigue, -20% Degats',
         damageMultiplier: 0.8,
         staminaCostMultiplier: 0.9,
         damageTakenMultiplier: 0.7,
@@ -2848,8 +2881,8 @@ const BALANCE = {
         submissionChanceMultiplier: 1,
       },
       GARDER_GAMEPLAN: {
-        label: 'Garder le Gameplan',
-        description: 'Aucun modificateur',
+        label: 'Equilibre',
+        description: 'Garder le plan de depart — aucun modificateur',
         damageMultiplier: 1,
         staminaCostMultiplier: 1,
         damageTakenMultiplier: 1,
